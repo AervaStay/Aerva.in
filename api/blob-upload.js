@@ -13,6 +13,10 @@
 //             manage-listing link token, or an admin session.
 //   purpose — (nothing / anything else) listing and profile photos:
 //               images only.
+//             'review-photo' — a guest's photos of the stay on their review
+//               (up to 5 a review, guest-profile.js submitReview): images
+//               only (JPEG, PNG, WebP), checked for contact details after
+//               upload like listing and profile photos (_photo-guard.js).
 //             'aadhaar-verification' / 'dispute-evidence' / 'support-evidence'
 //               — PDF allowed too (e-Aadhaar downloads, stay-dispute and
 //               Resolution Center evidence are often PDFs). Kept to those flows only.

@@ -265,7 +265,15 @@ async function quoteTransfer(sql, orderId, guestId, input, requestedAt = null) {
   const transferFee = Math.round(movedValue * TRANSFER_FEE_PERCENT / 100);
   const moved = parts.find(p => p.role === 'move');
   moved.transferFee = transferFee;
-  parts.forEach(p => { p.total = partTotal(p.detail) + (p.transferFee || 0); });
+  // The free cancellation add-on (_pricing.js) stays on the booking row (the
+  // first part at the booked property, or the moved part when every night
+  // moves — the same part applyTransfer writes onto the row). It is not
+  // refunded or charged again; a transferred booking cannot be cancelled,
+  // so its window no longer applies.
+  const fc = require('./_pricing').addOnOf(o);
+  const rowPart = parts[Math.max(0, parts.findIndex(p => p.role === 'keep'))];
+  if (fc.fee > 0 && !fc.refunded) rowPart.addOn = { fee: fc.fee, gst: fc.gst, commission: fc.commission };
+  parts.forEach(p => { p.total = partTotal(p.detail) + (p.transferFee || 0) + (p.addOn ? p.addOn.fee + p.addOn.gst : 0); });
 
   const newTotal = parts.reduce((s, p) => s + p.total, 0);
   const oldTotal = Math.round(Number(o.totalNow));
@@ -279,7 +287,7 @@ async function quoteTransfer(sql, orderId, guestId, input, requestedAt = null) {
     booking: o, kind: 'transfer',
     input: { kind: 'transfer', moveFrom: from, moveTo: to, targetListingId: t.id, targetRoomId },
     quote: { kind: 'transfer', parts: parts.map(p => ({ role: p.role, listingId: p.listingId, roomId: p.roomId, arrival: p.arrival, departure: p.departure,
-                                                         policy: p.policy, transferFee: p.transferFee || 0, total: p.total, detail: p.detail })),
+                                                         policy: p.policy, transferFee: p.transferFee || 0, addOn: p.addOn || null, total: p.total, detail: p.detail })),
              transferFee, transferFeePercent: TRANSFER_FEE_PERCENT, movedValue, fromName: o.property_name, toName: moved.detail.suite, targetPolicy: t.cancellation_policy },
     oldTotal, newTotal, difference: newTotal - oldTotal, summary, couponNotReturned
   };
@@ -296,6 +304,7 @@ function transferView(qc) {
     if (d.gst) lines.push({ label: '– GST', amount: d.gst });
     lines.push({ label: '– Guest service fee', amount: d.guestServiceFee });
     if (d.depositAmount) lines.push({ label: '– Refundable deposit', amount: Number(d.depositAmount) });
+    if (p.addOn) lines.push({ label: '– Free cancellation add-on, as paid (kept; with its GST)', amount: p.addOn.fee + p.addOn.gst });
   }
   lines.push({ label: `Aerva transfer fee (${q.transferFeePercent}% of ${inr(q.movedValue)}, the moved nights at ${q.fromName})`, amount: q.transferFee });
   return { summary: qc.summary, lines, oldTotal: qc.oldTotal, newTotal: qc.newTotal, difference: qc.difference, couponNotReturned: qc.couponNotReturned || 0,
@@ -333,11 +342,14 @@ async function applyTransfer(sql, razorpay, change, { paymentId = null } = {}) {
   const refundOwed = refundOwedFull - couponLost;
   const values = (p) => {
     const d = p.detail;
-    const commission = Number(d.baseCommission) + Number(d.amenityCommission);
+    const stayCommission = Number(d.baseCommission) + Number(d.amenityCommission);
+    // The add-on on the row's part: in its commission and payout, as at booking.
+    const a = p.addOn || { fee: 0, gst: 0, commission: 0 };
+    const commission = stayCommission + Math.round(Number(a.commission) || 0);
     let releaseAt = null;
     if (Number(d.depositAmount) > 0) { const x = new Date(p.departure + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 7); releaseAt = x.toISOString().slice(0, 10); }
     return { commission, releaseAt, fee: Math.round(d.guestServiceFee + (p.transferFee || 0)), total: p.total,
-             rate: d.subtotal > 0 ? Number(((commission / d.subtotal) * 100).toFixed(2)) : 0, payout: Math.round(d.subtotal - commission) };
+             rate: d.subtotal > 0 ? Number(((stayCommission / d.subtotal) * 100).toFixed(2)) : 0, payout: Math.round(d.subtotal + (Number(a.fee) || 0) - commission) };
   };
   let newIds = [];
   try {

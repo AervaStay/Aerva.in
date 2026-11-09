@@ -12,8 +12,9 @@
 //   1. Right after upload (blob-upload.js onUploadCompleted), seconds after
 //      the file lands. Identity documents and dispute evidence are never
 //      sent (they are not listing photos, and are private).
-//   2. Every save of a listing or profile strips any photo already found
-//      to carry contact details (sweepListing / sweepGuest).
+//   2. Every save of a listing or profile, and every review sent, strips
+//      any photo already found to carry contact details (sweepListing /
+//      sweepGuest / sweepReview).
 //   3. The 5-minute job (get-listings.js JOBS 'photo_scan') checks every
 //      photo already in use that has not been checked yet, and retries any
 //      check that failed.
@@ -24,6 +25,9 @@
 //                  walkthrough (migration_walkthrough.sql)
 //   listing_rooms: cover_photo_url, photo_urls, pending_changes
 //   guests:        profile_photo_url
+//   listing_reviews: photos (a guest's photos of the stay, up to 5 —
+//                  migration 2026-11-09-08-review-photos.sql; read through
+//                  to_jsonb so nothing breaks before it runs)
 // Check-in photos (sent only to booked guests) are left alone.
 //
 // Needs ANTHROPIC_API_KEY in Vercel. Without it nothing is checked (the job
@@ -246,6 +250,18 @@ async function updateRoomRow(sql, before, after) {
     RETURNING id`;
   return r.length > 0;
 }
+async function updateReviewRow(sql, before, after) {
+  const r = await sql`UPDATE listing_reviews SET photos = ${jb(after.photos || [])}::jsonb
+                      WHERE id = ${before.id} AND photos IS NOT DISTINCT FROM ${jb(before.photos || [])}::jsonb RETURNING id`;
+  return r.length > 0;
+}
+// Reviews whose photos include url (none before the review-photos migration).
+async function loadReviewRows(sql, url) {
+  return sql`SELECT r.id, r.listing_id, r.guest_id, COALESCE(to_jsonb(r)->'photos', '[]'::jsonb) AS photos,
+                    l.property_name, g.name AS guest_name, g.email AS guest_email
+             FROM listing_reviews r JOIN listings l ON l.id = r.listing_id LEFT JOIN guests g ON g.id = r.guest_id
+             WHERE COALESCE(to_jsonb(r)->'photos', '[]'::jsonb) ? ${url}`;
+}
 async function updateGuestRow(sql, before, after) {
   const r = await sql`UPDATE guests SET profile_photo_url = ${after.profile_photo_url}
                       WHERE id = ${before.id} AND profile_photo_url IS NOT DISTINCT FROM ${before.profile_photo_url} RETURNING id`;
@@ -344,6 +360,15 @@ async function removeEverywhere(sql, url, findings) {
       places.push(`Profile photo — ${row.name || 'no name'} (${row.email || 'account #' + row.id})`);
       context = context || { guestId: row.id, hostName: row.name, hostEmail: row.email };
     }
+    for (const row of await loadReviewRows(sql, url)) {
+      const before = { id: row.id, photos: Array.isArray(row.photos) ? row.photos : [] };
+      const after = { id: row.id, photos: strip(before.photos, url) };
+      if (same(before, after)) continue;
+      if (!(await updateReviewRow(sql, before, after))) { conflict = true; continue; }
+      snapshots.push({ table: 'listing_reviews', id: row.id, before, after });
+      places.push(`Review photo — review #${row.id} of ${row.property_name} (#${row.listing_id}), by ${row.guest_name || 'a guest'}`);
+      context = context || { guestId: row.guest_id, listingId: row.listing_id, listingName: row.property_name, hostName: row.guest_name, hostEmail: row.guest_email };
+    }
     if (!conflict) break;   // someone saved at the same moment: read again and retry
   }
   if (!snapshots.length) return null;
@@ -438,6 +463,16 @@ async function sweepGuest(sql, guestId) {
     return [];
   }
 }
+// A review's photos, after the guest sends it.
+async function sweepReview(sql, reviewId) {
+  try {
+    const row = (await sql`SELECT COALESCE(to_jsonb(r)->'photos', '[]'::jsonb) AS photos FROM listing_reviews r WHERE id = ${reviewId}`)[0];
+    return row ? await removeFlagged(sql, [...urlsIn(row.photos)]) : [];
+  } catch (err) {
+    if (!isMissingTable(err)) console.error('photo-guard sweepReview failed:', err.message || err);
+    return [];
+  }
+}
 async function removeFlagged(sql, urls) {
   if (!urls.length) return [];
   const flagged = await sql`SELECT url, findings FROM photo_scans WHERE url = ANY(${urls}) AND status = 'flagged'`;
@@ -453,6 +488,8 @@ async function photosInUse(sql) {
                             FROM listings WHERE status <> 'removed'`) urlsIn(r, urls);
   for (const r of await sql`SELECT cover_photo_url, photo_urls, pending_changes FROM listing_rooms`) urlsIn(r, urls);
   for (const r of await sql`SELECT profile_photo_url FROM guests WHERE profile_photo_url IS NOT NULL AND deleted_at IS NULL`) urlsIn(r, urls);
+  for (const r of await sql`SELECT to_jsonb(r)->'photos' AS photos FROM listing_reviews r
+                            WHERE r.admin_reverted_at IS NULL AND COALESCE(to_jsonb(r)->'photos', '[]'::jsonb) <> '[]'::jsonb`) urlsIn(r, urls);
   return [...urls];
 }
 
@@ -539,6 +576,14 @@ async function restoreRemoval(sql, removalId, adminName) {
       if (!next.cover_photo_url) { next.cover_photo_url = url; if (s.before.is_active) next.is_active = true; }
       else next.photo_urls = [...(Array.isArray(next.photo_urls) ? next.photo_urls : []), { url }];
       if (await updateRoomRow(sql, now, next)) notes.push(`Room #${s.id} had changed since; the photo was added back.`);
+    } else if (s.table === 'listing_reviews') {
+      const cur = (await sql`SELECT id, COALESCE(to_jsonb(r)->'photos', '[]'::jsonb) AS photos FROM listing_reviews r WHERE id = ${s.id}`)[0];
+      if (!cur) { notes.push(`Review #${s.id} no longer exists.`); continue; }
+      const now = { id: cur.id, photos: Array.isArray(cur.photos) ? cur.photos : [] };
+      if (same(now, s.after)) { await updateReviewRow(sql, now, s.before); continue; }
+      if (urlsIn(now.photos).has(url)) continue;
+      if (now.photos.length >= 5) { notes.push(`Review #${s.id} already has 5 photos; the photo was not added back.`); continue; }
+      if (await updateReviewRow(sql, now, { id: now.id, photos: [...now.photos, url] })) notes.push(`Review #${s.id} had changed since; the photo was added back at the end.`);
     } else if (s.table === 'guests') {
       const r = await sql`UPDATE guests SET profile_photo_url = ${url} WHERE id = ${s.id} AND profile_photo_url IS NULL RETURNING id`;
       if (!r.length) notes.push('The account has a new profile photo since; it was left as it is.');
@@ -603,7 +648,7 @@ async function screenForWalkthrough(sql, urls, { listing = {}, deadlineMs = 6500
 }
 
 module.exports = {
-  checkPhoto, scanAndAct, removeEverywhere, sweepListing, sweepGuest, runPhotoScan,
+  checkPhoto, scanAndAct, removeEverywhere, sweepListing, sweepGuest, sweepReview, runPhotoScan,
   listRemovals, restoreRemoval, shouldCheckUpload, screenForWalkthrough,
   // for tests
   _strip: strip, _urlsIn: urlsIn

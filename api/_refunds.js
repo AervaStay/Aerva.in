@@ -86,7 +86,12 @@ async function safeRefund(sql, razorpay, { orderId, paymentId, amountSubunit, ki
     // Razorpay said no (unknown payment, already refunded, a test-mode
     // payment on another key...): say why, instead of a bare "try again".
     if (!err.isUserFacing && (err.error || err.statusCode)) {
-      throw Object.assign(new Error(`Razorpay could not make the refund: ${why.replace(/\.$/, '')}. Nothing was cancelled and the booking stands. It is listed in Admin → Refunds.`), { isUserFacing: true, status: 502, cause: err });
+      // A cancellation refunds first and cancels only after it: the booking still stands,
+      // so it is tried again by cancelling again, not from Admin → Refunds.
+      const msg = /^cancellation/.test(String(kind || ''))
+        ? `Razorpay could not make the refund: ${why.replace(/\.$/, '')}. No money was refunded, nothing was cancelled and the booking stands. Cancel it again once this is fixed.`
+        : `Razorpay could not make the refund: ${why.replace(/\.$/, '')}. No money was refunded. It is listed in Admin → Payouts → Refunds to retry.`;
+      throw Object.assign(new Error(msg), { isUserFacing: true, status: 502, cause: err });
     }
     throw err;
   }
@@ -143,9 +148,49 @@ async function rowsFor(sql, orderId, kindBase) {
   } catch (e) { return []; }
 }
 
+// ---- A group booking (_group-bookings.js): several people paid ----
+// Each payment's part of the booking: what it paid, less anything refunded
+// to it before the booking existed (the excess of a smaller booking). A
+// change payment made later counts as the organiser's.
+async function groupPaymentsOf(sql, orderId) {
+  let gid = null;
+  try { gid = ((await sql`SELECT (to_jsonb(orders)->>'group_booking_id')::int AS g FROM orders WHERE id = ${orderId}`)[0] || {}).g || null; } catch (e) { return null; }
+  if (!gid) return null;
+  const claims = await sql`SELECT razorpay_payment_id, amount, refund_amount, refund_status FROM group_claims
+                           WHERE group_id = ${gid} AND status = 'paid' AND razorpay_payment_id IS NOT NULL ORDER BY id`;
+  const list = claims.map(c => ({ pid: c.razorpay_payment_id,
+    net: Number(c.amount) - (c.refund_status && c.refund_status !== 'failed' ? Math.round(Number(c.refund_amount || 0) / 100) : 0) }));
+  try {
+    (await sql`SELECT razorpay_payment_id, difference FROM booking_changes WHERE order_id = ${orderId} AND status = 'applied'
+               AND razorpay_payment_id IS NOT NULL AND difference > 0 ORDER BY id`).forEach(c => list.push({ pid: c.razorpay_payment_id, net: Number(c.difference) }));
+  } catch (e) { /* none */ }
+  return list.filter(x => x.net > 0);
+}
+// Splits a refund over a group's payments in proportion to what each paid,
+// in whole rupees that add up exactly (leftover rupees to the last payers).
+// Deterministic, so a retry asks each payment for the same amount and
+// safeRefund adopts what already went through.
+async function refundGroupShares(sql, razorpay, { orderId, amountInr, kindBase, list }) {
+  const total = list.reduce((t, x) => t + x.net, 0);
+  const want = Math.min(Math.max(0, Math.round(Number(amountInr) || 0)), total);
+  const parts = list.map(x => Math.floor(want * x.net / (total || 1)));
+  let rem = want - parts.reduce((t, x) => t + x, 0);
+  for (let i = parts.length - 1; rem > 0; i = (i - 1 + parts.length) % parts.length) { if (parts[i] < list[i].net) { parts[i]++; rem--; } }
+  let refundedInr = 0, firstRefundId = null;
+  for (let i = 0; i < list.length; i++) {
+    if (!parts[i]) continue;
+    const r = await safeRefund(sql, razorpay, { orderId, paymentId: list[i].pid, amountSubunit: parts[i] * 100, kind: `${kindBase}:${list[i].pid}` });
+    if (!firstRefundId) firstRefundId = r.id;
+    refundedInr += Math.round(Number(r.amount != null ? r.amount : parts[i] * 100) / 100);
+  }
+  return { refundedInr, shortfallInr: Math.max(0, Math.round(Number(amountInr) || 0) - refundedInr), firstRefundId, shares: list.map((x, i) => ({ paymentId: x.pid, inr: parts[i] })) };
+}
+
 async function refundAcrossPayments(sql, razorpay, { orderId, amountInr, kindBase }) {
   let remaining = Math.max(0, Math.round(Number(amountInr) || 0));
   if (!remaining) return { refundedInr: 0, shortfallInr: 0, firstRefundId: null };
+  const group = await groupPaymentsOf(sql, orderId);
+  if (group && group.length) return refundGroupShares(sql, razorpay, { orderId, amountInr: remaining, kindBase, list: group });
   const { o, payments } = await paymentsOf(sql, orderId);
   // A foreign-currency booking has one payment (changes are INR only): the
   // same share of what was captured, never today's rate (_currency.js).
@@ -203,6 +248,12 @@ async function refundAcrossPayments(sql, razorpay, { orderId, amountInr, kindBas
 async function planRefundAcrossPayments(sql, razorpay, { orderId, amountInr, kindBase }) {
   let remaining = Math.max(0, Math.round(Number(amountInr) || 0));
   if (!remaining) return { plannedInr: 0, shortfallInr: 0 };
+  // A group booking is refunded in proportion when it happens (refundGroupShares).
+  const group = await groupPaymentsOf(sql, orderId);
+  if (group && group.length) {
+    const total = group.reduce((t, x) => t + x.net, 0);
+    return { plannedInr: Math.min(remaining, total), shortfallInr: Math.max(0, remaining - total) };
+  }
   const { payments } = await paymentsOf(sql, orderId);
   const rows = await rowsFor(sql, orderId, kindBase);
   const rowOf = new Map(rows.map(r => [r.razorpay_payment_id, r]));
@@ -231,6 +282,8 @@ async function dropPlannedRefunds(sql, { orderId, kindBase }) {
   catch (err) { console.error('planned refunds not removed:', orderId, kindBase, err.message); }
 }
 async function hasChangePayments(sql, orderId) {
+  // A group booking was paid by several payments: always refunded across them.
+  try { if (((await sql`SELECT (to_jsonb(orders)->>'group_booking_id') AS g FROM orders WHERE id = ${orderId}`)[0] || {}).g) return true; } catch (e) { /* none */ }
   try {
     return (await sql`SELECT 1 FROM booking_changes bc JOIN orders x ON x.id = bc.order_id
                       WHERE x.razorpay_order_id = (SELECT razorpay_order_id FROM orders WHERE id = ${orderId})
@@ -240,4 +293,4 @@ async function hasChangePayments(sql, orderId) {
 }
 
 
-module.exports = { safeRefund, pollRefunds, refundAcrossPayments, hasChangePayments, planRefundAcrossPayments, dropPlannedRefunds };
+module.exports = { safeRefund, pollRefunds, refundAcrossPayments, hasChangePayments, planRefundAcrossPayments, dropPlannedRefunds, groupPaymentsOf };

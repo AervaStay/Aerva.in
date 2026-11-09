@@ -19,7 +19,15 @@
 // commission in the same proportion, on the normal payout day
 // (orders.payout_on_cancel; see _payouts.js). Co-host shares shrink with it.
 // Host cancellations are different: the guest always gets everything back
-// (host-listings.js). An "Includes a Stay" experience and its stay are one
+// (host-listings.js).
+// FREE CANCELLATION ADD-ON (_pricing.js, owner 9 Nov 2026): while a booking
+// with the add-on is more than 48 hours before its check-in moment, a
+// guest's "change of plans" request is not a request: it cancels at once at
+// 100% (booking price, GST, deposit). The add-on and its GST are never
+// refunded on a guest's cancellation (any bracket): the host keeps the
+// add-on less Aerva's commission (payout_on_cancel). Only when the host is
+// at fault (Aerva cancelling for the host, the check-in promise) does the
+// add-on go back to the guest with everything else. An "Includes a Stay" experience and its stay are one
 // purchase and are always cancelled together.
 
 const crypto = require('crypto');
@@ -27,12 +35,20 @@ const { safeRefund, refundAcrossPayments, hasChangePayments } = require('./_refu
 const { refundSubunitForInr } = require('./_currency');
 const { logAudit } = require('./_audit-log');
 const { paidByOrderRow, dateStr, daysBeforeCheckIn } = require('./_booking-rules');
+const { addOnOf, freeCancelActive, freeCancelUntilMs, freeCancelLabel } = require('./_pricing');
 
 const POLICIES = {
   flexible: { label: 'Flexible', tiers: [{ minDays: 30, pct: 100 }, { minDays: 10, pct: 80 }, { minDays: 5, pct: 50 }, { minDays: 2, pct: 30 }] },
   firm:     { label: 'Firm',     tiers: [{ minDays: 30, pct: 100 }, { minDays: 5, pct: 50 }] }
 };
 const HOST_DECISION_TIMEOUT_HOURS = 24;
+// Free cancellation add-on: is Aerva's guest service fee refunded when a
+// guest cancels inside the add-on's window? The owner's rule today (9 Nov
+// 2026): no — the existing rule that the service fee is not refunded when a
+// guest cancels applies. The owner may decide otherwise: set this to true
+// and the fee (with its GST) is refunded with the booking price, GST and
+// deposit on a free cancellation (quote, refund and emails follow).
+const FREE_CANCEL_REFUNDS_SERVICE_FEE = false;
 const HOST_CANCELLATIONS_PER_YEAR = 3;
 
 const TRANSFERRED_NO_CANCEL = 'This booking was transferred, so it cannot be cancelled — as agreed when the transfer was confirmed. If something is not working, contact Aerva Support (Support → Raise a request); Aerva will look at it and decide.';
@@ -51,7 +67,7 @@ function policyTier(policy, daysBefore) {
 function policySummary(policy) {
   return policyKey(policy) === 'firm'
     ? 'Firm: full refund 30+ days before check-in; 50% from 5 to 29 days; within 4 days the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.'
-    : 'Flexible: full refund 30+ days before check-in; 80% from 10 to 29 days; 50% from 5 to 9 days; 30% from 2 to 4 days; in the last day the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.';
+    : 'Flexible: full refund 30+ days before check-in; 80% from 10 to 29 days; 50% from 5 to 9 days; 30% from 2 to 4 days; less than 2 days before, the host decides. Aerva’s service fee is non-refundable; the deposit is always refunded.';
 }
 
 // One row's split at `pct`. couponAbsorbed: the part of its booking price
@@ -63,7 +79,10 @@ function depositStillHeld(row) {
   return ['held', 'disputed'].includes(String(row.deposit_status || ''));
 }
 
-function splitRow(row, couponAbsorbed, pct) {
+// opts.refundAddOn: the free cancellation add-on (and its GST) goes back to
+// the guest too — only when the host is at fault. Otherwise it stays with
+// the host (less its commission, already inside commission_amount).
+function splitRow(row, couponAbsorbed, pct, { refundAddOn = false } = {}) {
   const p = Math.max(0, Math.min(100, Number(pct) || 0)) / 100;
   const subtotal = Math.max(0, Math.round(Number(row.subtotal) || 0));
   const absorbed = Math.max(0, Math.min(subtotal, Math.round(Number(couponAbsorbed) || 0)));
@@ -72,11 +91,16 @@ function splitRow(row, couponAbsorbed, pct) {
   const refundGst = Math.round((Math.round(Number(row.gst) || 0)) * p);
   const deposit = depositStillHeld(row) ? Math.max(0, Math.round(Number(row.deposit_amount) || 0)) : 0;
   const retained = Math.max(0, subtotal - refundBooking - couponBack);
-  const commission = subtotal > 0 ? Math.round((Number(row.commission_amount) || 0) * retained / subtotal) : 0;
+  const fc = addOnOf(row);
+  const stayCommission = Math.max(0, Math.round(Number(row.commission_amount) || 0) - fc.commission);
+  const addOnBack = refundAddOn ? fc.fee + fc.gst : 0;
+  const addOnCommission = refundAddOn ? 0 : fc.commission;
+  const commission = (subtotal > 0 ? Math.round(stayCommission * retained / subtotal) : 0) + addOnCommission;
   return {
-    refundCash: refundBooking + refundGst + deposit, refundBooking, refundGst, couponBack, deposit,
+    refundCash: refundBooking + refundGst + deposit + addOnBack, refundBooking, refundGst, couponBack, deposit,
     feeKept: Math.max(0, Math.round(Number(row.guest_service_fee) || 0)),
-    retained, commission, hostPayout: retained - commission
+    addOnKept: refundAddOn ? 0 : fc.fee + fc.gst, addOnBack,
+    retained, commission, hostPayout: retained + (refundAddOn ? 0 : fc.fee) - commission
   };
 }
 
@@ -153,12 +177,20 @@ async function cancellationQuote(sql, orderId, guestId) {
   if (guestId != null && main.transfer_change_id) {
     return { orderId: main.id, allowed: false, transferred: true, error: TRANSFERRED_NO_CANCEL };
   }
-  const tier = policyTier(main.policy, main.days_before);
+  // Free cancellation add-on still in its window: 100%, at once.
+  const fcNow = freeCancelActive(main, main.listing_timezone, main.listing_check_in_time);
+  const tier = fcNow ? { pct: 100 } : policyTier(main.policy, main.days_before);
+  const fcRow = addOnOf(main);
   const base = {
     orderId: main.id, policy: policyKey(main.policy), policyLabel: POLICIES[policyKey(main.policy)].label,
     policySummary: policySummary(main.policy), daysBefore: Number(main.days_before),
-    items: rows.map(r => r.suite_name)
+    items: rows.map(r => r.suite_name),
+    // The add-on on this booking (null without one): until when, what it cost.
+    freeCancel: fcRow.fee > 0 ? (() => { const ms = freeCancelUntilMs(main.arrival, main.listing_timezone, main.listing_check_in_time);
+      return { active: fcNow, until: Number.isFinite(ms) ? new Date(ms).toISOString() : null, untilLabel: freeCancelLabel(ms, main.listing_timezone), fee: fcRow.fee, gst: fcRow.gst }; })() : null
   };
+  // What a natural disaster approved by Aerva would give (the guest's own quote only).
+  if (!tier.started && guestId != null) base.naturalDisaster = await disasterOutcome(sql, main.id);
   if (tier.started) return { ...base, allowed: false, started: true, error: 'This stay has already started, so it cannot be cancelled. To leave early, change your check-out date in My Bookings — possible until 10 AM on the day after check-in.' };
   const paid = await paidByOrderRow(sql, main.razorpay_order_id);
   const total = (pct) => rows.reduce((t, r) => {
@@ -166,12 +198,15 @@ async function cancellationQuote(sql, orderId, guestId) {
     t.couponLost += s.couponLost;
     t.refundCash += s.refundCash; t.couponBack += s.couponBack; t.deposit += s.deposit; t.feeKept += s.feeKept; t.creditBack += s.creditBack;
     t.refundBooking += s.refundBooking + s.refundGst;
+    t.addOnKept += s.addOnKept;
     return t;
-  }, { refundCash: 0, couponBack: 0, couponLost: 0, deposit: 0, feeKept: 0, refundBooking: 0, creditBack: 0 });
+  }, { refundCash: 0, couponBack: 0, couponLost: 0, deposit: 0, feeKept: 0, refundBooking: 0, creditBack: 0, addOnKept: 0 });
   if (tier.hostDecides) {
     return { ...base, allowed: true, hostDecides: true, pct: null, ifNoRefund: total(0), ifFullRefund: total(100) };
   }
-  return { ...base, allowed: true, hostDecides: false, pct: tier.pct, ...total(tier.pct) };
+  const t = total(tier.pct);
+  if (fcNow && FREE_CANCEL_REFUNDS_SERVICE_FEE) { t.refundCash += t.feeKept; t.feeRefunded = t.feeKept; t.feeKept = 0; }
+  return { ...base, allowed: true, hostDecides: false, pct: tier.pct, instant: fcNow, ...t };
 }
 
 // A returned coupon (the host cancelled) is a new coupon valid for 1 month
@@ -364,8 +399,12 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   try { await sql`SELECT refund_percent, payout_on_cancel, cancel_claim FROM orders LIMIT 0`; }
   catch (err) { throw Object.assign(new Error('Cancellations are being set up. Please try again later or contact hello@aerva.in.'), { isUserFacing: true, status: 503 }); }
 
-  const reason = by === 'admin'
+  const reason = by === 'free_cancel'
+    ? `Cancelled by the guest with free cancellation — booking price, GST and any deposit refunded in full; ${FREE_CANCEL_REFUNDS_SERVICE_FEE ? 'the add-on is' : 'the add-on and Aerva’s service fee are'} not refunded`
+    : by === 'admin'
     ? `Cancelled by Aerva${note ? ' — ' + note : ''}`
+    : by === 'natural_disaster'
+    ? 'Cancelled at the guest’s request (natural disaster) — approved by Aerva; everything paid is held as Aerva credit for new dates'
     : by === 'aerva_emergency'
     ? `Cancelled at the guest’s request (emergency) — approved by Aerva, booking price refunded in full`
     : by === 'timeout_no_refund'
@@ -397,12 +436,24 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
                  AND (metadata->>'hostPays')::boolean IS TRUE GROUP BY target_id`)
       .forEach(x => { hostPaid[x.order_id] = Math.round(Number(x.n) || 0); });
   } catch (e) { /* tables not there yet: nothing refunded this way */ }
+  // The free cancellation add-on goes back only when the host is at fault:
+  // Aerva cancelling for the host (countAgainstHost) — the check-in promise
+  // included. On a guest's cancellation, any bracket, the host keeps it.
+  // A natural disaster approved by Aerva (owner, 10 Nov 2026): the FULL
+  // amount — price, GST, deposit, service fee and add-on — becomes Aerva
+  // credit for new dates that can never be refunded; a coupon part comes
+  // back as a coupon; no host payout. A group booking (paid by several
+  // people, _group-bookings.js) cannot be held as one person's credit: each
+  // payer is refunded their share of everything instead.
+  const disaster = by === 'natural_disaster';
+  const groupBooking = disaster && rows.some(r => r.group_booking_id != null);
+  const refundAddOn = (by === 'admin' && !!countAgainstHost) || disaster;
   const splits = new Map(rows.map(r => {
-    const s = splitRow(r, (paid[r.id] || {}).couponAbsorbed, percent);
+    const s = splitRow(r, (paid[r.id] || {}).couponAbsorbed, percent, { refundAddOn });
     // Aerva's own fee, returned only when an admin chooses to.
     // Aerva's service fee is not refunded — except when an admin decides so,
     // case by case, with a recorded reason (refundFee + feeReason).
-    if (by === 'admin' && refundFee && s.feeKept > 0) { s.refundCash += s.feeKept; s.feeRefunded = s.feeKept; s.feeKept = 0; }
+    if (((by === 'admin' && refundFee) || (by === 'free_cancel' && FREE_CANCEL_REFUNDS_SERVICE_FEE) || disaster) && s.feeKept > 0) { s.refundCash += s.feeKept; s.feeRefunded = s.feeKept; s.feeKept = 0; }
     const already = goodwill[r.id] || 0;
     if (already > 0) {
       const covered = Math.min(already, s.refundCash);
@@ -413,7 +464,7 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
       if (hostPart > 0) s.hostPayout = Math.max(0, s.hostPayout - hostPart);
     }
     creditPart(s, r, paid[r.id], already);
-    if (!(by === 'admin' && countAgainstHost)) dropCouponBack(s);
+    if (!(by === 'admin' && countAgainstHost) && !disaster) dropCouponBack(s);
     // asCredit (Aerva cancelling for a host): only the deposit goes back to
     // the payment; everything else the guest paid is held for them as Aerva
     // credit after the cancellation (_fee-credits.js creditForWholeBooking).
@@ -421,12 +472,19 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
       s.heldAsCredit = Math.max(0, s.refundCash - s.deposit) + (s.creditBack || 0);
       s.refundCash = s.deposit; s.creditBack = 0;
     }
+    // A natural disaster: the deposit too (it is the guest's own money held
+    // by Aerva — "the full amount"), in any currency (credit is in rupees).
+    if (disaster && !groupBooking) {
+      s.heldAsCredit = s.refundCash + (s.creditBack || 0);
+      s.depositToCredit = s.deposit;
+      s.refundCash = 0; s.creditBack = 0;
+    }
     return [Number(r.id), s];
   }));
   const ids = rows.map(r => Number(r.id));
   if (preview) {
     const t = (k) => [...splits.values()].reduce((a, s) => a + (s[k] || 0), 0);
-    return { preview: true, percent, items: rows.map(r => r.suite_name), refundCash: t('refundCash'), couponBack: t('couponBack'), couponLost: t('couponLost'), heldAsCredit: t('heldAsCredit'), deposit: t('deposit'),
+    return { preview: true, percent, items: rows.map(r => r.suite_name), refundCash: t('refundCash'), couponBack: t('couponBack'), couponLost: t('couponLost'), heldAsCredit: t('heldAsCredit'), deposit: t('deposit'), addOnKept: t('addOnKept'), addOnBack: t('addOnBack'),
              feeKept: t('feeKept'), feeRefunded: t('feeRefunded'), alreadyRefunded: t('alreadyRefunded'), creditBack: t('creditBack'), hostPayout: t('hostPayout'), policy: policyKey(main.policy), daysBefore: Number(main.days_before) };
   }
   const claim = await claimForCancellation(sql, ids);
@@ -470,7 +528,7 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
     const cols = rows.map(r => { const s = splits.get(Number(r.id)); return { id: Number(r.id), commission: s.commission, payout: s.hostPayout, refundId: refundIds.get(Number(r.id)) }; });
     done = await sql`
       UPDATE orders o SET status = 'cancelled', cancellation_reason = ${reason}, cancelled_at = now(),
-        deposit_status = CASE WHEN o.deposit_status IN ('held', 'disputed') THEN 'refunded' ELSE o.deposit_status END,
+        deposit_status = CASE WHEN o.deposit_status IN ('held', 'disputed') THEN ${disaster && !groupBooking ? 'credited' : 'refunded'} ELSE o.deposit_status END,
         deposit_refund_id = v.refund_id,
         commission_amount = v.commission, payout_amount = v.payout,
         refund_percent = ${percent}, payout_on_cancel = (v.payout > 0),
@@ -489,6 +547,13 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   } catch (err) {
     await releaseClaim(sql, ids, claim);
     throw err;
+  }
+  // The add-on refunded with everything else (host at fault): recorded, so
+  // Accounts no longer counts its GST as payable.
+  const addOnBackIds = done.filter(r => (splits.get(Number(r.id)).addOnBack || 0) > 0).map(r => Number(r.id));
+  if (addOnBackIds.length) {
+    try { await sql`UPDATE orders SET free_cancel_refunded = true WHERE id = ANY(${addOnBackIds})`; }
+    catch (err) { console.error('free cancellation refund not recorded (needs follow-up):', addOnBackIds, err.message); }
   }
   // A payout planned from the old amounts in the moment before the claim
   // took hold is removed too; it is planned again from the new ones.
@@ -527,6 +592,13 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
     if (want > 0) creditBack += await require('./_fee-credits').giveBack(sql, r.id, want);
   }
   let heldAsCredit = 0;
+  if (disaster && !groupBooking) {
+    try { const h = await require('./_fee-credits').creditForWholeBooking(sql, done.map(r => Number(r.id)), 'natural_disaster', { cashRefundable: false }); heldAsCredit = (h.total || 0) + (h.back || 0); }
+    catch (err) {
+      console.error('Aerva credit for a natural disaster not made (needs follow-up):', main.id, err.message);
+      await logAudit(sql, { action: 'disaster_credit_failed', success: false, actorType: 'system', targetType: 'order', targetId: main.id, metadata: { error: String(err.message || err).slice(0, 300) } });
+    }
+  }
   if (asCredit) {
     try { const h = await require('./_fee-credits').creditForWholeBooking(sql, done.map(r => Number(r.id)), 'host_cancelled_late'); heldAsCredit = (h.total || 0) + (h.back || 0); }
     catch (err) { console.error('Aerva credit for a cancellation by Aerva for the host not made (needs follow-up):', main.id, err.message); }
@@ -536,15 +608,18 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   await email(main.guest_email, `Your booking at ${main.suite_name} is cancelled`,
     `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your booking is cancelled</h2>
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)})</p><p>${escH(reason)}.</p>
-      ${asCredit ? `<p>Everything you paid${heldAsCredit > 0 ? ` — <strong>${inr(heldAsCredit)}</strong>` : ''} is held for you as Aerva credit (details in a separate email): use it on another booking, or have it refunded to your original payment method at any time from My Bookings.${refundCash > 0 ? ` Your deposit of ${inr(refundCash)} is refunded to your original payment method.` : ''}</p>` : `<p>Refund to your original payment method: <strong>${inr(refundCash)}</strong>${couponBack > 0 ? `, plus ${inr(couponBack)} returned as a coupon (sent separately)` : ''}${creditBack > 0 ? `, plus ${inr(creditBack)} back on your Aerva credit (the part paid with it; see My Bookings)` : ''}. Refunds usually arrive in 5–7 working days.${sum('couponLost') > 0 ? ` The ${inr(sum('couponLost'))} paid by coupon is not returned: a coupon comes back only when the host cancels.` : ''}${sum('feeRefunded') > 0 ? ' This includes Aerva’s service fee.' : ' Aerva’s service fee is non-refundable.'}</p>`}
+      ${disaster && !groupBooking ? `<p>Everything you paid${heldAsCredit > 0 ? ` — <strong>${inr(heldAsCredit)}</strong>, including GST, any deposit and Aerva’s service fee —` : ''} is held for you as Aerva credit for new dates${couponBack > 0 ? `, and ${inr(couponBack)} paid by coupon comes back as a new coupon (sent separately)` : ''}. Book any stay or experience on Aerva and it comes off the price automatically. This credit does not expire, and it cannot be refunded or paid out.</p>`
+        : asCredit ? `<p>Everything you paid${heldAsCredit > 0 ? ` — <strong>${inr(heldAsCredit)}</strong>` : ''} is held for you as Aerva credit (details in a separate email): use it on another booking, or have it refunded to your original payment method at any time from My Bookings.${refundCash > 0 ? ` Your deposit of ${inr(refundCash)} is refunded to your original payment method.` : ''}</p>` : `<p>Refund to your original payment method: <strong>${inr(refundCash)}</strong>${couponBack > 0 ? `, plus ${inr(couponBack)} returned as a coupon (sent separately)` : ''}${creditBack > 0 ? `, plus ${inr(creditBack)} back on your Aerva credit (the part paid with it; see My Bookings)` : ''}. Refunds usually arrive in 5–7 working days.${sum('couponLost') > 0 ? ` The ${inr(sum('couponLost'))} paid by coupon is not returned: a coupon comes back only when the host cancels.` : ''}${sum('feeRefunded') > 0 ? ' This includes Aerva’s service fee.' : ' Aerva’s service fee is non-refundable.'}${sum('addOnKept') > 0 ? ' The free cancellation add-on is not refunded.' : ''}</p>`}
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Contact hello@aerva.in.</p></div>`);
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${main.host_id} ORDER BY id LIMIT 1`)[0];
   await email(host && host.email, `Booking cancelled: ${main.suite_name}`,
     `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">A booking was cancelled</h2>
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)}) — the dates are open again.</p>
       ${hostShare > 0 ? `<p>Your payout for this booking: <strong>${inr(hostShare)}</strong>, on the usual payout day.</p>` : ''}</div>`);
-  await postThreadMessage(sql, main.id, (by === 'admin' || by === 'aerva_emergency') ? 'system' : 'host', `${by === 'admin' ? 'Aerva cancelled this booking' : by === 'aerva_emergency' ? 'Cancellation approved by Aerva' : 'Cancellation confirmed'}. Refund to the guest: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}${creditBack > 0 ? ` plus ${inr(creditBack)} back on their Aerva credit` : ''}.`);
-  return { ok: true, refundCash, couponBack, creditBack, heldAsCredit, percent };
+  if (disaster && !groupBooking) {
+    await postThreadMessage(sql, main.id, 'system', `Natural disaster: Aerva approved the cancellation. Everything the guest paid (${inr(heldAsCredit)}) is held as Aerva credit for new dates${couponBack > 0 ? `, plus ${inr(couponBack)} back as a coupon` : ''}. There is no payout for this booking. Aerva’s decision is final.`);
+  } else await postThreadMessage(sql, main.id, (by === 'admin' || by === 'aerva_emergency' || by === 'free_cancel' || disaster) ? 'system' : 'host', `${by === 'admin' ? 'Aerva cancelled this booking' : (by === 'aerva_emergency' || disaster) ? 'Cancellation approved by Aerva' : by === 'free_cancel' ? 'Cancelled with free cancellation (no host answer needed)' : 'Cancellation confirmed'}. Refund to the guest: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}${creditBack > 0 ? ` plus ${inr(creditBack)} back on their Aerva credit` : ''}.`);
+  return { ok: true, refundCash, couponBack, creditBack, heldAsCredit, percent, groupBooking };
 }
 
 // Host cancellations in the last 12 months (co-host cancellations count for
@@ -606,22 +681,59 @@ async function hostCancellationsLastYear(sql, hostId) {
 // the booking's message thread (and in My Earnings), and the host answers.
 // The host is shown ONLY the choice that applies to this booking's bracket,
 // fixed when the request is sent — never the other brackets.
-//   change_of_plans, fixed bracket  → Accept (refund P%) / Reject (booking stands)
+//   change_of_plans, fixed bracket  → Accept (refund P%) / Reject (booking stands, no refund)
 //   change_of_plans, last window    → choose 0–100% / Reject (no refund)
-//   emergency reasons               → Accept (full refund) / Reject (booking stands)
+//   natural disaster                → nothing for the host: Aerva decides (below)
 // Unanswered after 24 hours: a fixed bracket is accepted at its P%; the last
-// window is settled with no refund of the booking price; an emergency goes
-// to Aerva (Admin → Cancellation requests), who accepts (full refund, as if
-// the host had) or rejects (owner, 4 Nov 2026). Whatever is still open when
-// the stay starts closes then: the booking stands (closeRequestsAtCheckin).
+// window is settled with no refund of the booking price. Whatever is still
+// open when the stay starts closes then: the booking stands
+// (closeRequestsAtCheckin).
 // Once the stay has started no one sees Accept / Reject any more.
+//
+// THE OWNER'S RULES OF 10 NOV 2026 (replacing the emergency rules of 4–9 Nov):
+//   • Only natural-disaster reasons are left: a NATURAL DISASTER (code
+//     'environmental') and a GOVERNMENT ORDER OR TRAVEL RESTRICTION (code
+//     'travel_restriction', counted as a natural disaster — owner, 00:52),
+//     any time before check-in, with proof. Aerva checks
+//     the proof and decides; the host cannot decline it (they are told and
+//     can add information in the thread). No reminders to the host.
+//       approved → everything the guest paid — booking price, GST, deposit,
+//         Aerva's service fee and any free cancellation add-on — becomes
+//         Aerva credit for new dates (_fee-credits.js reason
+//         'natural_disaster', cash_refundable = false): it never expires and
+//         can never be turned into money. A part paid by coupon comes back
+//         as a coupon; a part paid with earlier Aerva credit goes back onto
+//         that credit. The host gets no payout.
+//       rejected → nothing changes, the booking stands.
+//   • Change of plans: the listing's brackets as above. Host rejects → no
+//     refund. Aerva's service fee is never refunded; the host keeps what is
+//     not refunded, and Aerva's commission is on what the host receives.
+//   • Removed: "Medical or family emergency", "Life-threatening situation"
+//     (RETIRED_REASONS — old rows
+//     still show and finish: host Accept = price, GST and deposit back;
+//     unanswered ones go through _emergency-escalation.js as before), the
+//     last-minute 25% / 50% host choices, the guest's "ask Aerva to review a
+//     host's decline" (a review already asked for can still be decided), and
+//     the emergency service-fee credit.
+// Natural-disaster reasons (owner, 10 Nov 2026 00:52: a government order
+// or travel restriction counts as a natural disaster too).
 const EMERGENCY_REASONS = {
-  environmental: 'Environmental hazard (flood, fire, landslide or similar)',
-  life_threatening: 'Life-threatening situation',
-  emergency: 'Medical or family emergency',
-  travel_restriction: 'Government order or travel restriction'
+  environmental: 'Natural disaster (flood, cyclone, earthquake, landslide, fire)',
+  travel_restriction: 'Government order or travel restriction (lockdown, road closed by authorities)'
 };
+const RETIRED_REASONS = {
+  life_threatening: 'Life-threatening situation',
+  emergency: 'Medical or family emergency'
+};
+// Offered for new requests.
 const REQUEST_REASONS = Object.assign({ change_of_plans: 'Change of plans' }, EMERGENCY_REASONS);
+// Every reason a request in the database may carry (for showing it).
+const REASON_LABELS = Object.assign({}, REQUEST_REASONS, RETIRED_REASONS);
+// Requests that come to Aerva: the natural disaster, and old emergency
+// requests still open from before 10 Nov 2026.
+const AERVA_REASONS = Object.assign({}, EMERGENCY_REASONS, RETIRED_REASONS);
+const isDisaster = (rq) => !!rq && !!EMERGENCY_REASONS[rq.reason_code];
+const isLegacyEmergency = (rq) => !!rq && !!RETIRED_REASONS[rq.reason_code];
 
 // Posts a line into the booking's thread (creating the thread if needed).
 // Never throws: messages are a courtesy, never a reason to fail.
@@ -638,38 +750,55 @@ async function postThreadMessage(sql, orderId, senderType, text) {
 }
 
 // What the host may do with one request row — only its own bracket.
-// An emergency asked for with less than a day to check-in (days_before 0,
-// fixed when the guest asks) is a last-minute change: the host chooses —
-// refund in full, keep 25% or keep 50% — or declines (no refund). Aerva's
-// commission follows what the host keeps (owner's rule, 9 Nov 2026).
-const LATE_EMERGENCY_REFUNDS = [100, 75, 50];
-function lateEmergency(rq) { return !!EMERGENCY_REASONS[rq.reason_code] && rq.days_before != null && Number(rq.days_before) < 1; }
+//   disaster  → nothing to answer: Aerva decides (information only);
+//   emergency → an old request with a removed reason: Accept (price, GST
+//               and deposit back) / Reject (booking stands);
+//   fixed     → Accept (refund P%) / Reject (booking stands, no refund);
+//   choose    → the last window: 0–100% / Reject (no refund).
 function hostOption(rq) {
-  if (lateEmergency(rq)) return { type: 'emergency_late', percent: 100, choices: LATE_EMERGENCY_REFUNDS };
-  if (EMERGENCY_REASONS[rq.reason_code]) return { type: 'emergency', percent: 100 };
+  if (isDisaster(rq)) return { type: 'disaster' };
+  if (isLegacyEmergency(rq)) return { type: 'emergency', percent: 100 };
   if (rq.reason_code === 'late_cancellation' || rq.policy_percent == null) return { type: 'choose' };
   return { type: 'fixed', percent: Number(rq.policy_percent) };
 }
 
+// What a natural disaster approved now would give: { credit, coupon,
+// cash } — credit for new dates (deposit included), a coupon for the part
+// paid by coupon, and money only for a group booking (paid by several
+// people, see executePolicyCancellation). Changes nothing.
+async function disasterOutcome(sql, orderId) {
+  try {
+    const p = await executePolicyCancellation(sql, null, { orderId, pct: 100, by: 'natural_disaster', preview: true });
+    return { credit: (p.heldAsCredit || 0), coupon: p.couponBack || 0, cash: p.refundCash || 0 };
+  } catch (err) { return { credit: 0, coupon: 0, cash: 0 }; }
+}
+
 // The guest sends a request. Returns { request } or { error, status }.
-async function createCancellationRequest(sql, { orderId, guestId, reasonCode, details, evidence }) {
+async function createCancellationRequest(sql, { orderId, guestId, reasonCode, details, evidence, razorpay = null }) {
+  // Only the reasons offered now (owner, 10 Nov 2026): change of plans, or a
+  // natural disaster. The removed ones are refused for new requests.
+  if (RETIRED_REASONS[reasonCode]) return { error: 'This reason is no longer offered. Choose “Change of plans”, or “Natural disaster” with proof.', status: 400 };
   if (!REQUEST_REASONS[reasonCode]) return { error: 'Choose a reason.', status: 400 };
-  // An emergency comes with proof (owner, 9 Nov 2026): a medical note, a
-  // government order, a photo or news report of the hazard — Aerva's own
-  // uploads only (blob-upload.js purpose 'cancellation-proof'), up to 5.
+  // A natural disaster comes with proof: a photo, a news report or an
+  // official notice — Aerva's own uploads only (blob-upload.js purpose
+  // 'cancellation-proof'), up to 5.
   const q = await cancellationQuote(sql, orderId, guestId);
   if (q.status) return { error: q.error, status: q.status };
-  if (q.transferred) return { error: q.error, status: 400 };      // emergencies included: Aerva Support decides
-  const proof = EMERGENCY_REASONS[reasonCode] ? require('./_listing-rules').aervaBlobUrlsOnly(Array.isArray(evidence) ? evidence : [], 5) : [];
-  if (EMERGENCY_REASONS[reasonCode] && !proof.length) return { error: 'Please attach proof of the emergency (for example a medical note, a government order, or a photo or news report of the hazard).', status: 400 };
-  // Only before check-in, emergencies included. Once the stay has started
-  // the guest changes the booking instead (shorter stay, _booking-changes.js).
-  if (!q.allowed && (!EMERGENCY_REASONS[reasonCode] || q.started)) return { error: q.error, status: 400 };
+  if (q.transferred) return { error: q.error, status: 400 };      // a natural disaster included: Aerva Support decides
+  const disaster = !!EMERGENCY_REASONS[reasonCode];
+  const proof = disaster ? require('./_listing-rules').aervaBlobUrlsOnly(Array.isArray(evidence) ? evidence : [], 5) : [];
+  if (disaster && !proof.length) return { error: 'Please attach proof (for example a photo, a news report, or the official order or notice).', status: 400 };
+  // Only before check-in, a natural disaster included. Once the stay has
+  // started the guest changes the booking instead (_booking-changes.js).
+  if (!q.allowed && (!disaster || q.started)) return { error: q.error, status: 400 };
   const o = (await sql`SELECT o.suite_name, o.arrival, o.departure, l.host_id,
                               (o.departure < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date) AS ended
                        FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0];
   if (o.ended) return { error: 'This stay has already ended.', status: 400 };
   const policyPercent = reasonCode === 'change_of_plans' ? (q.hostDecides ? null : q.pct) : null;
+  // Free cancellation add-on, inside its window: the guest's change of plans
+  // cancels at once at 100% — nothing for the host to answer.
+  const instant = reasonCode === 'change_of_plans' && q.instant === true && !!razorpay;
   const clean = String(details || '').trim().slice(0, 800);
   let request;
   try {
@@ -682,7 +811,40 @@ async function createCancellationRequest(sql, { orderId, guestId, reasonCode, de
   }
   if (proof.length) {
     try { await sql`UPDATE cancellation_requests SET evidence = ${JSON.stringify(proof)}::jsonb WHERE id = ${request.id}`; }
-    catch (err) { if (err && err.code === '42703') { await sql`DELETE FROM cancellation_requests WHERE id = ${request.id}`; return { error: 'Emergency cancellations are being updated. Please try again shortly or write to hello@aerva.in.', status: 503 }; } throw err; }
+    catch (err) { if (err && err.code === '42703') { await sql`DELETE FROM cancellation_requests WHERE id = ${request.id}`; return { error: 'Natural-disaster cancellations are being updated. Please try again shortly or write to hello@aerva.in.', status: 503 }; } throw err; }
+  }
+  if (disaster) {
+    // Straight to Aerva: no host answer, no reminders. The host is told and
+    // can add information in the booking's thread.
+    await logAudit(sql, { action: 'guest_cancellation_requested', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: orderId,
+      metadata: { reasonCode, natural_disaster: true, daysBefore: q.daysBefore, proof: proof.length } });
+    await postThreadMessage(sql, orderId, 'guest', `I’d like to cancel this booking: ${EMERGENCY_REASONS[reasonCode]}. I have sent proof to Aerva.${clean ? ' ' + clean : ''}`);
+    await postThreadMessage(sql, orderId, 'system', 'Natural disaster: Aerva checks the guest’s proof and decides. If Aerva approves, everything the guest paid becomes Aerva credit for new dates and there is no payout for this booking; if not, the booking stands. Host: you can add anything Aerva should know here in Messages.');
+    const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
+    const stay = `<strong>${escH(o.suite_name)}</strong> (${escH(dateStr(o.arrival))} → ${escH(dateStr(o.departure))})`;
+    await email(host && host.email, `Natural disaster: your guest asked to cancel ${o.suite_name}`,
+      `<div style="font-family:sans-serif; max-width:480px;"><p>Your guest asked to cancel ${stay} because of a natural disaster, with proof.</p>
+        <p>Aerva checks the proof and decides; there is nothing for you to accept or decline. If Aerva approves, everything the guest paid becomes Aerva credit for new dates and there is no payout for this booking. If not, the booking stands.</p>
+        <p>You can add anything Aerva should know in the booking’s Messages.</p>
+        <p><a href="https://aerva.in/index.html?view=messages" style="color:#8a6c39;">Open Messages</a></p></div>`);
+    await email(process.env.SUPPORT_EMAIL || process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `DECIDE — natural disaster cancellation #${orderId}`,
+      `<p>A guest asked to cancel ${stay} because of a natural disaster and attached ${proof.length} proof file${proof.length === 1 ? '' : 's'}. Check the proof and decide in Admin → Approvals → Natural disaster cancellations before check-in.</p>`);
+    return { request };
+  }
+  if (instant) {
+    if (!(await claimRequest(sql, request.id))) return { error: 'This booking is already being cancelled.', status: 409 };
+    let out;
+    try { out = await executePolicyCancellation(sql, razorpay, { orderId, pct: 100, by: 'free_cancel' }); }
+    catch (err) {
+      // Not cancelled: the request is withdrawn (nothing for the host to answer).
+      await sql`UPDATE cancellation_requests SET status = 'withdrawn', decided_at = now(), host_note = ${'Free cancellation could not be completed: ' + String(err.message || err).slice(0, 200)} WHERE id = ${request.id}`.catch(() => {});
+      if (err.isUserFacing) return { error: err.message, status: err.status || 400 };
+      throw err;
+    }
+    await sql`UPDATE cancellation_requests SET status = 'accepted', refund_percent = 100, decided_at = now(), host_note = 'Free cancellation: cancelled at once' WHERE id = ${request.id}`;
+    await logAudit(sql, { action: 'guest_free_cancellation', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: orderId,
+      metadata: { requestId: request.id, refundCash: out.refundCash, couponBack: out.couponBack || 0, creditBack: out.creditBack || 0 } });
+    return { request, cancelled: out };
   }
   await logAudit(sql, { action: 'guest_cancellation_requested', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: orderId,
     metadata: { reasonCode, policyPercent, daysBefore: q.daysBefore } });
@@ -699,6 +861,7 @@ async function createCancellationRequest(sql, { orderId, guestId, reasonCode, de
 // What the guest would get back at `percent` (cash, deposit included).
 async function guestGetsBackFor(sql, orderId, percent) {
   const { rows } = await loadRows(sql, orderId);
+  // (The add-on is never part of a guest's refund: splitRow keeps it.)
   if (!rows.length) return 0;
   const paid = await paidByOrderRow(sql, rows[0].razorpay_order_id);
   return rows.reduce((t, r) => t + splitRow(r, (paid[r.id] || {}).couponAbsorbed, percent).refundCash, 0);
@@ -722,15 +885,20 @@ async function cancellationCard(sql, conversationId, role) {
     if (role === 'host') {
       if (!rq) return null;
       const option = hostOption(rq);
-      const card = { requestId: rq.id, orderId: o.id, reason: REQUEST_REASONS[rq.reason_code] || 'Cancellation', details: rq.details || '',
+      const card = { requestId: rq.id, orderId: o.id, reason: REASON_LABELS[rq.reason_code] || 'Cancellation', details: rq.details || '',
                      daysBefore: rq.days_before, option, evidence: Array.isArray(rq.evidence) ? rq.evidence : [] };
+      // A natural disaster: information only — Aerva decides.
+      if (option.type === 'disaster') { card.aervaDecides = true; card.disaster = await disasterOutcome(sql, o.id); return card; }
       if (option.type !== 'choose') card.guestGetsBack = await guestGetsBackFor(sql, o.id, option.percent);
-      if (option.type === 'emergency_late') card.choices = await Promise.all(option.choices.map(async p => ({ refundPercent: p, guestGetsBack: await guestGetsBackFor(sql, o.id, p) })));
       return card;
     }
-    if (rq) return { orderId: o.id, pending: true };
+    if (rq) return { orderId: o.id, pending: true, aervaDecides: isDisaster(rq) || !!rq.escalated_at };
+    // A transferred booking cannot be cancelled by the guest (cancellationQuote
+    // checks this only when given the guest): no "Request cancellation" button.
+    if (o.transfer_change_id) return null;
     const q = await cancellationQuote(sql, o.id, null);
-    return q.allowed ? { orderId: o.id, canRequest: true } : null;
+    // freeCancel: inside the add-on's window the guest cancels at once.
+    return q.allowed ? { orderId: o.id, canRequest: true, freeCancel: q.instant ? { untilLabel: (q.freeCancel || {}).untilLabel || '' } : null } : null;
   } catch (err) {
     console.error('cancellationCard skipped:', err.message);
     return null;
@@ -784,80 +952,16 @@ async function settleUnansweredRequests(sql, razorpay, { deadlineMs = 4000 } = {
   return out;
 }
 
-// ---- After an emergency cancellation is approved ----
-// With proof attached, Aerva's service fee comes back as Aerva credit
-// (owner, 9 Nov 2026). Never throws.
-async function emergencyApproved(sql, requestId) {
-  try {
-    const rq = (await sql`SELECT order_id, reason_code, to_jsonb(cancellation_requests)->'evidence' AS evidence FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0];
-    if (!rq || !EMERGENCY_REASONS[rq.reason_code] || !Array.isArray(rq.evidence) || !rq.evidence.length) return { credit: 0 };
-    return await require('./_fee-credits').creditForEmergencyFee(sql, rq.order_id);
-  } catch (err) { console.error('emergency fee credit not made (needs follow-up):', requestId, err.message); return { credit: 0, failed: true }; }
-}
-
-// ---- A host declined a proven emergency: the guest may ask Aerva to review ----
-// Within REVIEW_HOURS of the decline, before check-in, only with proof
-// attached. Aerva looks at the proof; its decision is final and may
-// overturn the decline (owner, 9 Nov 2026).
-const REVIEW_HOURS = 24;
-async function reviewable(sql, rq) {
-  if (!rq || rq.status !== 'declined' || !EMERGENCY_REASONS[rq.reason_code]) return false;
-  if (!Array.isArray(rq.evidence) || !rq.evidence.length) return false;
-  if (rq.review_requested_at || !rq.decided_at || /^Decided by Aerva|^Closed at check-in/.test(String(rq.host_note || ''))) return false;
-  if (Date.now() - new Date(rq.decided_at).getTime() > REVIEW_HOURS * 3600e3) return false;
-  const q = await cancellationQuote(sql, rq.order_id, null);
-  return !q.status && !q.started;
-}
-async function requestReview(sql, { requestId, guestId, note }) {
-  const err = (m, st = 400) => Object.assign(new Error(m), { isUserFacing: true, status: st });
-  let rq;
-  try { rq = (await sql`SELECT * FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0]; }
-  catch (e) { throw err('This is not switched on yet.', 503); }
-  if (!rq || rq.guest_id !== guestId) throw err('Request not found.', 404);
-  if (!(await reviewable(sql, rq))) throw err(`A review can be asked for within ${REVIEW_HOURS} hours of the host declining an emergency request sent with proof, before check-in.`, 409);
-  const clean = String(note || '').trim().slice(0, 800);
-  const got = await sql`UPDATE cancellation_requests SET review_requested_at = now(), review_note = ${clean || null} WHERE id = ${rq.id} AND review_requested_at IS NULL RETURNING id`;
-  if (!got.length) throw err('A review has already been asked for.', 409);
-  await postThreadMessage(sql, rq.order_id, 'guest', 'I have asked Aerva to review my emergency cancellation request, with the proof I sent. Aerva’s decision will be final.');
-  const o = (await sql`SELECT o.suite_name, o.guest_email, COALESCE(o.confirmation_code, '#' || o.id) AS code, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${rq.order_id}`)[0];
-  const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
-  await email(host && host.email, `Your guest asked Aerva to review: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>You declined your guest’s emergency cancellation of <strong>${escH(o.suite_name)}</strong> (booking ${escH(o.code)}). The guest sent proof and has asked Aerva to review it. You can add anything that helps in Messages. Aerva’s decision will be final for you and the guest.</p></div>`);
-  await email(process.env.SUPPORT_EMAIL || process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `REVIEW — declined emergency cancellation ${o.code}`, `<p>The host declined an emergency cancellation sent with proof; the guest asked Aerva to review it. Decide in Admin → Approvals → Cancellation requests before check-in.</p>${clean ? `<p>Guest: “${escH(clean)}”</p>` : ''}`);
-  await logAudit(sql, { action: 'cancellation_review_requested', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: rq.order_id, metadata: { requestId: rq.id } });
-  return { requested: true };
-}
-async function decideReview(sql, razorpay, { requestId, accept, refundPercent = 100, note = '', adminLabel = null }) {
-  const err = (m, st = 400) => Object.assign(new Error(m), { isUserFacing: true, status: st });
-  const rq = (await sql`SELECT * FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0];
-  if (!rq || !rq.review_requested_at) throw err('Review not found.', 404);
-  if (rq.review_decided_at) throw err('This review has already been decided.', 409);
-  const q = await cancellationQuote(sql, rq.order_id, null);
-  if (q.status) throw err(q.error, q.status);
-  if (q.started) throw err('This stay has already started, so it can no longer be cancelled.');
-  const claim = await sql`UPDATE cancellation_requests SET review_decided_at = now() WHERE id = ${rq.id} AND review_decided_at IS NULL RETURNING id`;
-  if (!claim.length) throw err('This review has already been decided.', 409);
-  const why = String(note || '').trim().slice(0, 500);
-  const pct = accept === true ? (lateEmergency(rq) && LATE_EMERGENCY_REFUNDS.includes(Number(refundPercent)) ? Number(refundPercent) : 100) : 0;
-  try {
-    if (accept === true) await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct, by: 'aerva_emergency', adminLabel, note: why });
-  } catch (e) { await sql`UPDATE cancellation_requests SET review_decided_at = NULL WHERE id = ${rq.id}`; throw e; }
-  await sql`UPDATE cancellation_requests SET review_outcome = ${accept === true ? 'overturned' : 'upheld'}, status = ${accept === true ? 'accepted' : 'declined'},
-              refund_percent = ${accept === true ? pct : rq.refund_percent}, host_note = ${(rq.host_note ? rq.host_note + ' · ' : '') + 'Reviewed by Aerva' + (why ? ': ' + why : '')} WHERE id = ${rq.id}`;
-  const fee = accept === true ? await emergencyApproved(sql, rq.id) : { credit: 0 };
-  const binding = 'Aerva’s decision is final and binds both the guest and the host.';
-  const o = (await sql`SELECT o.suite_name, o.guest_email, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${rq.order_id}`)[0];
-  const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
-  const outcome = accept === true
-    ? `Aerva reviewed the proof and approved the emergency cancellation: ${pct === 100 ? 'the booking price, GST and deposit are refunded in full' : `${pct}% of the booking price and its GST, and the deposit in full, are refunded`}${fee.credit ? '; Aerva’s service fee comes back as Aerva credit' : ''}.`
-    : `Aerva reviewed the proof and the host’s decline stands${why ? ': ' + why : ''}. The booking stands.`;
-  await postThreadMessage(sql, rq.order_id, 'system', `${outcome} ${binding}`);
-  await email(o.guest_email, `Aerva’s review of your cancellation: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>${escH(outcome)}</p><p>${binding}</p></div>`);
-  await email(host && host.email, `Aerva’s review: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>${escH(outcome)}</p><p>${binding}</p></div>`);
-  await logAudit(sql, { action: 'cancellation_review_decided', success: true, actorType: 'admin', actorIdentifier: adminLabel, targetType: 'order', targetId: rq.order_id,
-    metadata: { requestId: rq.id, accept: accept === true, refundPercent: pct, note: why, feeCredit: fee.credit || 0 } });
-  return { accepted: accept === true, refundPercent: pct };
-}
-async function reviewsForAerva(sql) {
+// ---- Requests that come to Aerva (Admin → Approvals) ----
+// • A natural disaster (EMERGENCY_REASONS): at once, from the moment it is
+//   sent — the host cannot decline it. Aerva checks the proof and decides.
+// • An old emergency request with a removed reason (RETIRED_REASONS), still
+//   open from before 10 Nov 2026: once the host has not answered in 24 hours
+//   and Aerva's reminders are done (_emergency-escalation.js).
+// • A review of a host's decline that a guest asked for before 10 Nov 2026
+//   and Aerva has not decided yet (the guest can no longer ask for one).
+// Booking still confirmed and the stay not started.
+async function legacyReviews(sql) {
   try {
     const rows = await sql`SELECT r.*, o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_first_name, o.guest_last_name, o.status AS order_status, l.host_name
                            FROM cancellation_requests r JOIN orders o ON o.id = r.order_id JOIN listings l ON l.id = o.listing_id
@@ -866,101 +970,121 @@ async function reviewsForAerva(sql) {
     for (const r of rows) {
       const q = await cancellationQuote(sql, r.order_id, null);
       if (q.started) continue;
-      out.push({ requestId: r.id, orderId: r.order_id, review: true, reason: EMERGENCY_REASONS[r.reason_code] || r.reason_code, details: r.details || '', reviewNote: r.review_note || '',
+      out.push({ requestId: r.id, orderId: r.order_id, review: true, kind: 'legacy', reason: REASON_LABELS[r.reason_code] || r.reason_code, details: r.details || '', reviewNote: r.review_note || '',
         hostNote: r.host_note || '', evidence: Array.isArray(r.evidence) ? r.evidence : [], askedAt: r.review_requested_at, listing: r.suite_name, arrival: r.arrival, departure: r.departure, hostName: r.host_name,
-        guest: [r.guest_first_name, r.guest_last_name].filter(Boolean).join(' ') || r.guest_email, canDecide: true, lastMinute: lateEmergency(r),
-        guestGetsBack: await guestGetsBackFor(sql, r.order_id, 100),
-        choices: lateEmergency(r) ? await Promise.all(LATE_EMERGENCY_REFUNDS.map(async p => ({ refundPercent: p, guestGetsBack: await guestGetsBackFor(sql, r.order_id, p) }))) : null });
+        guest: [r.guest_first_name, r.guest_last_name].filter(Boolean).join(' ') || r.guest_email, canDecide: true,
+        guestGetsBack: await guestGetsBackFor(sql, r.order_id, 100) });
     }
     return out;
   } catch (e) { return []; }
 }
-
-// ---- Aerva decides an emergency request (Admin → Cancellation requests) ----
-// Open emergency requests the host has not answered in 24 hours, booking
-// still confirmed and the stay not started.
 async function requestsForAerva(sql) {
   const rows = await sql`
-    SELECT r.id, r.order_id, r.reason_code, r.details, r.created_at, r.days_before,
-           o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_first_name, o.guest_last_name, l.host_name
-    FROM cancellation_requests r JOIN orders o ON o.id = r.order_id JOIN listings l ON l.id = o.listing_id
+    SELECT r.id FROM cancellation_requests r JOIN orders o ON o.id = r.order_id
     WHERE r.status = 'pending' AND r.decided_at IS NULL AND o.status = 'paid'
-      AND r.reason_code = ANY(${Object.keys(EMERGENCY_REASONS)})
-      AND r.created_at < now() - make_interval(hours => ${HOST_DECISION_TIMEOUT_HOURS})
+      AND (r.reason_code = ANY(${Object.keys(EMERGENCY_REASONS)})
+           OR (r.reason_code = ANY(${Object.keys(RETIRED_REASONS)}) AND r.created_at < now() - make_interval(hours => ${HOST_DECISION_TIMEOUT_HOURS})))
     ORDER BY o.arrival, r.id LIMIT 200`;
-  // Escalated earlier than 24 hours when check-in is close (_emergency-escalation.js).
+  // Old emergency requests escalated earlier than 24 hours (check-in close).
   const E = require('./_emergency-escalation');
-  const escalatedIds = (await E.ready(sql)) ? (await sql`SELECT id FROM cancellation_requests WHERE status = 'pending' AND decided_at IS NULL AND escalated_at IS NOT NULL`).map(x => Number(x.id)) : [];
+  const ready = await E.ready(sql);
+  const escalatedIds = ready ? (await sql`SELECT id FROM cancellation_requests WHERE status = 'pending' AND decided_at IS NULL AND escalated_at IS NOT NULL`).map(x => Number(x.id)) : [];
   const ids = [...new Set(rows.map(r => Number(r.id)).concat(escalatedIds))];
   const out = [];
   for (const id of ids) {
-    const r = (await sql`SELECT r.id, r.order_id, r.reason_code, r.details, r.created_at, r.days_before, o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_first_name, o.guest_last_name, o.status AS order_status, l.host_name
+    const r = (await sql`SELECT r.id, r.order_id, r.reason_code, r.details, r.created_at, r.days_before, to_jsonb(r)->'evidence' AS evidence,
+                                o.suite_name, o.arrival, o.departure, o.guest_email, o.guest_first_name, o.guest_last_name, o.status AS order_status, l.host_name
                          FROM cancellation_requests r JOIN orders o ON o.id = r.order_id JOIN listings l ON l.id = o.listing_id WHERE r.id = ${id}`)[0];
-    if (!r || r.order_status !== 'paid' || !EMERGENCY_REASONS[r.reason_code]) continue;
+    if (!r || r.order_status !== 'paid' || !AERVA_REASONS[r.reason_code]) continue;
     const q = await cancellationQuote(sql, r.order_id, null);
     if (q.started) continue;
-    const full = (await E.ready(sql)) ? await E.load(sql, r.id) : null;
-    out.push({ requestId: r.id, orderId: r.order_id, reason: EMERGENCY_REASONS[r.reason_code] || r.reason_code, details: r.details || '',
+    const disaster = isDisaster(r);
+    const full = ready ? await E.load(sql, r.id) : null;
+    const base = { requestId: r.id, orderId: r.order_id, reason: REASON_LABELS[r.reason_code] || r.reason_code, details: r.details || '',
       askedAt: r.created_at, listing: r.suite_name, arrival: r.arrival, departure: r.departure, hostName: r.host_name,
       guest: [r.guest_first_name, r.guest_last_name].filter(Boolean).join(' ') || r.guest_email,
-      guestGetsBack: await guestGetsBackFor(sql, r.order_id, 100),
-      lastMinute: lateEmergency(r),
-      choices: lateEmergency(r) ? await Promise.all(LATE_EMERGENCY_REFUNDS.map(async p => ({ refundPercent: p, guestGetsBack: await guestGetsBackFor(sql, r.order_id, p) }))) : null,
-      ...(full ? E.adminView(full) : { canDecide: true }) });
+      evidence: Array.isArray(r.evidence) ? r.evidence : [] };
+    if (disaster) {
+      const d = await disasterOutcome(sql, r.order_id);
+      out.push(Object.assign(base, { kind: 'disaster', canDecide: true, credit: d.credit, coupon: d.coupon, cash: d.cash,
+        hoursToCheckIn: full ? E.adminView(full).hoursToCheckIn : null, hostEmail: full ? full.host_email || null : null, hostPhone: full ? full.host_phone || null : null }));
+    } else {
+      out.push(Object.assign(base, { kind: 'legacy', guestGetsBack: await guestGetsBackFor(sql, r.order_id, 100), ...(full ? E.adminView(full) : { canDecide: true }) }));
+    }
   }
-  for (const x of out) {
-    try { x.evidence = (await sql`SELECT to_jsonb(cancellation_requests)->'evidence' AS e FROM cancellation_requests WHERE id = ${x.requestId}`)[0].e || []; } catch (e) { x.evidence = []; }
-  }
-  out.push(...(await reviewsForAerva(sql)));
+  out.push(...(await legacyReviews(sql)));
   out.sort((a, b) => String(a.arrival).localeCompare(String(b.arrival)));
   return out;
 }
-async function decideByAerva(sql, razorpay, { requestId, accept, note = '', adminLabel = null, refundPercent = 100 }) {
+
+async function decideByAerva(sql, razorpay, { requestId, accept, note = '', adminLabel = null }) {
   const err = (m, status = 400) => Object.assign(new Error(m), { isUserFacing: true, status });
   const rq = (await sql`SELECT * FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0];
   if (!rq) throw err('Request not found.', 404);
-  if (!EMERGENCY_REASONS[rq.reason_code]) throw err('Only emergency requests come to Aerva.');
-  if (rq.status !== 'pending' || rq.decided_at) throw err('This request has already been answered.', 409);
+  if (!AERVA_REASONS[rq.reason_code]) throw err('Only natural-disaster requests come to Aerva.');
+  const review = !!rq.review_requested_at && !rq.review_decided_at;
+  if (!review && (rq.status !== 'pending' || rq.decided_at)) throw err('This request has already been answered.', 409);
+  if (review && rq.review_decided_at) throw err('This review has already been decided.', 409);
   const q = await cancellationQuote(sql, rq.order_id, null);
   if (q.status) throw err(q.error, q.status);
   if (q.started) throw err('This stay has already started, so it can no longer be cancelled.');
-  // Aerva reaches out to the host first: it decides only after the reminders
-  // went unanswered (owner's rule, 9 Nov 2026; _emergency-escalation.js).
+  const disaster = isDisaster(rq) && !review;
   const E = require('./_emergency-escalation');
-  if (await E.ready(sql)) {
+  // An old emergency request: Aerva decides only after the host's reminders.
+  if (!disaster && !review && await E.ready(sql)) {
     const full = await E.load(sql, rq.id);
     if (!E.canAervaDecide(full)) throw err(`Not yet: Aerva contacts the host first. ${E.adminView(full).decideRule} Reminders sent: ${Number(full.host_reminders) || 0} of ${E.REMINDERS}.`, 409);
   }
-  if (!(await claimRequest(sql, rq.id))) throw err('This request has already been answered.', 409);
+  // Claimed once: the request (or the review) can never be decided twice.
+  if (review) {
+    const c = await sql`UPDATE cancellation_requests SET review_decided_at = now() WHERE id = ${rq.id} AND review_decided_at IS NULL RETURNING id`;
+    if (!c.length) throw err('This review has already been decided.', 409);
+  } else if (!(await claimRequest(sql, rq.id))) throw err('This request has already been answered.', 409);
   const why = String(note || '').trim().slice(0, 500);
-  // A last-minute emergency: Aerva may also settle at 75% or 50% back, on the actual situation.
-  const pct = accept === true ? (lateEmergency(rq) && LATE_EMERGENCY_REFUNDS.includes(Number(refundPercent)) ? Number(refundPercent) : 100) : 0;
+  let out = null;
   try {
-    if (accept === true) await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct, by: 'aerva_emergency', adminLabel, note: why });
-  } catch (e) { await unclaimRequest(sql, rq.id); throw e; }
-  await sql`UPDATE cancellation_requests SET status = ${accept === true ? 'accepted' : 'declined'}, refund_percent = ${pct},
-              host_note = ${'Decided by Aerva' + (why ? ': ' + why : '')}, decided_at = now() WHERE id = ${rq.id}`;
-  if (accept === true) await emergencyApproved(sql, rq.id);
-  await logAudit(sql, { action: 'cancellation_request_decided_by_aerva', success: true, actorType: 'admin', actorIdentifier: adminLabel,
-    targetType: 'order', targetId: rq.order_id, metadata: { requestId: rq.id, accept: accept === true, note: why } });
+    if (accept === true) out = await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct: 100, by: disaster ? 'natural_disaster' : 'aerva_emergency', adminLabel, note: why });
+  } catch (e) {
+    if (review) await sql`UPDATE cancellation_requests SET review_decided_at = NULL WHERE id = ${rq.id}`;
+    else await unclaimRequest(sql, rq.id);
+    throw e;
+  }
+  if (review) {
+    await sql`UPDATE cancellation_requests SET review_outcome = ${accept === true ? 'overturned' : 'upheld'}, status = ${accept === true ? 'accepted' : 'declined'},
+                refund_percent = ${accept === true ? 100 : rq.refund_percent}, host_note = ${(rq.host_note ? rq.host_note + ' · ' : '') + 'Reviewed by Aerva' + (why ? ': ' + why : '')} WHERE id = ${rq.id}`;
+  } else {
+    await sql`UPDATE cancellation_requests SET status = ${accept === true ? 'accepted' : 'declined'}, refund_percent = ${accept === true ? 100 : 0},
+                host_note = ${'Decided by Aerva' + (why ? ': ' + why : '')}, decided_at = now() WHERE id = ${rq.id}`;
+  }
+  await logAudit(sql, { action: review ? 'cancellation_review_decided' : 'cancellation_request_decided_by_aerva', success: true, actorType: 'admin', actorIdentifier: adminLabel,
+    targetType: 'order', targetId: rq.order_id, metadata: { requestId: rq.id, accept: accept === true, note: why, natural_disaster: disaster, credit: out ? out.heldAsCredit || 0 : 0 } });
   const o = (await sql`SELECT o.suite_name, o.guest_email, o.arrival, o.departure, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${rq.order_id}`)[0];
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
   const stay = `<strong>${escH(o.suite_name)}</strong> (${escH(dateStr(o.arrival))} → ${escH(dateStr(o.departure))})`;
   const binding = 'Aerva’s decision is final and binds both the guest and the host.';
-  await postThreadMessage(sql, rq.order_id, 'system', accept === true
-    ? `The host did not answer after Aerva’s reminders, so Aerva decided the emergency cancellation request and approved it. ${pct === 100 ? 'The booking price, GST and deposit are refunded in full' : `${pct}% of the booking price and its GST, and the deposit in full, are refunded`}; Aerva’s service fee is not refunded. ${binding}`
-    : `The host did not answer after Aerva’s reminders, so Aerva decided the emergency cancellation request and did not approve it${why ? ': ' + why : ''}. The booking stands. ${binding}`);
-  if (accept === true) {
-    await email(o.guest_email, `Your cancellation for ${o.suite_name} is approved`, `<div style="font-family:sans-serif; max-width:480px;"><p>Your host did not answer, so Aerva decided your request and approved your cancellation of ${stay}. ${pct === 100 ? 'The booking price, GST and deposit are refunded in full' : `${pct}% of the booking price and its GST, and the deposit in full, are refunded`} to your original payment method. Aerva’s service fee is not refunded.</p><p>${binding}</p></div>`);
-    await email(host && host.email, `Booking cancelled by Aerva: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>Your guest asked to cancel ${stay} for an emergency. There was no answer after Aerva’s reminders, so Aerva decided and approved the cancellation. The dates are open again.</p><p>${binding}</p></div>`);
-  } else {
-    await email(o.guest_email, `About your cancellation request for ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>Aerva has reviewed your request to cancel ${stay} and could not approve it${why ? ': ' + escH(why) : ''}. Your booking stands.</p><p>${binding}</p></div>`);
-    await email(host && host.email, `Cancellation request closed: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>Aerva reviewed your guest’s request to cancel ${stay} and did not approve it. The booking stands.</p><p>${binding}</p></div>`);
+  if (disaster) {
+    // executePolicyCancellation has already told both sides and posted in
+    // the thread when it was approved; a rejection is told here.
+    if (accept !== true) {
+      await postThreadMessage(sql, rq.order_id, 'system', `Aerva checked the proof and did not approve the cancellation${why ? ': ' + why : ''}. The booking stands. ${binding}`);
+      await email(o.guest_email, `About your cancellation request for ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>Aerva has checked the proof you sent to cancel ${stay} and could not approve it${why ? ': ' + escH(why) : ''}. Nothing changes: your booking stands.</p><p>${binding}</p></div>`);
+      await email(host && host.email, `Cancellation request closed: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>Aerva did not approve your guest’s natural-disaster cancellation of ${stay}. The booking stands.</p><p>${binding}</p></div>`);
+    } else {
+      await email(host && host.email, `Booking cancelled by Aerva: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>Aerva checked the proof and approved your guest’s natural-disaster cancellation of ${stay}. The guest’s payment is held as Aerva credit for new dates; there is no payout for this booking, and it does not count as your cancellation. The dates are open again.</p><p>${binding}</p></div>`);
+    }
+    await E.closeEscalation(sql, rq.id, {
+      guestText: accept === true ? `Aerva approved your cancellation: everything you paid is held as Aerva credit for new dates. ${binding}` : `Aerva did not approve your request${why ? ' — ' + why : ''}. The booking stands. ${binding}`,
+      hostText: accept === true ? `Aerva approved the cancellation. ${binding}` : `Aerva did not approve the request. The booking stands. ${binding}` });
+    return { accepted: accept === true, refundPercent: accept === true ? 100 : 0, credit: out ? out.heldAsCredit || 0 : 0, review: false };
   }
-  await E.closeEscalation(sql, rq.id, {
-    guestText: accept === true ? `Aerva decided: your cancellation is approved. ${pct === 100 ? 'The booking price, GST and any deposit are refunded in full' : `${pct}% of the booking price and its GST, and any deposit in full, are refunded`}; Aerva’s service fee is not refunded. ${binding}` : `Aerva decided: your request is not approved${why ? ' — ' + why : ''}. The booking stands. ${binding}`,
-    hostText: accept === true ? `Aerva decided: the cancellation is approved and the guest refunded. ${binding}` : `Aerva decided: the request is not approved. The booking stands. ${binding}` });
-  return { accepted: accept === true, refundPercent: pct };
+  const outcome = accept === true
+    ? `Aerva ${review ? 'reviewed the proof and approved' : 'decided and approved'} the cancellation: the booking price, GST and deposit are refunded in full; Aerva’s service fee is not refunded.`
+    : `Aerva ${review ? 'reviewed the proof and the host’s decline stands' : 'decided and did not approve the request'}${why ? ': ' + why : ''}. The booking stands.`;
+  await postThreadMessage(sql, rq.order_id, 'system', `${outcome} ${binding}`);
+  await email(o.guest_email, accept === true ? `Your cancellation for ${o.suite_name} is approved` : `About your cancellation request for ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>${escH(outcome)} (${stay})</p><p>${binding}</p></div>`);
+  await email(host && host.email, accept === true ? `Booking cancelled by Aerva: ${o.suite_name}` : `Cancellation request closed: ${o.suite_name}`, `<div style="font-family:sans-serif; max-width:480px;"><p>${escH(outcome)} (${stay})</p><p>${binding}</p></div>`);
+  await E.closeEscalation(sql, rq.id, { guestText: `${outcome} ${binding}`, hostText: `${outcome} ${binding}` });
+  return { accepted: accept === true, refundPercent: accept === true ? 100 : 0, review };
 }
 // Scheduler: requests still open when the stay starts close; the booking
 // stands. Never throws.
@@ -997,8 +1121,9 @@ async function closeRequestsAtCheckin(sql, { deadlineMs = 3000 } = {}) {
 
 module.exports = {
   requestsForAerva, decideByAerva, closeRequestsAtCheckin,
-  POLICIES, HOST_DECISION_TIMEOUT_HOURS, HOST_CANCELLATIONS_PER_YEAR, EMERGENCY_REASONS, REQUEST_REASONS,
-  TRANSFERRED_NO_CANCEL, LATE_EMERGENCY_REFUNDS, lateEmergency, emergencyApproved, requestReview, decideReview, reviewable, REVIEW_HOURS, policyKey, policyTier, policySummary, splitRow, depositStillHeld, linkedSiblings, loadRows,
+  POLICIES, HOST_DECISION_TIMEOUT_HOURS, FREE_CANCEL_REFUNDS_SERVICE_FEE, HOST_CANCELLATIONS_PER_YEAR, EMERGENCY_REASONS, RETIRED_REASONS, REQUEST_REASONS, REASON_LABELS, AERVA_REASONS,
+  isDisaster, isLegacyEmergency, disasterOutcome,
+  TRANSFERRED_NO_CANCEL, policyKey, policyTier, policySummary, splitRow, depositStillHeld, linkedSiblings, loadRows,
   claimForCancellation, releaseClaim, guestGetsBackFor, claimRequest, unclaimRequest, postThreadMessage, hostOption, createCancellationRequest, cancellationCard,
-  cancellationQuote, executePolicyCancellation, returnCouponValue, returnValue, issueCouponForHost, hostCouponAmount, markCancelledByHost, listingCancelRates, hostCancelRates, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
+  cancellationQuote, executePolicyCancellation, freeCancelActive, returnCouponValue, returnValue, issueCouponForHost, hostCouponAmount, markCancelledByHost, listingCancelRates, hostCancelRates, hostCancellationsLastYear, settleUnansweredRequests, clearUnsentPayouts
 };

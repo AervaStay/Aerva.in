@@ -39,7 +39,7 @@
 
 require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
-const { daysSinceCheckout, submissionOpen, reviewWindowState, REVIEW_WINDOW_DAYS } = require('./_review-policy');
+const { daysSinceCheckout, submissionOpen, reviewWindowState, REVIEW_WINDOW_DAYS, cleanReviewPhotos } = require('./_review-policy');
 const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { buildProfile, sanitizeProfileInput, PRIVACY_OPTIONS, sanitizePrivacy, readPrivacy } = require('./_profiles');
 const { GUEST_FACTORS, EXPERIENCE_FACTORS, GUEST_TIERS, tierByKey } = require('./_tiers');
@@ -88,7 +88,9 @@ function changeView(qc) {
   const lines = [{ label: `${q.nights} night${q.nights === 1 ? '' : 's'}${q.discountAmount ? ' (after discount)' : ''}`, amount: q.roomPortion }];
   (q.amenities || []).forEach(a => lines.push({ label: a.name, amount: a.total }));
   if (q.petFeeAmount) lines.push({ label: 'Pet fee', amount: q.petFeeAmount });
-  if (q.gst) lines.push({ label: 'GST', amount: q.gst });
+  // The free cancellation add-on stays with the booking (_booking-changes.js).
+  if (q.freeCancelFee) lines.push({ label: q.freeCancelExtra ? `Free cancellation (₹${Number(q.freeCancelExtra).toLocaleString('en-IN')} more for the added nights)` : 'Free cancellation (kept)', amount: q.freeCancelFee });
+  if (q.gst || q.freeCancelGst) lines.push({ label: 'GST', amount: (q.gst || 0) + (q.freeCancelGst || 0) });
   lines.push({ label: 'Guest service fee', amount: q.guestServiceFee });
   if (q.depositAmount) lines.push({ label: 'Refundable deposit', amount: q.depositAmount });
   return { summary: qc.summary, lines, oldTotal: qc.oldTotal, newTotal: qc.newTotal, difference: qc.difference, couponNotReturned: qc.couponNotReturned || 0 };
@@ -125,6 +127,28 @@ const sql = neon(process.env.DATABASE_URL);
 // it is what caused the 48-hour cancellation cutoff to silently miscalc
 // via a mangled date-string concatenation). Needed here now that
 // hostConversations returns booking dates for the inbox's status tags.
+// A first or last name as on a government ID. Spaces are tidied (and
+// curly apostrophes made straight) before checking; nothing else is
+// changed. \p{M} keeps the vowel signs of Indian scripts (हि, ಶ್ರೀ).
+function cleanPersonName(v) {
+  return typeof v === 'string' ? v.normalize('NFC').replace(/[‘’]/g, "'").replace(/\s+/g, ' ').trim() : '';
+}
+function nameProblem(v, which) {
+  const label = which === 'first' ? 'first name' : 'last name';
+  if (!v) return `Please enter your ${label}.`;
+  if ([...v].length > 50) return `Your ${label} can be at most 50 characters.`;
+  if (/\d/u.test(v)) return `Your ${label} cannot contain numbers — please write it as on your government ID.`;
+  if (!/^[\p{L}\p{M} .'-]+$/u.test(v)) return `Your ${label} can only have letters, spaces, dots, apostrophes and hyphens.`;
+  if (!/\p{L}/u.test(v)) return `Please enter your ${label} with letters.`;
+  return null;
+}
+
+// Their own profile also carries the first and last name, for the
+// "Your name" row (never shown on a profile someone else opens).
+function ownNames(profile, row) {
+  return Object.assign(profile, { firstName: String(row.first_name || '').trim(), lastName: String(row.last_name || '').trim() });
+}
+
 function toDateStr(val) {
   if (!val) return null;
   if (val instanceof Date) return val.toISOString().split('T')[0];
@@ -474,6 +498,19 @@ module.exports = async (req, res) => {
           return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not look for other properties right now.' });
         }
       }
+      // ---- Gifts and group bookings (_gifts.js, _group-bookings.js) ----
+      // GET ?mode=gift&token=… | &giftId=…  → the gift, whether this account may accept it, prefill
+      // GET ?mode=group&token=…              → the group's live status for this account
+      if (mode === 'gift' || mode === 'group') {
+        if (actingCtx) return res.status(403).json({ error: 'Open this from your own account.' });
+        try {
+          if (mode === 'gift') return res.status(200).json(await require('./_gifts').viewForAccount(sql, { guestId, token: req.query.token || null, giftId: req.query.giftId || null }));
+          return res.status(200).json(await require('./_group-bookings').status(sql, razorpayClient(), String(req.query.token || ''), guestId));
+        } catch (err) {
+          if (!err.isUserFacing) console.error(mode + ' failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load this right now. Please try again.' });
+        }
+      }
       if (mode === 'changeOptions') {
         try { return res.status(200).json(await changeOptions(sql, Number(req.query.orderId) || 0, guestId)); }
         catch (err) { return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load this right now.' }); }
@@ -507,8 +544,22 @@ module.exports = async (req, res) => {
         if (order.status !== 'paid' && order.status !== 'cancelled') {
           return res.status(403).json({ error: 'A conversation only opens once a booking is confirmed.' });
         }
-        const isGuest = order.guest_id === guestId;
-        const isHost = myHostId != null && order.host_id === myHostId;
+        // A gift's accepted recipient and a group booking's payers use the
+        // booking's Messages too (_gifts.js sharedRole) — never its money.
+        const shared = order.guest_id === guestId ? null : await require('./_gifts').sharedRole(sql, guestId, orderId);
+        const isGuest = order.guest_id === guestId || !!shared;
+        let isHost = myHostId != null && order.host_id === myHostId;
+        // A co-host opening the thread from Today (no ?actingHost: the page
+        // cannot tell their own trips from the host's bookings there) answers
+        // as the host would — only with messages access, on a listing they
+        // co-host. Their own trips are matched as the guest above, first.
+        if (!isGuest && !isHost && !actingCtx && guestId > 0) {
+          const ctx = await resolveActingHost(sql, guestId, order.host_id);
+          if (ctx && cohostCan(ctx, 'messages') && cohostHasListing(ctx, order.listing_id)) {
+            if ((await cohostDetailsMissing(sql, guestId, ctx.hostId)).length) return res.status(403).json({ error: DETAILS_REQUIRED_MESSAGE, detailsRequired: true });
+            isHost = true;
+          }
+        }
         if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your booking.' });
 
         let convRows = await sql`SELECT id FROM conversations WHERE order_id = ${orderId}`;
@@ -551,6 +602,14 @@ module.exports = async (req, res) => {
         // and the host's replies, all rendered identically as "mine,"
         // making it look like nothing was ever received.
         const viewerRole = isGuest ? 'guest' : 'host';
+        if (shared) {
+          // No price for a recipient or a friend: amounts in Aerva's notices are hidden,
+          // and the booking's cards (cancel, change, dispute) are the organiser's or buyer's.
+          return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, shared,
+            messages: messages.map(m => m.sender_type === 'system' ? Object.assign({}, m, { display_text: String(m.display_text || '').replace(/(₹|Rs\.?|INR)\s?[\d,]+(\.\d+)?/g, 'an amount') }) : m),
+            booking: { orderId: order.id, confirmationCode: order.confirmation_code || null, arrival: order.arrival, departure: order.departure, guests: order.guests, nights: order.nights, status: order.status },
+            reviewPrompt: null, cancellation: null, change: null, dispute: null });
+        }
         return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, messages,
           booking: { orderId: order.id, confirmationCode: order.confirmation_code || null,
                      arrival: order.arrival, departure: order.departure, guests: order.guests, nights: order.nights,
@@ -609,9 +668,15 @@ module.exports = async (req, res) => {
           LEFT JOIN guests g ON g.id = c.guest_id
           LEFT JOIN hosts h ON h.id = c.host_id
           LEFT JOIN orders o ON o.id = c.order_id
-          WHERE c.guest_id = ${guestId} OR c.host_id = ${myHostId}
+          WHERE c.guest_id = ${guestId} OR c.host_id = ${myHostId} OR c.order_id = ANY(${await require('./_gifts').sharedOrderIds(sql, guestId)}::int[])
           ORDER BY last_message_at DESC NULLS LAST
         `;
+        // A gift: the host sees the guest staying, marked as a gift (_gifts.js).
+        try {
+          const labels = await require('./_gifts').hostLabels(sql, conversations.filter(c => c.my_role === 'host' && c.order_id).map(c => c.order_id));
+          conversations.forEach(c => { const l = c.my_role === 'host' && labels.get(Number(c.order_id)); if (l) { c.counterpart_name = l.label; c.guest_display_name = l.name; c.gift = { accepted: l.accepted, note: l.note }; } });
+        } catch (e) { /* before the database update */ }
+        const sharedIds = new Set(await require('./_gifts').sharedOrderIds(sql, guestId));
         // Dates normalized here (see toDateStr's comment) so the
         // frontend's status-tag logic (Enquiry / Check-in Today / etc.)
         // does plain string/date-object comparisons against a real date,
@@ -629,6 +694,8 @@ module.exports = async (req, res) => {
           // The host's payout is the host's business: never to a guest, and
           // never to a co-host (payouts are the host's alone).
           if (c.my_role !== 'host' || actingCtx) delete c.payout_amount;
+          // A gift's recipient or a group's friend: never the price.
+          if (c.my_role !== 'host' && sharedIds.has(Number(c.order_id)) && c.guest_id !== guestId) { delete c.subtotal; delete c.gst; c.shared = true; }
           // Nor what the guest paid for the stay: the host's payout is that
           // less commission, so it is the host's earnings by another name.
           if (actingCtx) { delete c.subtotal; delete c.gst; }
@@ -701,10 +768,11 @@ module.exports = async (req, res) => {
       if (mode === 'conversationMessages' || mode === 'hostConversationMessages') {
         const conversationId = Number(req.query.conversationId);
         if (!conversationId) return res.status(400).json({ error: 'Missing conversation.' });
-        const convRows = await sql`SELECT id, guest_id, host_id FROM conversations WHERE id = ${conversationId}`;
+        const convRows = await sql`SELECT id, guest_id, host_id, order_id FROM conversations WHERE id = ${conversationId}`;
         const conv = convRows[0];
         if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
-        const isGuest = conv.guest_id === guestId;
+        const sharedView = conv.guest_id !== guestId && conv.order_id ? await require('./_gifts').sharedRole(sql, guestId, conv.order_id) : null;
+        const isGuest = conv.guest_id === guestId || !!sharedView;
         const isHost = myHostId != null && conv.host_id === myHostId;
         if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
 
@@ -846,6 +914,10 @@ module.exports = async (req, res) => {
                to_jsonb(o)->>'guest_last_name' AS guest_last_name,
                to_jsonb(o)->'pet_types' AS pet_types,
                to_jsonb(o)->>'transfer_change_id' AS transfer_change_id,
+               -- The free cancellation add-on (_pricing.js): 0 on older rows.
+               COALESCE((to_jsonb(o)->>'free_cancel_fee')::int, 0) AS free_cancel_fee,
+               COALESCE((to_jsonb(o)->>'free_cancel_gst')::int, 0) AS free_cancel_gst,
+               COALESCE((to_jsonb(o)->>'free_cancel_refunded')::boolean, false) AS free_cancel_refunded,
                l.property_name AS listing_name, l.city AS listing_city, to_jsonb(l)->>'area' AS listing_area,
                l.formatted_address AS listing_address, l.host_name AS host_name,
                to_jsonb(l)->>'check_in_time' AS check_in_time, to_jsonb(l)->>'check_out_time' AS check_out_time,
@@ -873,6 +945,22 @@ module.exports = async (req, res) => {
         }
       } catch (err) { /* booking_changes not created yet */ }
 
+      // A transferred part: Aerva's transfer fee is stored inside its
+      // guest_service_fee (_booking-transfers.js); send it apart so the
+      // booking summary shows the two charges the guest agreed to.
+      try {
+        const tids = [...new Set(bookings.filter(b => b.transfer_change_id).map(b => Number(b.transfer_change_id)))];
+        if (tids.length) {
+          const tq = await sql`SELECT id, quote FROM booking_changes WHERE id = ANY(${tids})`;
+          const byId = {}; tq.forEach(r => { byId[r.id] = r.quote; });
+          bookings.forEach(b => {
+            const q = b.transfer_change_id && byId[Number(b.transfer_change_id)];
+            const part = q && Array.isArray(q.parts) ? q.parts.find(p => Number(p.listingId) === Number(b.listing_id) && String(p.arrival) === toDateStr(b.arrival)) : null;
+            if (part && Number(part.transferFee) > 0) b.transfer_fee = Number(part.transferFee);
+          });
+        }
+      } catch (err) { /* booking_changes not created yet */ }
+
       // Latest cancellation request per booking (guest's "Request cancellation").
       try {
         const ids = bookings.map(b => b.id);
@@ -884,11 +972,12 @@ module.exports = async (req, res) => {
             const r = byOrder[b.id];
             b.cancel_request_status = r ? r.status : null;
             b.cancel_request_id = r ? r.id : null;
-            // A declined emergency with proof: the guest may ask Aerva to review it (24 hours).
+            b.cancel_request_reason = r ? (C.REASON_LABELS[r.reason_code] || null) : null;
+            b.cancel_request_disaster = !!(r && C.isDisaster(r));
+            // An old review of a host's decline (asked before 10 Nov 2026): where it stands.
             if (r && r.status === 'declined') {
-              try { b.can_request_review = await C.reviewable(sql, r); } catch (e) { b.can_request_review = false; }
-              if (r.review_requested_at && !r.review_decided_at) b.review_state = 'Aerva is reviewing your emergency request (its decision is final)';
-              else if (r.review_outcome === 'upheld') b.review_state = 'Aerva reviewed your request: the host’s decline stands';
+              if (r.review_requested_at && !r.review_decided_at) b.cancel_review_state = 'Aerva is reviewing your emergency request (its decision is final)';
+              else if (r.review_outcome === 'upheld') b.cancel_review_state = 'Aerva reviewed your request: the host’s decline stands';
             }
           }
           // An emergency request Aerva is chasing: where it stands (_emergency-escalation.js).
@@ -925,6 +1014,14 @@ module.exports = async (req, res) => {
           b.can_cancel_request = !!paid && !started && !b.transfer_change_id;   // a transferred booking: Aerva Support only
           b.can_report = !!paid && started && (b.listing_type || 'stay') === 'stay' && (inWindow || declined.has(b.id));
           b.stay_window_closed = !!paid && started && !inWindow && !transferOpen;
+          // The free cancellation add-on: until when a cancellation is a full refund.
+          if (Number(b.free_cancel_fee) > 0) {
+            const P = require('./_pricing');
+            const ms = P.freeCancelUntilMs(arr, b.listing_timezone, b.check_in_time);
+            b.free_cancel_until = Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+            b.free_cancel_until_label = P.freeCancelLabel(ms, b.listing_timezone);
+            b.free_cancel_active = !!paid && !b.transfer_change_id && Date.now() < ms;
+          }
           delete b.listing_timezone;
         });
       } catch (err) { console.error('booking actions not worked out:', err.message); }
@@ -940,6 +1037,11 @@ module.exports = async (req, res) => {
           bookings.forEach(b => { b.refunded = byOrder[b.id] || null; });
         }
       } catch (err) { /* refunds table not created yet */ }
+
+      // Aerva's check-in promise: a booking moved to another place shows once
+      // (the new one, with one summary); reports, places offered, and the
+      // "This place is real and as listed" button (_checkin-promise.js).
+      await require('./_checkin-promise').decorateGuestBookings(sql, bookings);
 
       // What the guest can do about a review on each booking. The page
       // shows a button only for 'open'; see index.html.
@@ -970,6 +1072,13 @@ module.exports = async (req, res) => {
         // upcoming ones (Change / Request cancellation only before check-out).
         b.local_today = toDateStr(b.local_today);
       });
+
+      // Group bookings and gifts (_group-bookings.js, _gifts.js): the
+      // organiser's and buyer's own bookings get their group / gift; a
+      // friend's "Group booking — you paid for N places", a recipient's
+      // "Gifted to you" (no money, no actions), and groups still open.
+      await require('./_group-bookings').decorateBookings(sql, guestId, bookings);
+      await require('./_gifts').decorateBookings(sql, guestId, bookings);
 
       // Published, non-reverted only — a held review must not move a
       // guest's standing any more than it shows on a listing.
@@ -1011,11 +1120,12 @@ module.exports = async (req, res) => {
       if (req.query.mode === 'profile') {
         const rows = await sql`
           SELECT id, name, created_at, profile_photo_url, host_id,
-                 profile_work, profile_hobbies, profile_about, profile_updated_at
+                 profile_work, profile_hobbies, profile_about, profile_updated_at,
+                 to_jsonb(guests)->>'first_name' AS first_name, to_jsonb(guests)->>'last_name' AS last_name
           FROM guests WHERE id = ${guestId}
         `;
         if (!rows[0]) return res.status(404).json({ error: 'Account not found.' });
-        return res.status(200).json({ profile: await buildProfile(sql, rows[0], { own: true }) });
+        return res.status(200).json({ profile: ownNames(await buildProfile(sql, rows[0], { own: true }), rows[0]) });
       }
 
       // ---- The other person's profile ----
@@ -1099,6 +1209,9 @@ module.exports = async (req, res) => {
           return res.status(200).json({ success: true, refunded: r.refunded });
         } catch (err) {
           if (!err.isUserFacing) console.error('refundFeeCredit failed:', err);
+          // The payment gateway refused (_refunds.js): its message is written for
+          // Aerva's team (booking, Admin → Refunds). The credit is untouched.
+          if (err.isUserFacing && err.status === 502) return res.status(502).json({ error: 'The refund could not be made right now. Your Aerva credit is still here and nothing was charged — please try again later, or contact Aerva Support.' });
           return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not refund it right now. Please try again in a little while.' });
         }
       }
@@ -1178,6 +1291,47 @@ module.exports = async (req, res) => {
           return res.status(200).json({ success: true, disputeId: row.id });
         } catch (err) {
           return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send your report right now.' });
+        }
+      }
+
+      // ---- Aerva's check-in promise (_checkin-promise.js) ----
+      // POST { mode: 'acceptRebook', orderId, option }  → one of the places Aerva sent
+      //      (costs more: { changeId, pay } — paid through create-order { payChange })
+      // POST { mode: 'declineRebook', orderId }          → none suits: refunded in full
+      // POST { mode: 'confirmStay', orderId }            → "This place is real and as listed"
+      // ---- Gifts (_gifts.js) ----
+      // POST { mode: 'sendGift', orderId, recipient: { firstName, lastName, email, phone?, message? } } — make a booking a gift, or change who it is for
+      // POST { mode: 'withdrawGift', orderId }
+      // POST { mode: 'acceptGift', token | giftId, firstName, lastName, phone }
+      // ---- Group bookings (_group-bookings.js) ----
+      // POST { mode: 'groupDecide', token, accept } — the organiser confirms a smaller booking, or cancels
+      // POST { mode: 'groupAddGuest', token, places } — add places (never remove): while open, at the
+      //      2-hour decision, or after confirmation (the same booking, re-priced)
+      if (mode === 'sendGift' || mode === 'withdrawGift' || mode === 'acceptGift' || mode === 'groupDecide' || mode === 'groupAddGuest') {
+        const b = req.body || {};
+        try {
+          const G = require('./_gifts');
+          if (mode === 'sendGift') return res.status(200).json(await G.sendGift(sql, { orderId: Number(b.orderId) || 0, guestId, input: b.recipient || {} }));
+          if (mode === 'withdrawGift') return res.status(200).json(await G.withdrawGift(sql, { orderId: Number(b.orderId) || 0, guestId }));
+          if (mode === 'acceptGift') return res.status(200).json(await G.acceptGift(sql, { guestId, token: b.token || null, giftId: b.giftId || null, firstName: b.firstName, lastName: b.lastName, phone: b.phone, ip: getClientIp(req) }));
+          if (mode === 'groupAddGuest') return res.status(200).json(await require('./_group-bookings').addGuests(sql, razorpayClient(), { token: String(b.token || '').slice(0, 64), guestId, places: b.places }));
+          return res.status(200).json(await require('./_group-bookings').decide(sql, razorpayClient(), { token: String(b.token || ''), guestId, accept: b.accept === true }));
+        } catch (err) {
+          if (!err.isUserFacing) console.error(mode + ' failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now. Please try again.', needs: err.needs || undefined, maxGuests: err.maxGuests || undefined });
+        }
+      }
+      if (mode === 'acceptRebook' || mode === 'declineRebook' || mode === 'confirmStay') {
+        try {
+          const b = req.body || {};
+          const CP = require('./_checkin-promise');
+          const orderId = Number(b.orderId) || 0;
+          if (mode === 'confirmStay') return res.status(200).json(await CP.confirmStay(sql, { orderId, guestId }));
+          if (mode === 'declineRebook') return res.status(200).json(await CP.declineOffers(sql, razorpayClient(), { orderId, guestId }));
+          return res.status(200).json(await CP.acceptOffer(sql, razorpayClient(), { orderId, guestId, option: Number(b.option) }));
+        } catch (err) {
+          if (!err.isUserFacing) console.error(mode + ' failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now. Please try again, or contact Aerva Support.' });
         }
       }
 
@@ -1299,9 +1453,11 @@ module.exports = async (req, res) => {
         const e164 = normalizeToE164(String((req.body || {}).phone || ''));
         if (!e164) return res.status(400).json({ error: 'Please enter a valid mobile number, with the country code if you are outside India.' });
         // One phone per account, same rule as the email.
-        const taken = await sql`SELECT id FROM guests WHERE btrim(phone) = ${e164} AND id <> ${guestId} AND deleted_at IS NULL`;
+        const d164 = e164.replace(/\D/g, '');   // by digits, so an older "9876543210" row is found too
+        const taken = await sql`SELECT id FROM guests WHERE id <> ${guestId} AND deleted_at IS NULL AND phone IS NOT NULL
+          AND (regexp_replace(phone, '[^0-9]', '', 'g') = ${d164} OR (${d164.startsWith('91') && d164.length === 12} AND regexp_replace(phone, '[^0-9]', '', 'g') IN (${d164.slice(2)}, ${'0' + d164.slice(2)})))`;
         if (taken.length) {
-          return res.status(409).json({ error: 'That number is already on another Aerva account. Log in with it instead, or use a different one.' });
+          return res.status(409).json({ error: 'This phone number is already linked to another Aerva account. Log in with it instead, or use a different number.' });
         }
         try {
           const before = (await sql`SELECT phone FROM guests WHERE id = ${guestId}`)[0];
@@ -1313,6 +1469,40 @@ module.exports = async (req, res) => {
           if (/unique|duplicate/i.test(err.message)) return res.status(409).json({ error: 'That number is already on another Aerva account.' });
           throw err;
         }
+      }
+
+      // ---- Their first and last name (owner, 9 Nov 2026) ----
+      // POST { mode: 'saveName', firstName, lastName } → { firstName, lastName, name }
+      // As on their government ID: the host checks it at check-in. Letters
+      // of any script (with their accents and vowel signs), spaces, dots,
+      // apostrophes and hyphens; no digits ("Tanish1" is refused). guests.name
+      // follows as "First Last". Bookings already made keep the name they
+      // were booked with (orders.guest_first_name / guest_last_name).
+      if (mode === 'saveName') {
+        const b = req.body || {};
+        const first = cleanPersonName(b.firstName);
+        const last = cleanPersonName(b.lastName);
+        const bad = nameProblem(first, 'first') || nameProblem(last, 'last');
+        if (bad) return res.status(400).json({ error: bad });
+        const full = first + ' ' + last;
+        const before = (await sql`SELECT name, to_jsonb(guests)->>'first_name' AS first_name, to_jsonb(guests)->>'last_name' AS last_name
+                                  FROM guests WHERE id = ${guestId}`)[0];
+        if (!before) return res.status(401).json({ error: 'Please log in again.' });
+        if (before.first_name === first && before.last_name === last && before.name === full) {
+          return res.status(200).json({ firstName: first, lastName: last, name: full });
+        }
+        try {
+          await sql`UPDATE guests SET first_name = ${first}, last_name = ${last}, name = ${full} WHERE id = ${guestId}`;
+        } catch (err) {
+          if (!/first_name|last_name/.test(err.message)) throw err;
+          // Before migration_guest_details.sql: keep at least the full name.
+          await sql`UPDATE guests SET name = ${full} WHERE id = ${guestId}`;
+        }
+        await logAudit(sql, { action: before.first_name || before.last_name ? 'guest_name_changed' : 'guest_name_added', success: true,
+          actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId,
+          metadata: { from: { firstName: before.first_name || null, lastName: before.last_name || null, name: before.name || null },
+                      to: { firstName: first, lastName: last }, ip: getClientIp(req) } });
+        return res.status(200).json({ firstName: first, lastName: last, name: full });
       }
 
       // ---- Changing a booking ----
@@ -1336,23 +1526,25 @@ module.exports = async (req, res) => {
       }
 
       // ---- Guest asks to cancel (any reason) ----
-      // POST { mode: 'cancelBooking' | 'requestCancellation', orderId, reasonCode, details }
+      // POST { mode: 'cancelBooking' | 'requestCancellation', orderId, reasonCode, details, evidence }
+      // reasonCode: 'change_of_plans', or a natural disaster ('environmental',
+      // 'travel_restriction') with evidence — that one goes to Aerva.
       // A guest never cancels on their own: the request goes into the
       // booking's message thread and the host answers there (or in My
       // Earnings), seeing only the choice for this booking's bracket.
-      // POST { mode: 'requestCancellationReview', requestId, note } — the host declined a proven emergency: Aerva reviews (final).
+      // POST { mode: 'requestCancellationReview' } — removed on 10 Nov 2026
+      // (owner): a natural disaster goes to Aerva directly; a host's decline
+      // of a change of plans is final.
       if (mode === 'requestCancellationReview') {
-        try { return res.status(200).json(await require('./_cancellations').requestReview(sql, { requestId: Number((req.body || {}).requestId) || 0, guestId, note: (req.body || {}).note })); }
-        catch (err) {
-          if (!err.isUserFacing) console.error('requestCancellationReview failed:', err);
-          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send this right now.' });
-        }
+        return res.status(410).json({ error: 'Asking Aerva to review a host’s decline is no longer available. For a natural disaster or a government order, send your cancellation request with proof: Aerva decides it.' });
       }
       if (mode === 'cancelBooking' || mode === 'requestCancellation') {
         try {
           const b = req.body || {};
-          const out = await createCancellationRequest(sql, { orderId: Number(b.orderId) || 0, guestId, reasonCode: b.reasonCode || 'change_of_plans', details: b.details, evidence: b.evidence });
+          const out = await createCancellationRequest(sql, { orderId: Number(b.orderId) || 0, guestId, reasonCode: b.reasonCode || 'change_of_plans', details: b.details, evidence: b.evidence, razorpay: razorpayClient() });
           if (out.error) return res.status(out.status || 400).json({ error: out.error });
+          // Free cancellation add-on, inside its window: cancelled at once.
+          if (out.cancelled) return res.status(200).json({ success: true, cancelled: true, refundCash: out.cancelled.refundCash, couponBack: out.cancelled.couponBack || 0, creditBack: out.cancelled.creditBack || 0 });
           return res.status(200).json({ success: true, requested: true });
         } catch (err) {
           console.error('cancellation request failed:', err);
@@ -1418,7 +1610,7 @@ module.exports = async (req, res) => {
 
       // ---- Guest reviews a property ----
       // POST { mode: 'submitReview', orderId, hygiene, communication,
-      // services, value, location, comment }
+      // services, value, location, comment, photos?: [url] (up to 5) }
       //
       // All five ratings and the comment are mandatory; the database
       // enforces that too (see migration_reviews.sql), so a malformed
@@ -1443,10 +1635,11 @@ module.exports = async (req, res) => {
         `;
         const rows = await sql`
           SELECT id, name, created_at, profile_photo_url, host_id,
-                 profile_work, profile_hobbies, profile_about, profile_updated_at
+                 profile_work, profile_hobbies, profile_about, profile_updated_at,
+                 to_jsonb(guests)->>'first_name' AS first_name, to_jsonb(guests)->>'last_name' AS last_name
           FROM guests WHERE id = ${guestId}
         `;
-        return res.status(200).json({ success: true, profile: await buildProfile(sql, rows[0], { own: true }) });
+        return res.status(200).json({ success: true, profile: ownNames(await buildProfile(sql, rows[0], { own: true }), rows[0]) });
       }
 
       if (mode === 'submitReview') {
@@ -1491,6 +1684,11 @@ module.exports = async (req, res) => {
         if (comment.length < 10) {
           return res.status(400).json({ error: 'Please write a few words about your stay.' });
         }
+        // Photos of the stay: up to 5, Aerva uploads only, each once
+        // (_review-policy.js cleanReviewPhotos).
+        const cleaned = cleanReviewPhotos(b.photos);
+        if (cleaned.error) return res.status(400).json({ error: cleaned.error });
+        const photos = cleaned.photos;
 
         try {
           // One table, two shapes. The unused set is written as NULL rather
@@ -1510,12 +1708,31 @@ module.exports = async (req, res) => {
                ${comment})
             RETURNING id
           `;
+          // Photos in their own statement, so a review still goes in before
+          // migration 2026-11-09-08-review-photos.sql has run (the guest is
+          // then told photos are not switched on yet).
+          let photosSaved = 0, photosOff = false;
+          if (photos.length) {
+            try {
+              await sql`UPDATE listing_reviews SET photos = ${JSON.stringify(photos)}::jsonb WHERE id = ${inserted[0].id}`;
+              photosSaved = photos.length;
+            } catch (err) {
+              if (err && err.code === '42703') photosOff = true;
+              else console.error('review photos not saved:', err.message || err);
+            }
+          }
           await logAudit(sql, {
             action: 'listing_review_submitted', success: true, actorType: 'guest', actorIdentifier: String(guestId),
             targetType: 'listing_review', targetId: inserted[0].id,
-            metadata: { orderId: order.id, listingId: order.listing_id }
+            metadata: { orderId: order.id, listingId: order.listing_id, photos: photosSaved, ...(photosOff ? { photosOff: true } : {}) }
           });
-          return res.status(200).json({ success: true, held: true });
+          // A photo already found to show contact details is taken out at
+          // once, silently; the admin is told (_photo-guard.js, the same as
+          // a profile photo). Photos not checked yet are picked up by the
+          // 5-minute photo check.
+          if (photosSaved) await photoGuard.sweepReview(sql, inserted[0].id);
+          return res.status(200).json({ success: true, held: true,
+            ...(photosOff ? { photosOff: true, notice: 'Photos on reviews are not switched on yet, so your review was saved without them.' } : {}) });
         } catch (err) {
           // The one-per-order unique constraint is the expected failure.
           if (String(err && err.message || '').includes('one_per_order')) {
@@ -1545,10 +1762,13 @@ module.exports = async (req, res) => {
           return res.status(400).json({ error: `This message needs details that are not set yet: ${missingBits.join(', ')}. Add them in Manage listing → Guest Check-In Info, or remove those parts, then send.`, missingDetails: missingBits });
         }
 
-        const convRows = await sql`SELECT id, guest_id, host_id FROM conversations WHERE id = ${conversationId}`;
+        const convRows = await sql`SELECT id, guest_id, host_id, order_id FROM conversations WHERE id = ${conversationId}`;
         const conv = convRows[0];
         if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
-        const isGuest = conv.guest_id === guestId;
+        // A gift's recipient or a group booking's payer writes as the guest
+        // side, with their first name in front so the host knows who it is.
+        const sharedSender = conv.guest_id !== guestId && conv.order_id ? await require('./_gifts').sharedRole(sql, guestId, conv.order_id) : null;
+        const isGuest = conv.guest_id === guestId || !!sharedSender;
         const isHost = myHostId != null && conv.host_id === myHostId;
         if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
 
@@ -1579,7 +1799,11 @@ module.exports = async (req, res) => {
         // Contact details in this message, or built up over the sender's
         // recent messages (_message-guard.js). Earlier pieces lose them too.
         const guard = rawText ? await guardMessage(sql, { conversationId, senderType, text: rawText }) : { displayText: '', wasRedacted: false, rewrite: [], by: null };
-        const displayText = guard.displayText, wasRedacted = guard.wasRedacted;
+        let displayText = guard.displayText; const wasRedacted = guard.wasRedacted;
+        if (sharedSender && senderType === 'guest' && displayText) {
+          const me = (await sql`SELECT name, to_jsonb(guests)->>'first_name' AS first_name FROM guests WHERE id = ${guestId}`)[0] || {};
+          displayText = `${me.first_name || String(me.name || 'Guest').split(/\s+/)[0]} (${sharedSender === 'recipient' ? 'guest staying' : 'group'}): ${displayText}`;
+        }
         for (const m of guard.rewrite) {
           await sql`UPDATE messages SET display_text = ${m.display_text}, was_redacted = true WHERE id = ${m.id} AND conversation_id = ${conversationId}`;
         }
@@ -1640,10 +1864,10 @@ module.exports = async (req, res) => {
         const { conversationId, messageId, role } = req.body || {};
         const emoji = String((req.body || {}).emoji || '');
         if (emoji && !REACTIONS.includes(emoji)) return res.status(400).json({ error: 'That reaction is not available.' });
-        const convRows = await sql`SELECT id, guest_id, host_id FROM conversations WHERE id = ${Number(conversationId) || 0}`;
+        const convRows = await sql`SELECT id, guest_id, host_id, order_id FROM conversations WHERE id = ${Number(conversationId) || 0}`;
         const conv = convRows[0];
         if (!conv) return res.status(404).json({ error: 'Conversation not found.' });
-        const isGuest = conv.guest_id === guestId;
+        const isGuest = conv.guest_id === guestId || !!(conv.order_id && await require('./_gifts').sharedRole(sql, guestId, conv.order_id));
         const isHost = myHostId != null && conv.host_id === myHostId;
         if (!isGuest && !isHost) return res.status(403).json({ error: 'Not your conversation.' });
         const side = role === 'guest' || role === 'host' ? role : (isHost ? 'host' : 'guest');

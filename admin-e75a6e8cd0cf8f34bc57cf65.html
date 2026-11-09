@@ -322,7 +322,7 @@
   .lk-sec h3 small{font-family:sans-serif; font-size:12px; opacity:0.6;}
   .lk-list{border:1px solid #e0d5c0; background:#fff;}
   .lk-item{display:grid; grid-template-columns:minmax(0,2.2fr) minmax(0,1.6fr) minmax(0,1.2fr) auto; gap:4px 14px; align-items:center;
-           padding:10px 14px; border-top:1px solid #efe7da; cursor:pointer; font-size:13.5px; background:none; width:100%; text-align:left; border-left:0; border-right:0; border-bottom:0; font-family:inherit; color:inherit;}
+           padding:10px 14px; border-top:1px solid #efe7da; cursor:pointer; font-size:13.5px; background:none; width:100%; box-sizing:border-box; text-align:left; border-left:0; border-right:0; border-bottom:0; font-family:inherit; color:inherit;}
   .lk-item:first-child{border-top:0;}
   .lk-item:hover, .lk-item:focus-visible{background:#faf6ef;}
   .lk-item strong{font-weight:600;}
@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-09e"></script>
+<script src="aerva-policies.js?v=2026-11-10b"></script>
 </head>
 <body>
 
@@ -516,8 +516,11 @@
     <h2>Approvals</h2>
     <p style="font-size:13.5px; opacity:0.75; max-width:820px; margin-top:-6px;">Proposed by customer representatives, decided by a reviewer or admin. Approving carries the action out at once (refunds go through Razorpay with the usual checks). Nobody can approve their own proposal.</p>
     <div class="tds-bar"><label>Show <select id="apStatus" onchange="loadApprovals()"><option value="pending">Waiting for approval</option><option value="done">Decided</option><option value="all">All</option></select></label></div>
-    <h3 style="margin:18px 0 6px;">Emergency cancellations</h3>
-    <p class="lk-sub" style="margin:0 0 10px;">A guest asked to cancel for an emergency and the host did not answer within 24 hours. Approve: the booking is cancelled and the price, GST and deposit are refunded in full (Aerva’s service fee is kept). Reject: the booking stands. Anything still open at check-in closes by itself and the booking stands.</p>
+    <h3 style="margin:18px 0 6px;">Check-in promise</h3>
+    <p class="lk-sub" style="margin:0 0 10px;">A guest reported on arrival that the property does not exist, or is not as listed or not available. <strong>Urgent.</strong> Confirm (the host failed) or clear (not upheld). A fake-listing report hides that listing at once; confirmed, the listing stays blocked (only Aerva unblocks it) and its future bookings appear below to move or refund. Once confirmed, find places (same city, free, fitting the party; nearest first, then closest in price) and send up to 3 — the guest pays only the difference, or gets the difference as Aerva credit — or refund in full (price, GST, deposit and service fee). The host is not paid for that booking; anything already paid out comes off their later payouts. Admin only.</p>
+    <div id="apCheckinBody"><p class="lk-empty">Loading…</p></div>
+    <h3 style="margin:18px 0 6px;">Natural disaster cancellations</h3>
+    <p class="lk-sub" style="margin:0 0 10px;">A guest asked to cancel for a natural disaster or a government order / travel restriction, with proof. It comes here at once: the host cannot decline it. Check the proof. Approve: the booking is cancelled and everything the guest paid (price, GST, deposit, service fee, any free cancellation add-on) becomes Aerva credit for new dates — it never expires and can’t be refunded; a coupon part comes back as a coupon; the host gets no payout. Reject (with a reason the guest is told): nothing changes, the booking stands. Older emergency requests sent before 10 Nov 2026 also appear here once the host has not answered. Anything still open at check-in closes by itself and the booking stands.</p>
     <div id="apCancelBody"><p class="lk-empty">Loading…</p></div>
     <h3 style="margin:18px 0 6px;">Price changes</h3>
     <p class="lk-sub" style="margin:0 0 10px;" id="apPriceRules">A host's unusual change on a live listing waits here; guests keep seeing the current price until it is approved.</p>
@@ -1380,6 +1383,7 @@
         <div class="meta" style="opacity:0.6;">Submitted ${escAdmin(fmtDate(l.created_at))}</div>
         ${addressHtml}
         <div class="desc">${escAdmin(l.description)}</div>
+        ${specialReviewHtml(l)}
         ${tagListHtml('Amenities', l.amenities)}
         ${tagListHtml('Services', l.services)}
         ${photoThumbnailsHtml('Exterior', l.exterior_photo_urls)}
@@ -1533,7 +1537,7 @@
   async function searchProperties(){
     const q = (document.getElementById('propSearchInput').value || '').trim();
     const box = document.getElementById('propSearchResults');
-    if(q.length < 2){ box.innerHTML = '<p style="font-size:13px; opacity:0.7;">Type at least two characters.</p>'; return; }
+    if(q.length < 2 && !/^\d$/.test(q)){ box.innerHTML = '<p style="font-size:13px; opacity:0.7;">Type at least two characters.</p>'; return; }
     box.innerHTML = '<p style="font-size:13px;">Searching\u2026</p>';
     try{
       const res = await fetch(API_BASE + '/api/get-pending-listings?propertyLookup=' + encodeURIComponent(q), { headers: authHeaders() });
@@ -1707,6 +1711,24 @@
   // The policy TEXT comes from the server (_review-policy.js), never from
   // a copy in this page: an admin reading it and an endpoint enforcing it
   // must not be able to drift apart.
+  // What's special / Recommended by your host / suggested experiences
+  // (api/_listing-special.js), reviewed with the listing. All escaped.
+  function specialReviewHtml(l){
+    const hl = Array.isArray(l.special_highlights) ? l.special_highlights : [];
+    const recs = Array.isArray(l.host_recommendations) ? l.host_recommendations : [];
+    const exps = Array.isArray(l.suggested_experiences) ? l.suggested_experiences : [];
+    const kinds = { things_to_do: 'Things to do', food_drink: 'Food & drink', experience: 'Experience', shopping: 'Shopping', getting_around: 'Getting around', other: 'Other' };
+    if(!hl.length && !l.special_story && !recs.length && !exps.length) return '';
+    const box = 'margin:10px 0; padding:10px 12px; border:1px solid #e6dccb; border-radius:6px; background:#fdfaf5; font-size:13px; line-height:1.55;';
+    return `<div style="${box}">
+      ${hl.length || l.special_story ? `<div style="font-weight:600; margin-bottom:4px;">What’s special here</div>` : ''}
+      ${hl.length ? `<ul style="margin:0 0 6px; padding-left:18px;">${hl.map(t => `<li>${escAdmin(t)}</li>`).join('')}</ul>` : ''}
+      ${l.special_story ? `<p style="margin:0 0 6px; white-space:pre-line;">${escAdmin(l.special_story)}</p>` : ''}
+      ${recs.length ? `<div style="font-weight:600; margin:6px 0 4px;">Recommended by the host (${recs.length})</div><ul style="margin:0 0 6px; padding-left:18px;">${recs.map(r =>
+        `<li><em>${escAdmin(kinds[r.kind] || 'Other')}</em> · <strong>${escAdmin(r.name)}</strong>${r.note ? ' — ' + escAdmin(r.note) : ''}${r.distance ? ' (' + escAdmin(r.distance) + ')' : ''}${r.link ? ` · <span style="word-break:break-all; opacity:0.8;">${escAdmin(r.link)}</span>` : ''}</li>`).join('')}</ul>` : ''}
+      ${exps.length ? `<div style="font-weight:600; margin:6px 0 4px;">Suggested Aerva experiences</div><div>${exps.map(e => `${escAdmin(e.name)} (#${Number(e.id)}${e.city ? ', ' + escAdmin(e.city) : ''}${e.status !== 'approved' ? ', not live — guests will not see it' : ''})`).join(' · ')}</div>` : ''}
+    </div>`;
+  }
   function escAdmin(t){
     return String(t == null ? '' : t)
       .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
@@ -1789,12 +1811,38 @@
               '<div class="process-results" style="margin-bottom:8px;"><div><strong>Listing #' + Number(r.listing_id) + '</strong> &middot; this review '
               + Number(r.this_score).toFixed(2) + ' vs average ' + Number(r.avg_score).toFixed(2) + ' across ' + Number(r.n) + '</div>'
               + '<div style="font-size:13px;">' + escAdmin(r.comment) + '</div>'
-              + '<div style="margin-top:6px;">' + revertBtn('listing', r.id) + '</div></div>');
+              + '<div style="margin-top:6px;">' + revertBtn('listing', r.id) + '</div></div>')
+        + block('Reviews with photos', 'Guests may add up to 5 photos of the stay. Remove any single photo that shows a person who may not have agreed, contact details, or is not of the stay. Photos showing contact details are taken out automatically (Removed photos).',
+            d.withPhotos || [], r =>
+              '<div class="process-results" style="margin-bottom:8px;"><div><strong>' + escAdmin(r.property_name || ('Listing #' + Number(r.listing_id))) + '</strong> &middot; booking #' + Number(r.order_id)
+              + ' &middot; ' + escAdmin(r.guest_name || 'Guest') + (r.published_at ? '' : ' &middot; <span style="opacity:0.7;">not published yet</span>') + '</div>'
+              + '<div style="font-size:13px;">' + escAdmin(r.comment) + '</div>'
+              + '<div class="review-photo-admin" style="display:flex; flex-wrap:wrap; gap:10px; margin-top:8px;">'
+              + (r.photos || []).filter(isBlobPhoto).map(u =>
+                  '<div style="width:96px;"><a href="' + safeUrl(u) + '" target="_blank" rel="noopener noreferrer"><img src="' + safeUrl(u) + '" alt="Review photo" style="width:96px; height:96px; object-fit:cover; border-radius:6px; display:block;"></a>'
+                  + '<button type="button" class="process-btn" style="padding:3px 8px; font-size:11.5px; margin-top:4px; width:100%;" data-review-photo-rm="' + Number(r.id) + '" data-url="' + escAdmin(u) + '">Remove photo</button></div>').join('')
+              + '</div></div>');
+      conf.querySelectorAll('[data-review-photo-rm]').forEach(b => b.addEventListener('click', () => removeReviewPhoto(Number(b.dataset.reviewPhotoRm), b.dataset.url)));
     }catch(err){
       console.error('policy load failed', err);
       if(body) body.innerHTML = '<p>Could not load the policy.</p>';
       if(conf) conf.innerHTML = '';
     }
+  }
+
+  // Takes one photo off a guest's review; the review itself stays.
+  async function removeReviewPhoto(reviewId, url){
+    const reason = prompt('Remove this photo from the review? Say why (recorded in the audit log).');
+    if(reason === null) return;
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', {
+        method: 'POST', headers: authHeaders(true),
+        body: JSON.stringify({ removeReviewPhoto: { reviewId, url, reason: reason.trim() } })
+      });
+      const d = await res.json().catch(() => ({}));
+      if(!res.ok){ alert(d.error || 'Could not remove that photo.'); return; }
+      loadReviewPolicy();
+    }catch(err){ alert('Could not remove that photo.'); }
   }
 
   async function revertReview(kind, id){
@@ -1840,8 +1888,8 @@
       box.innerHTML = d.jobs.map(j => `
         <div class="${j.lastOk !== false && j.lastImpactCount && j.lastImpactAt && (Date.now() - new Date(j.lastImpactAt).getTime()) < 864e5 ? 'job-row-hit' : ''}" style="padding:12px 0; border-bottom:1px solid #eee;${j.lastOk === false ? ' border-left:3px solid #a3402f; padding-left:10px;' : ''}">
           <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-            <div><strong>${escAdmin(j.label)}</strong><div style="font-size:13px; opacity:0.75;">${escAdmin(j.schedule)}</div></div>
-            <button class="approve-btn" ${j.running ? 'disabled' : ''} onclick="runJobNow('${escAdmin(j.name)}')">${j.running ? 'Running…' : 'Run now'}</button>
+            <div style="flex:1 1 220px; min-width:0;"><strong>${escAdmin(j.label)}</strong><div style="font-size:13px; opacity:0.75;">${escAdmin(j.schedule)}</div></div>
+            <button class="approve-btn" style="align-self:flex-start; flex:0 0 auto;" ${j.running ? 'disabled' : ''} onclick="runJobNow('${escAdmin(j.name)}')">${j.running ? 'Running…' : 'Run now'}</button>
           </div>
           <div style="font-size:13px; margin-top:6px; ${j.lastOk === false ? 'color:#a3402f;' : 'opacity:0.8;'}">
             Last run: ${escAdmin(jobWhen(j.lastFinishedAt || j.lastStartedAt))}
@@ -2201,7 +2249,8 @@
         <div class="listing" style="padding:12px 16px; margin-bottom:8px; font-size:14px;${r.status === 'failed' || stuck(r) ? ' border-left:3px solid #a3402f;' : ''}">
           <strong>${escAdmin(r.listing || '')}</strong> · booking #${Number(r.orderId)} · ${escAdmin(refundKindLabel(r.kind))} · ${escAdmin(r.currency)} ${Number(r.amount).toLocaleString('en-IN')}
           <div style="margin-top:4px; ${r.status === 'failed' || stuck(r) ? 'color:#a3402f;' : 'opacity:0.75;'}">${r.status === 'failed' ? 'Failed: ' + escAdmin(r.failure || 'not refunded') + ' · attempts ' + Number(r.attempts) : stuck(r) ? 'Not started: interrupted before reaching Razorpay (since ' + payDate(r.createdAt) + ')' : 'In progress: waiting for Razorpay to confirm'}</div>
-          ${r.status === 'failed' || stuck(r) ? `<button class="approve-btn" style="margin-top:8px;" onclick="retryRefund(${Number(r.id)})">Retry refund</button>` : ''}
+          ${r.bookingStands && (r.status === 'failed' || stuck(r)) ? '<div style="margin-top:4px; font-size:13px;">The booking was not cancelled and still stands, so this is not retried here: cancel it again from Lookup or Approvals once the cause is fixed.</div>' : ''}
+          ${(r.status === 'failed' || stuck(r)) && !r.bookingStands ? `<button class="approve-btn" style="margin-top:8px;" onclick="retryRefund(${Number(r.id)})">Retry refund</button>` : ''}
         </div>`).join('') : '<p style="opacity:0.6;">No refunds waiting. All refunds are confirmed by Razorpay.</p>';
       const dps = data.depositPayouts || [];
       document.getElementById('depositPayoutsList').innerHTML = dps.length ? dps.map(p => `
@@ -2426,7 +2475,10 @@
     body.innerHTML = '<p style="opacity:0.7;">Version ' + escAdmin(P.version) + ' · updated ' + escAdmin(P.updated) + ' · public at <a href="index.html?view=policies" target="_blank" rel="noopener">index.html?view=policies</a></p>'
       + '<div class="pol-sec pol-open"><h3>Open items</h3>' + list(N.openItems || []) + '</div>'
       + block('Admin notes (internal — never shown to guests or hosts)', N.adminNotes || [])
-      + (P.agreements ? block('Agreements (version ' + P.agreements.version + ')', [P.agreements.guest, P.agreements.host]) : '')
+      + (P.agreements ? block('Agreements (version ' + P.agreements.version + ')', [P.agreements.guest, P.agreements.host].flatMap(a => a.clauses
+          // The host agreement is written as numbered clauses (it has no points of its own).
+          ? [{ title: a.title, points: [a.intro].filter(Boolean) }].concat(a.clauses.map(c => ({ title: a.title + ': ' + c.title, points: c.points || [] })))
+          : [a])) : '')
       + (P.terms ? block('Terms of Service — all versions', P.terms.common.concat(...P.terms.regions.map(r => (P.terms.specific[r.id] || []).map(x => ({ title: r.label + ': ' + x.title, points: x.points }))))) : '')
       + (P.privacy ? block('Privacy — ' + P.privacy.title, P.privacy.sections) : '')
       + (P.documents ? block('Policy documents', P.documents.map(d => ({ title: d.title, points: d.sections.flatMap(x => x.points) }))) : '')
@@ -2865,6 +2917,9 @@
   // ---- Support tab: Resolution Center requests (api/_support.js) ----
   let supOpenId = null;
   const supDate = (v) => v ? new Date(v).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
+  // The server's labels are worded for the person ("Waiting for your reply" = theirs);
+  // here that status means the team is waiting for the person.
+  function supStatusLabels(d){ return Object.assign({}, (d && d.statuses) || {}, { waiting_on_you: 'Waiting for the person' }); }
   async function loadSupport(silent){
     const list = document.getElementById('supList');
     document.getElementById('supDetail').style.display = 'none';
@@ -2879,7 +2934,7 @@
       const d = await res.json();
       if(!res.ok){ list.innerHTML = '<p class="error">' + escAdmin(d.error || 'Could not load.') + '</p>'; return; }
       if(!d.ready){ list.innerHTML = '<p style="opacity:0.75;">Support requests are not switched on yet. Run <code>migration_support.sql</code> in Neon.</p>'; document.getElementById('supCounts').textContent = ''; return; }
-      const c = d.counts || {}, labels = d.statuses || {};
+      const c = d.counts || {}, labels = supStatusLabels(d);
       document.getElementById('supCounts').textContent = Object.keys(labels).map(k => labels[k] + ': ' + (c[k] || 0)).join(' · ');
       if(!d.tickets.length){ list.innerHTML = '<p style="opacity:0.7;">No requests here.</p>'; return; }
       list.innerHTML = '<table class="tds-table"><thead><tr><th>Reference</th><th>Subject</th><th>From</th><th>Status</th><th>Raised</th><th>Last activity</th></tr></thead><tbody>'
@@ -2910,7 +2965,7 @@
   // The facts row (person, timeline, request, booking, listing). Redrawn on
   // its own when a live update changes the status.
   function supFactsHtml(d){
-    const t = d.ticket, labels = d.statuses || {};
+    const t = d.ticket, labels = supStatusLabels(d);
     const day = (v) => v ? String(v).slice(0, 10) : '';
     return [
       `<div><strong>Person</strong><br>${escAdmin(t.person_name || 'Deleted account')}<br>${escAdmin(t.person_email || '')}${t.person_phone ? '<br>' + escAdmin(t.person_phone) : ''}${t.channel === 'chat' ? '<br><span class="sup-flag sup-wa">Chat</span> <span class="tds-sub">Your replies appear in their Aerva Support chat in Messages (and by email).</span>' : ''}${t.callback_phone ? `<br><strong style="color:#a3402f;">Call them back: <a href="tel:${escAdmin(String(t.callback_phone).replace(/[^\d+]/g, ''))}">${escAdmin(t.callback_phone)}</a></strong>` : ''}</div>`,
@@ -2956,7 +3011,7 @@
     return [m.length, last.id || '', (d.caseNotes || []).length, d.ticket.status, d.ticket.updated_at || ''].join('|');
   }
   function drawSupport(d){
-    const t = d.ticket, labels = d.statuses || {};
+    const t = d.ticket, labels = supStatusLabels(d);
     const box = document.getElementById('supDetail');
     const facts = supFactsHtml(d);
     const msgs = supTimelineHtml(d);
@@ -3646,6 +3701,9 @@ function lkBookingState(b){
 }
 const LK_WORD = { paid: 'Confirmed', completed: 'Completed', cancelled: 'Cancelled', refunded: 'Refunded', approved: 'Live', blocked: 'Blocked', removed: 'Removed', pending: 'Pending', rejected: 'Rejected', suspended: 'Suspended', deactivated: 'Paused', deleted: 'Deleted', active: 'Active' };
 const lkChip = (st) => `<span class="lk-chip is-${lkEsc(st)}">${lkEsc(LK_WORD[st] || st || '—')}</span>`;
+// Area and city, once when they are the same ("Lonavala", not "Lonavala, Lonavala").
+const lkPlace = (x) => [...new Set([x.area, x.city].map(v => String(v || '').trim()).filter(Boolean).map(v => v.toLowerCase()))].length === 1
+  ? String(x.city || x.area).trim() : [x.area, x.city].filter(Boolean).join(', ');
 const lkKv = (k, v, cls) => `<div class="lk-kv${cls ? ' ' + cls : ''}"><span>${k}</span><span>${v}</span></div>`;
 async function lkGet(qs){
   const r = await fetch(API_BASE + '/api/get-pending-listings?' + qs, { headers: authHeaders() });
@@ -3663,7 +3721,8 @@ async function lkPost(body){
 async function lkSearch(){
   const q = document.getElementById('lkQ').value.trim();
   const body = document.getElementById('lkBody');
-  if(q.length < 2){ body.innerHTML = '<p class="lk-empty">Type at least two characters.</p>'; return; }
+  // A booking, account or listing ID may be a single digit.
+  if(q.length < 2 && !/^\d$/.test(q)){ body.innerHTML = '<p class="lk-empty">Type at least two characters.</p>'; return; }
   lkState.q = q; lkState.detail = null; lkState.stack = [];
   body.innerHTML = '<p class="lk-empty">Searching…</p>';
   try{
@@ -3690,7 +3749,7 @@ function lkGuestRow(g){
 function lkListingRow(l){
   return `<button type="button" class="lk-item" onclick="lkOpen('listing', ${Number(l.id)})">
       <span><strong>${lkEsc(l.property_name)}</strong> ${lkChip(l.status)}<span class="lk-sub">#${Number(l.id)} · ${lkEsc(l.listing_type === 'experience' ? 'Experience' : 'Stay')}</span></span>
-      <span>${lkEsc([l.area, l.city].filter(Boolean).join(', ') || '—')}</span>
+      <span>${lkEsc(lkPlace(l) || '—')}</span>
       <span>${lkEsc(l.host_name || '—')}<span class="lk-sub">${lkEsc(l.host_email || '')}</span></span>
       <span class="lk-go">Open ›</span></button>`;
 }
@@ -3752,7 +3811,7 @@ function lkBookingHtml(d){
         ${b.account_status ? lkKv('Account', lkChip(b.account_status)) : ''}
         <div class="lk-links">${b.guest_id ? `<button type="button" class="lk-link" onclick="lkOpen('guest', ${Number(b.guest_id)})">Open guest ›</button>` : '<span class="lk-sub">Booked without an account</span>'}</div></div>
       <div class="lk-card"><h4>Listing and host</h4>
-        ${lkKv('Listing', `${lkEsc(b.property_name || b.suite_name)} ${b.listing_status ? lkChip(b.listing_status) : ''}`)}${lkKv('Place', lkEsc([b.area, b.city].filter(Boolean).join(', ') || '—'))}
+        ${lkKv('Listing', `${lkEsc(b.property_name || b.suite_name)} ${b.listing_status ? lkChip(b.listing_status) : ''}`)}${lkKv('Place', lkEsc(lkPlace(b) || '—'))}
         ${lkKv('Host', lkEsc(b.host_name || '—'))}${lkKv('Host email', lkEsc(b.host_email || '—'))}${lkKv('Host phone', lkEsc(b.host_phone || '—'))}
         <div class="lk-links">${b.listing_id ? `<button type="button" class="lk-link" onclick="lkOpen('listing', ${Number(b.listing_id)})">Open listing ›</button>` : ''}${b.host_guest_id ? `<button type="button" class="lk-link" onclick="lkOpen('guest', ${Number(b.host_guest_id)})">Open host account ›</button>` : ''}</div></div>
       <div class="lk-card"><h4>Money</h4>
@@ -3903,10 +3962,39 @@ function lkGuestHtml(d){
         <label class="lk-check"><input type="checkbox" id="lkRaiseCall"> They want a call back</label>
         <button type="button" class="lk-btn" onclick="lkRaise(${Number(g.id)})">Raise request</button>
       </div><p class="lk-msg" id="lkRaiseMsg"></p></div></div>`}
+    ${lkNewDatesCreditsHtml(g, d.newDatesCredits || [])}
     <div id="lkPropose"></div>
     <div id="lkRecords"></div>
     <div class="lk-sec"><h3>Bookings <small>${bookings.length}</small></h3>${bookings.length ? `<div class="lk-list">${bookings.map(lkBookingRow).join('')}</div>` : '<p class="lk-empty">No bookings.</p>'}</div>
     ${lkHistoryHtml(d.history)}`;
+}
+// Credit for new dates only (a natural disaster or government order
+// approved by Aerva, owner 10 Nov 2026): never refunded — unless an admin
+// allows THIS guest's credit to go back to its original payment (owner,
+// 00:54). Admin only; audited with the note. The guest then sees "Refund to
+// original payment" on it (unused part only, once).
+function lkNewDatesCreditsHtml(g, list){
+  if(!list.length) return '';
+  const admin = (window.ADMIN_ROLE || 'admin') === 'admin';
+  const open = list.filter(c => c.status === 'active' && c.remaining > 0);
+  const anyAllowed = open.some(c => c.refundAllowed);
+  return `<div class="lk-actions"><h3>Aerva credit for new dates only</h3>
+    <p>Everything the guest paid on a booking cancelled for a natural disaster or a government order. It does not expire and can’t be refunded.</p>
+    ${list.map(c => lkKv('C-' + Number(c.id) + (c.from ? ' · ' + lkEsc(c.from) : ''), `₹${Number(c.remaining).toLocaleString('en-IN')} left of ₹${Number(c.amount).toLocaleString('en-IN')} · ${lkEsc(c.status)}${c.refunded ? ` · ₹${Number(c.refunded).toLocaleString('en-IN')} refunded` : ''}${c.refundAllowed ? ` · <strong>refund allowed</strong> by ${lkEsc(c.allowedBy || '')} ${lkDay(c.allowedAt)}${c.note ? ' (“' + lkEsc(c.note) + '”)' : ''}` : ''}`)).join('')}
+    ${admin && open.length ? `<div class="lk-act"><div class="lk-form">
+      <label class="lk-check"><input type="checkbox" id="lkCreditAllow" ${anyAllowed ? 'checked' : ''} onchange="lkAllowCreditRefund(${Number(g.id)}, this.checked)"> Allow refund of credit to the original payment</label>
+      <label class="lk-wide">Note (optional, recorded)<input id="lkCreditNote" maxlength="300" placeholder="e.g. Owner approved: guest moving abroad"></label>
+    </div><p class="lk-msg" id="lkCreditMsg">Only the unused part, only to the original payment of that booking, once. Switch it off again until the guest uses it.</p></div>` : (!admin ? '<p class="lk-sub">Only an admin can allow a refund.</p>' : '')}
+  </div>`;
+}
+async function lkAllowCreditRefund(guestId, allow){
+  const msg = document.getElementById('lkCreditMsg'); msg.className = 'lk-msg'; msg.textContent = '';
+  if(!confirm(allow ? 'Allow this guest to have their credit for new dates refunded to the original payment?' : 'Switch the refund off again?')){ document.getElementById('lkCreditAllow').checked = !allow; return; }
+  try{
+    await lkPost({ allowCreditRefund: { guestId, allow, note: document.getElementById('lkCreditNote').value.trim() } });
+    msg.className = 'lk-msg is-ok'; msg.textContent = allow ? 'Allowed. The guest now sees “Refund to original payment” on it.' : 'Switched off. The guest no longer sees the option.';
+    lkOpen('guest', guestId, false);
+  }catch(err){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; document.getElementById('lkCreditAllow').checked = !allow; }
 }
 // Raise a support request on the customer's behalf (server: raiseForCustomer).
 let LK_CATS = null;
@@ -3960,7 +4048,7 @@ function lkListingHtml(d){
   const upcoming = bookings.filter(b => b.status === 'paid' && String(b.departure).slice(0, 10) >= lkToday());
   return `
     <div class="lk-head"><h2>${lkEsc(l.property_name)}</h2>${lkChip(l.status)}</div>
-    <p class="lk-meta">${isExp ? 'Experience' : 'Stay'} #${Number(l.id)} · ${lkEsc([l.area, l.city].filter(Boolean).join(', ') || '—')} · listed ${lkDay(l.created_at)}${l.admin_status_reason ? `<br><strong>Why it is ${lkEsc(LK_WORD[l.status] || l.status).toLowerCase()}:</strong> ${lkEsc(l.admin_status_reason)}` : ''}</p>
+    <p class="lk-meta">${isExp ? 'Experience' : 'Stay'} #${Number(l.id)} · ${lkEsc(lkPlace(l) || '—')} · listed ${lkDay(l.created_at)}${l.admin_status_reason ? `<br><strong>Why it is ${lkEsc(LK_WORD[l.status] || l.status).toLowerCase()}:</strong> ${lkEsc(l.admin_status_reason)}` : ''}</p>
     <div class="lk-grid">
       <div class="lk-card"><h4>Host</h4>${lkKv('Name', lkEsc(l.host_name || '—'))}${lkKv('Email', lkEsc(l.host_email || '—'))}${lkKv('Phone', lkEsc(l.host_phone || '—'))}
         <div class="lk-links">${l.host_guest_id ? `<button type="button" class="lk-link" onclick="lkOpen('guest', ${Number(l.host_guest_id)})">Open host account ›</button>` : ''}
@@ -4258,21 +4346,23 @@ async function loadCancelRequests(){
   try{
     const d = await lkGet('cancellationRequests=1');
     const canDecide = window.ADMIN_ROLE === 'admin' || window.ADMIN_ROLE === 'reviewer' || !window.ADMIN_ROLE;
+    const inrA = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
     if(!d.requests.length){ body.innerHTML = '<p class="lk-empty">Nothing is waiting for Aerva.</p>'; return; }
     const when = (t) => t ? new Date(t).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' }) : '—';
     const OUT = { reached: 'Reached the host', no_answer: 'No answer', left_message: 'Left a message', wrong_number: 'Number not working' };
     body.innerHTML = d.requests.map(x => {
       const id = Number(x.requestId);
-      const stage = x.aervaDecidesAt ? '<span style="color:#a3402f; font-weight:600;">Aerva decides now</span> — no answer after all reminders'
+      const stage = x.kind === 'disaster' ? '<span style="color:#a3402f; font-weight:600;">Aerva decides</span> — check the proof (the host cannot decline it)'
+        : x.aervaDecidesAt ? '<span style="color:#a3402f; font-weight:600;">Aerva decides now</span> — no answer after all reminders'
         : x.escalatedAt ? `<span style="color:#8a6c39; font-weight:600;">Contacting the host</span> — reminder ${Number(x.reminders)} of ${Number(x.remindersMax)} sent${x.lastReminderAt ? ' (last ' + lkEsc(when(x.lastReminderAt)) + ')' : ''}`
         : 'Waiting for the host (24 hours)';
       const log = (x.contactLog || []).map(c => `<li>${lkEsc(when(c.at))} · ${lkEsc(OUT[c.outcome] || c.outcome)}${c.note ? ' — ' + lkEsc(c.note) : ''} <span style="opacity:0.6;">(${lkEsc(c.by || '')})</span></li>`).join('');
       const decide = !canDecide ? '<p class="lk-sub">A reviewer or admin decides.</p>'
         : !x.canDecide ? `<p class="lk-sub" style="color:#8a6c39;">${lkEsc(x.decideRule || 'Aerva contacts the host first.')}</p>`
         : `<input id="crNote-${id}" placeholder="Reason (required to reject; the guest is told)" style="width:100%; margin-top:10px; padding:8px; border:1px solid #ddd; border-radius:6px;">
-          <p class="lk-sub" style="margin:8px 0 0;">Aerva’s decision is final and binds the guest and the host. Aerva’s service fee stays charged; commission is only on what the host keeps.</p>
+          <p class="lk-sub" style="margin:8px 0 0;">Aerva’s decision is final and binds the guest and the host.${x.kind === 'disaster' ? ` If approved: ${inrA(x.credit)} as Aerva credit for new dates (not refundable)${x.coupon ? `, ${inrA(x.coupon)} back as a coupon` : ''}${x.cash ? `, ${inrA(x.cash)} refunded to the payers (a group booking)` : ''}; no host payout.` : ' Aerva’s service fee stays charged (an old emergency request).'}</p>
           <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-          ${x.lastMinute && x.choices ? x.choices.map(c => `<button type="button" class="lk-btn" onclick="decideCancelRequest(${id}, true, ${Number(c.refundPercent)})">${c.refundPercent === 100 ? 'Refund in full' : 'Host keeps ' + (100 - c.refundPercent) + '%'} · guest gets ₹${Number(c.guestGetsBack).toLocaleString('en-IN')}</button>`).join('')
+          ${x.kind === 'disaster' ? `<button type="button" class="lk-btn" onclick="decideCancelRequest(${id}, true, 'disaster')">Approve — full amount as credit for new dates</button>`
             : `<button type="button" class="lk-btn" onclick="decideCancelRequest(${id}, true, 100)">Approve — cancel with full refund</button>`}
           <button type="button" class="lk-btn is-danger" onclick="decideCancelRequest(${id}, false)">Reject — booking stands</button>
         </div>`;
@@ -4283,7 +4373,6 @@ async function loadCancelRequests(){
         <span><strong>${lkEsc(x.reason)}</strong>${x.details ? ' — ' + lkEsc(x.details) : ''}</span><br>
         ${(x.evidence || []).length ? `<span style="font-size:13px;">Proof: ${x.evidence.map((u, i) => `<a href="${lkEsc(u)}" target="_blank" rel="noopener noreferrer">file ${i + 1}</a>`).join(' · ')}</span><br>` : '<span style="font-size:13px; color:#a3402f;">No proof attached</span><br>'}
         ${x.review ? `<p style="margin:8px 0; padding:8px 10px; background:#eef3fb; border-radius:6px; font-size:13px;"><strong>Review asked for:</strong> the host declined${x.hostNote ? ' (“' + lkEsc(x.hostNote) + '”)' : ''}; the guest sent proof and asks Aerva to review.${x.reviewNote ? ' Guest: “' + lkEsc(x.reviewNote) + '”' : ''} Approving overturns the decline; your decision is final.</p>` : ''}
-        ${x.lastMinute ? '<p style="margin:8px 0; padding:8px 10px; background:#fbeeea; border-radius:6px; font-size:13px;"><strong>Last-minute request</strong> (asked less than a day before check-in): it is on the host. Even for an emergency, decide on the actual situation — the host may keep 25% or 50%.</p>' : ''}
         <small>Asked ${lkEsc(when(x.askedAt))} · ${stage}</small>
         ${x.escalatedAt ? `<div style="margin-top:10px; padding:10px; background:#f8f5ef; border-radius:8px;">
           <strong style="font-size:13px;">Reach the host</strong> — call, then log it:
@@ -4302,10 +4391,10 @@ async function decideCancelRequest(id, accept, refundPercent){
   const note = (document.getElementById('crNote-' + id) || {}).value || '';
   const err = document.getElementById('crErr-' + id);
   if(!accept && note.trim().length < 5){ if(err) err.textContent = 'Write the reason — the guest is told it.'; return; }
-  const pct = Number(refundPercent) || 100;
-  if(!confirm((accept ? (pct === 100 ? 'Cancel this booking and refund the price, GST and deposit in full?' : `Cancel this booking: refund ${pct}% of the price and GST, and the deposit in full (the host keeps ${100 - pct}%)?`) : 'Reject the request? The booking stands.') + ' This decision is final for the guest and the host.')) return;
+  const disaster = refundPercent === 'disaster';
+  if(!confirm((accept ? (disaster ? 'Cancel this booking and hold everything the guest paid as Aerva credit for new dates (not refundable, no host payout)?' : 'Cancel this booking and refund the price, GST and deposit in full?') : 'Reject the request? The booking stands.') + ' This decision is final for the guest and the host.')) return;
   try{
-    await lkPost({ decideCancellationRequest: { requestId: id, accept, note, refundPercent: pct } });
+    await lkPost({ decideCancellationRequest: { requestId: id, accept, note } });
     loadCancelRequests();
   }catch(e){ if(err) err.textContent = e.message || 'Could not decide.'; }
 }
@@ -4321,7 +4410,104 @@ async function logHostContact(id){
     loadCancelRequests();
   }catch(e){ if(err) err.textContent = e.message || 'Could not log it.'; }
 }
+// ---- Check-in promise (api/_checkin-promise.js) ----
+const CP_STATUS = { open: 'Open — decide now', confirmed: 'Confirmed — move or refund the guest', rebooking: 'Moving the guest…', refunding: 'Refunding…', rebooked: 'Guest moved', refunded: 'Refunded in full', cleared: 'Not upheld' };
+async function loadCheckinPromise(){
+  const body = document.getElementById('apCheckinBody');
+  if(!body) return;
+  try{
+    const d = await lkGet('checkinPromise=1');
+    if(d.ready === false){ body.innerHTML = '<p class="lk-empty">Not switched on yet: apply the database update 2026-11-09-07-checkin-promise.sql (Database updates).</p>'; return; }
+    const isAdmin = window.ADMIN_ROLE === 'admin' || !window.ADMIN_ROLE;
+    const day = (v) => lkEsc(String(v || '').slice(0, 10));
+    const rupees = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+    const files = (list) => (Array.isArray(list) ? list : []).map((u, i) => `<a href="${lkEsc(u)}" target="_blank" rel="noopener noreferrer">file ${i + 1}</a>`).join(' · ');
+    let html = '';
+    html += d.reports.length ? d.reports.map(x => {
+      const id = Number(x.id);
+      const active = ['open', 'confirmed', 'rebooking', 'refunding'].includes(x.status);
+      const offers = (x.offers || []);
+      let act = '';
+      if(isAdmin && x.status === 'open') act = `<input id="cpNote-${id}" placeholder="Note (required to clear; the guest is told)" style="width:100%; box-sizing:border-box; margin-top:10px; padding:8px; border:1px solid #ddd; border-radius:6px;">
+          <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="lk-btn is-danger" onclick="cpDecide(${id}, true)">Confirm — the host failed${x.reason === 'fake' ? ' (block this listing)' : ''}</button>
+            <button type="button" class="lk-btn is-ghost" onclick="cpDecide(${id}, false)">Clear — not upheld${x.reason === 'fake' ? ' (listing back live)' : ''}</button></div>`;
+      if(isAdmin && x.status === 'confirmed') act = `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+            <button type="button" class="lk-btn" onclick="cpFind(${id})">${offers.length ? 'Find places again' : 'Find places'}</button>
+            <button type="button" class="lk-btn is-danger" onclick="cpRefund(${id})">Refund in full</button></div>
+          <div id="cpCand-${id}"></div>`;
+      return `<div class="lk-card" style="border:1px solid ${x.status === 'open' ? '#a3402f' : '#e6ded3'}; border-radius:10px; padding:14px 16px; margin-bottom:12px; overflow-wrap:anywhere;">
+        <strong>${lkEsc(x.property_name)}</strong> · ${day(x.arrival)} → ${day(x.departure)} · booking ${lkEsc(x.code)} · <span class="lk-chip ${active ? 'is-due' : ''}">${lkEsc(CP_STATUS[x.status] || x.status)}</span><br>
+        <span><strong>${lkEsc((d.reasons || {})[x.reason] || x.reason)}</strong>${x.source === 'listing_review' ? ' · a future booking of a listing Aerva blocked' : ''}</span><br>
+        <span>${lkEsc(x.guest_name || x.guest_email || '')} · ${Number(x.guests) || ''} guest(s) · paid ${rupees(x.total || (x.original || {}).total)}</span><br>
+        <span>Host ${lkEsc(x.host_name || '')}${x.host_phone ? ' · <a href="tel:' + lkEsc(x.host_phone) + '">' + lkEsc(x.host_phone) + '</a>' : ''}${x.host_email ? ' · ' + lkEsc(x.host_email) : ''}</span>
+        ${x.details ? `<div style="margin-top:8px; padding:8px 10px; background:#f7f3ee; border-radius:8px; font-size:13.5px;"><strong>Guest:</strong> ${lkEsc(x.details)}<br><small>${files(x.evidence)}</small></div>` : ''}
+        ${x.status === 'open' ? `<div style="margin-top:6px; padding:8px 10px; border:1px solid #eee; border-radius:8px; font-size:13.5px;"><strong>Host:</strong> ${x.host_response ? lkEsc(x.host_response) + `<br><small>${files(x.host_evidence)}</small>` : '<span style="opacity:0.6;">No reply yet</span>'}</div>` : ''}
+        ${offers.length ? `<p class="lk-sub" style="margin:8px 0 0;">Sent to the guest: ${offers.map(o => `${lkEsc(o.name)} (${o.difference > 0 ? '+' : o.difference < 0 ? '−' : ''}${rupees(Math.abs(o.difference))})`).join(' · ')}</p>` : ''}
+        ${x.status === 'rebooked' ? `<p class="lk-sub" style="margin:8px 0 0;">Moved to booking #${Number(x.rebook_order_id)} · difference ${x.difference > 0 ? 'paid ' : 'credited '}${rupees(Math.abs(x.difference))}${Number(x.recovered_from_host) ? ' · ' + rupees(x.recovered_from_host) + ' to recover from the host' : ''}</p>` : ''}
+        ${x.status === 'refunded' ? `<p class="lk-sub" style="margin:8px 0 0;">Refunded ${rupees(x.refund_amount)}${Number(x.recovered_from_host) ? ' · ' + rupees(x.recovered_from_host) + ' to recover from the host' : ''}</p>` : ''}
+        ${x.decision_note ? `<p class="lk-sub" style="margin:6px 0 0;">Note: ${lkEsc(x.decision_note)}</p>` : ''}
+        ${act}<p id="cpErr-${id}" style="color:#a3402f; font-size:13px;"></p></div>`;
+    }).join('') : '<p class="lk-empty">No reports on arrival.</p>';
+    if(d.listingBookings.length) html += `<h4 style="margin:16px 0 6px;">Future bookings of listings blocked as fake</h4><p class="lk-sub" style="margin:0 0 8px;">Each guest is moved to another place or refunded in full.</p>`
+      + d.listingBookings.map(b => `<div class="lk-card" style="border:1px solid #e6ded3; border-radius:10px; padding:10px 14px; margin-bottom:8px;">${lkEsc(b.property_name)} · ${day(b.arrival)} → ${day(b.departure)} · ${lkEsc(b.code)} · ${lkEsc(b.guest_email || '')}
+          ${isAdmin ? `<button type="button" class="lk-btn" style="margin-left:8px;" onclick="cpReview(${Number(b.id)})">Move or refund this guest</button>` : ''}<p id="cpRevErr-${Number(b.id)}" style="color:#a3402f; font-size:13px; margin:4px 0 0;"></p></div>`).join('');
+    if(d.blockedListings.length) html += `<h4 style="margin:16px 0 6px;">Listings blocked by Aerva (fake)</h4>` + d.blockedListings.map(l => `<div style="margin-bottom:6px;">${lkEsc(l.property_name)} · ${lkEsc(l.city || '')} · host ${lkEsc(l.host_name || '')} · blocked ${day(l.checkin_blocked_at)}
+          ${isAdmin ? `<button type="button" class="lk-btn is-ghost" style="margin-left:8px;" onclick="cpUnblock(${Number(l.id)})">Unblock</button>` : ''}</div>`).join('');
+    if(d.balances.length) html += `<h4 style="margin:16px 0 6px;">Hosts’ balance owed to Aerva</h4><p class="lk-sub" style="margin:0 0 6px;">Paid out, then no longer owed. Deducted from each host’s later payouts automatically.</p>`
+      + d.balances.map(b => `<div style="margin-bottom:4px;">${lkEsc(b.host_name || 'Host #' + b.host_id)}: <strong>${rupees(b.owed)}</strong> (${Number(b.items)} item${Number(b.items) === 1 ? '' : 's'})</div>`).join('');
+    body.innerHTML = html;
+  }catch(err){ body.innerHTML = '<p class="lk-empty">' + lkEsc(err.message || 'Could not load.') + '</p>'; }
+}
+async function cpDecide(id, upheld){
+  const note = (document.getElementById('cpNote-' + id) || {}).value || '';
+  const err = document.getElementById('cpErr-' + id);
+  if(!upheld && note.trim().length < 5){ if(err) err.textContent = 'Write why it is not upheld — the guest is told.'; return; }
+  if(!confirm(upheld ? 'Confirm the report? The host is not paid for this booking; a fake listing stays blocked. Then move or refund the guest.' : 'Clear the report? The booking stands and any hidden listing goes back live.')) return;
+  try{ await lkPost({ checkinDecide: { reportId: id, upheld, note } }); loadCheckinPromise(); }
+  catch(e){ if(err) err.textContent = e.message; }
+}
+async function cpFind(id){
+  const box = document.getElementById('cpCand-' + id);
+  box.innerHTML = '<p class="lk-empty">Looking…</p>';
+  try{
+    const d = await lkGet('checkinCandidates=' + id);
+    const rupees = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+    if(!d.nights){ box.innerHTML = '<p class="lk-empty">No nights left to move: refund in full.</p>'; return; }
+    if(!d.candidates.length){ box.innerHTML = `<p class="lk-empty">No place in the city is free for ${Number(d.nights)} night(s) and fits the party${d.unavailable ? ` (${Number(d.unavailable)} not free or not fitting)` : ''}. Refund in full.</p>`; return; }
+    box.innerHTML = `<p class="lk-sub" style="margin:10px 0 6px;">${lkEsc(d.from)} → ${lkEsc(d.to)} · the guest paid ${rupees(d.oldTotal)}. Tick up to 3, nearest first:</p>
+      <div style="overflow-x:auto; touch-action:pan-x;"><table style="border-collapse:collapse; font-size:13.5px; min-width:520px;"><tr style="text-align:left;"><th></th><th>Place</th><th>Distance</th><th>Total for the nights</th><th>Guest pays / gets back</th></tr>`
+      + d.candidates.map((c, i) => `<tr style="border-top:1px solid #eee;"><td><input type="checkbox" class="cp-pick-${id}" data-listing="${Number(c.listingId)}" data-room="${c.roomId ? Number(c.roomId) : ''}" ${i < 3 ? 'checked' : ''}></td>
+          <td>${lkEsc(c.name)}</td><td>${c.distanceKm == null ? '—' : lkEsc(String(c.distanceKm)) + ' km'}</td><td>${rupees(c.total)}</td>
+          <td>${c.difference > 0 ? 'pays ' + rupees(c.difference) : c.difference < 0 ? rupees(-c.difference) + ' as credit' : 'nothing'}</td></tr>`).join('')
+      + `</table></div><button type="button" class="lk-btn" style="margin-top:8px;" onclick="cpSend(${id})">Send the ticked places to the guest</button>`;
+  }catch(e){ box.innerHTML = '<p class="lk-empty error">' + lkEsc(e.message) + '</p>'; }
+}
+async function cpSend(id){
+  const err = document.getElementById('cpErr-' + id);
+  const options = [...document.querySelectorAll('.cp-pick-' + id)].filter(x => x.checked).map(x => ({ listingId: Number(x.dataset.listing), roomId: x.dataset.room ? Number(x.dataset.room) : null }));
+  if(!options.length || options.length > 3){ if(err) err.textContent = 'Tick 1 to 3 places.'; return; }
+  try{ await lkPost({ checkinSendOffers: { reportId: id, options } }); loadCheckinPromise(); }
+  catch(e){ if(err) err.textContent = e.message; }
+}
+async function cpRefund(id){
+  const err = document.getElementById('cpErr-' + id);
+  if(!confirm('Refund the guest in full — price, GST, deposit and Aerva’s service fee? The booking is closed and the host is not paid for it.')) return;
+  try{ const d = await lkPost({ checkinRefund: { reportId: id } }); alert('Refunded ₹' + Number(d.refunded).toLocaleString('en-IN') + (d.recovered ? '. ₹' + Number(d.recovered).toLocaleString('en-IN') + ' will be deducted from the host’s later payouts.' : '.')); loadCheckinPromise(); }
+  catch(e){ if(err) err.textContent = e.message; }
+}
+async function cpReview(orderId){
+  if(!confirm('Start moving or refunding this guest? They are told the stay cannot go ahead as booked.')) return;
+  try{ await lkPost({ checkinListingReview: { orderId } }); loadCheckinPromise(); }
+  catch(e){ const el = document.getElementById('cpRevErr-' + orderId); if(el) el.textContent = e.message; }
+}
+async function cpUnblock(listingId){
+  if(!confirm('Unblock this listing? It goes back live for guests.')) return;
+  try{ await lkPost({ checkinUnblockListing: { listingId } }); loadCheckinPromise(); }
+  catch(e){ alert(e.message); }
+}
 async function loadApprovals(){
+  loadCheckinPromise();
   loadPriceReviews();
   loadCancelRequests();
   const body = document.getElementById('apBody');
@@ -4558,7 +4744,7 @@ async function lkReport(id, status){
     const notices = (h) => h.audience !== 'host' || h.note === 'starting rate' ? '' : !h.notices ? (h.state === 'scheduled' ? 'None told yet' : '') : `${h.notices.sent} told · ${h.notices.acknowledged} saw it${h.notices.declined ? ' · ' + h.notices.declined + ' declined' : ''}${h.notices.ended ? ' · ' + h.notices.ended + ' ended' : ''}`;
     el.innerHTML = `
       <div class="dispute-card" style="margin:12px 0 20px;"><h4>Rates now</h4>
-        <table class="tds-table" style="display:table;"><thead><tr><th>Property type</th><th style="text-align:right;">Host commission</th><th style="text-align:right;">Guest service fee</th><th>Next host change</th></tr></thead><tbody>${rows}</tbody></table></div>
+        <div style="overflow-x:auto;"><table class="tds-table" style="display:table;"><thead><tr><th>Property type</th><th style="text-align:right;">Host commission</th><th style="text-align:right;">Guest service fee</th><th>Next host change</th></tr></thead><tbody>${rows}</tbody></table></div></div>
 
       <div class="dispute-card" style="margin:0 0 20px;"><h4>Set a new rate</h4>
         <div style="display:flex; gap:12px; flex-wrap:wrap; align-items:flex-end;">
@@ -4637,7 +4823,7 @@ async function lkReport(id, status){
           ${P.map(p => p.state === 'scheduled'
             ? `<tr><td><strong>${E(p.rate)}%</strong><div class="tds-sub">${E(p.appliesTo)}</div></td><td colspan="${d.audience === 'host' ? 9 : 8}">Scheduled from ${E(day(p.from))} — <span data-countdown="${E(p.from)}">${E(countdown(p.from))}</span> to go${p.notices ? ` · ${p.notices.sent} hosts told, ${p.notices.acknowledged} saw it${p.notices.declined ? ', ' + p.notices.declined + ' declined' : ''}` : ''}</td></tr>`
             : `<tr><td><strong>${E(p.rate)}%</strong><div class="tds-sub">${E(p.appliesTo)}</div></td>
-              <td>${E(day(p.from))} – ${p.until && p.state === 'ended' ? E(day(p.until)) : 'now'}<div class="tds-sub">${E(p.days)} days (${E(p.months)} months)${p.state === 'in effect' ? ' · in effect' : ''}</div></td>
+              <td>${E(day(p.from))} – ${p.until && p.state === 'ended' ? E(day(p.until)) : 'now'}<div class="tds-sub">${E(p.days)} day${Number(p.days) === 1 ? '' : 's'} (${E(p.months)} month${Number(p.months) === 1 ? '' : 's'})${p.state === 'in effect' ? ' · in effect' : ''}</div></td>
               <td style="text-align:right;">${E(p.perDay.bookings)}${chg(p.change && p.change.bookings)}<div class="tds-sub">${E(p.metrics.bookings)} total</div></td>
               <td style="text-align:right;">${inr(p.perDay.value)}${chg(p.change && p.change.value)}<div class="tds-sub">${inr(p.metrics.value)} total</div></td>
               <td style="text-align:right;">${inr(p.perDay.fees)}${chg(p.change && p.change.fees)}<div class="tds-sub">${inr(p.metrics.fees)} total</div></td>

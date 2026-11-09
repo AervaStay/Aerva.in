@@ -7,7 +7,8 @@
 // Moved here unchanged from create-order.js (Sept 2026).
 
 const { stayGst, experienceGst } = require('./_gst');
-const { earliestArrival } = require('./_booking-rules');
+const { earliestArrival, checkInMomentMs } = require('./_booking-rules');
+const { safeZone } = require('./_timezones');
 const sameDayLabel = (h) => { const n = Number(h) || 24; return n >= 24 ? '12 AM' : `${n - 12} PM`; };
 
 const EXTRA_GUEST_RATE = 1500;
@@ -23,6 +24,57 @@ const { ratesFor } = require('./_rates');
 const MAX_STAYS = 5; // matches the frontend cap — reject anything absurd
 const MAX_EXPERIENCES = 5; // same reasoning, for the experiences array
 const MAX_AMENITIES_PER_STAY = 15;
+
+// ---- Free cancellation add-on (owner, 9 Nov 2026) ----
+// At checkout for a stay (not an experience, not a stay included with one,
+// not a split/group payment) the guest may add "Free cancellation" for
+// FREE_CANCEL_PERCENT of the booking price: the stay subtotal after
+// discount, with paid amenities and pet fees, before GST, service fee and
+// deposit. With it, a cancellation up to FREE_CANCEL_HOURS before the
+// check-in MOMENT (listing's check-in time, property's clock —
+// _booking-rules.js checkInMomentMs) refunds the booking price, its GST and
+// the deposit in full. The add-on itself is not refunded and is paid to the
+// host, less Aerva's commission at the host's rate (folded into the order's
+// commission_amount / payout_amount; its own part kept in
+// free_cancel_commission). GST on it at the stay's rate (_gst.js stayGst —
+// for Aerva's CA to confirm). Offered only while check-in is more than
+// FREE_CANCEL_HOURS away. The window is never stored: it is always worked
+// out from the booking's arrival, so it moves with a change of dates.
+// Columns: migrations/2026-11-10-01-free-cancellation.sql (until it has run, the
+// add-on is not offered and nothing is charged).
+const FREE_CANCEL_PERCENT = 15;
+const FREE_CANCEL_HOURS = 48;
+function freeCancelUntilMs(arrival, zone, checkInTime) {
+  return checkInMomentMs(arrival, zone, checkInTime) - FREE_CANCEL_HOURS * 3600e3;
+}
+// "12 Dec 2026, 2:00 PM" on the property's clock.
+function freeCancelLabel(ms, zone) {
+  if (!Number.isFinite(ms)) return '';
+  return new Date(ms).toLocaleString('en-IN', { timeZone: safeZone(zone), day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit', hour12: true })
+    .replace(/\b(am|pm)\b/, (m) => m.toUpperCase());
+}
+// A booking row's add-on, whole rupees (0 for rows made before the columns).
+function addOnOf(row) {
+  const n = (k) => Math.max(0, Math.round(Number(row && row[k]) || 0));
+  const refunded = !!row && (row.free_cancel_refunded === true || row.free_cancel_refunded === 'true');
+  return { fee: n('free_cancel_fee'), gst: n('free_cancel_gst'), commission: n('free_cancel_commission'), refunded };
+}
+// Still inside the window (a transferred booking cannot be cancelled at all).
+function freeCancelActive(row, zone, checkInTime, nowMs = Date.now()) {
+  if (!row || addOnOf(row).fee <= 0 || row.transfer_change_id) return false;
+  return nowMs < freeCancelUntilMs(row.arrival, zone, checkInTime);
+}
+// Has the database update that adds the order money columns
+// (free_cancel_*) run? Asked once per instance while it
+// has; re-asked on each call until then (cheap, and an update applied
+// mid-session is picked up at once).
+let orderMoneyColumnsKnown = false;
+async function orderMoneyColumnsReady(sql) {
+  if (orderMoneyColumnsKnown) return true;
+  try { await sql`SELECT free_cancel_fee, free_cancel_gst, free_cancel_commission, free_cancel_refunded FROM orders LIMIT 0`; orderMoneyColumnsKnown = true; }
+  catch (err) { orderMoneyColumnsKnown = false; }
+  return orderMoneyColumnsKnown;
+}
 
 // listings.max_guests and listings.bedrooms are TEXT columns. Newer
 // listings hold a bare number, but older ones hold what the old
@@ -206,7 +258,8 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
         SELECT id, property_name, nightly_rate, discount_type, discount_value,
                discount_min_nights, commission_rate, security_deposit,
                pet_friendly, max_pets_allowed, pet_fee, allowed_pet_types,
-               max_guests, property_type, listing_type, timezone, to_jsonb(listings)->>'same_day_until' AS same_day_until
+               max_guests, property_type, listing_type, timezone, to_jsonb(listings)->>'same_day_until' AS same_day_until,
+               to_jsonb(listings)->>'check_in_time' AS check_in_time
         FROM listings
         WHERE id = ${s.listingId} AND status = 'approved'
       `;
@@ -457,6 +510,18 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
       // itself, applied to the room plus its amenities and pet fees.
       const stayTax = stayGst({ roomPortion, nights, extras: amenityTotal + animalFees });
 
+      // Free cancellation add-on: always worked out (the page offers it with
+      // its price), charged only when asked for (s.freeCancel === true) and
+      // offered. Never for a stay that comes with an experience, nor when
+      // the caller rules it out (s.noFreeCancel: group payments, changes).
+      const fcUntil = freeCancelUntilMs(s.arrival, listing.timezone, listing.check_in_time);
+      const fcOffered = !s.includedWithExperienceId && !s.noFreeCancel && Number.isFinite(fcUntil) && Date.now() < fcUntil
+        && await orderMoneyColumnsReady(sql);
+      const fcFee = Math.round(staySubtotal * FREE_CANCEL_PERCENT / 100);
+      const fcGst = Math.round(fcFee * stayTax.rate / 100);
+      const fcCommission = Math.round(fcFee * (rates.host / 100));
+      const fcTaken = fcOffered && s.freeCancel === true;
+
       return { detail: {
         listingId: listing.id,
         roomId: room ? room.id : null,
@@ -485,6 +550,13 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
         // Set when these nights came with a with_stay experience.
         withExperienceId: s.includedWithExperienceId || null,
         amenities: amenityDetails,
+        // What the add-on would cost (shown at checkout), and what is charged.
+        freeCancelOffer: { offered: fcOffered, percent: FREE_CANCEL_PERCENT, fee: fcFee, gst: fcGst,
+                           until: Number.isFinite(fcUntil) ? new Date(fcUntil).toISOString() : null, untilLabel: freeCancelLabel(fcUntil, listing.timezone) },
+        freeCancelFee: fcTaken ? fcFee : 0,
+        freeCancelGst: fcTaken ? fcGst : 0,
+        freeCancelCommission: fcTaken ? fcCommission : 0,
+        freeCancelUntil: fcTaken ? new Date(fcUntil).toISOString() : null,
       } };
 }
 
@@ -576,5 +648,6 @@ module.exports = {
   MAX_STAYS, MAX_EXPERIENCES, MAX_AMENITIES_PER_STAY,
   calculateNights, addDaysToDateStr, getNightsInRange, toDateStr, validateAndPriceAmenities,
   discountAmountFor, calculateDiscount, priceStay, priceExperience, parseMaxGuests,
-  activePromotions, MAX_EXPERIENCE_GUESTS
+  activePromotions, MAX_EXPERIENCE_GUESTS,
+  FREE_CANCEL_PERCENT, FREE_CANCEL_HOURS, freeCancelUntilMs, freeCancelLabel, addOnOf, freeCancelActive, orderMoneyColumnsReady
 };

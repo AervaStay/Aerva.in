@@ -17,6 +17,34 @@ const { DEFAULT_TIMEZONE, safeZone } = require('./_timezones');
 const REVIEW_WINDOW_DAYS = 15;
 
 // ---------------------------------------------------------------------
+// Review photos (owner, 9 Nov 2026)
+//
+// A guest may add up to REVIEW_PHOTO_MAX photos of the stay to a review.
+// Only photos uploaded to Aerva's own storage are taken (the same check as
+// listing and chat photos, _listing-rules.js isAervaBlobUrl); the same
+// photo twice counts once. More than the limit is refused rather than cut,
+// so the guest knows which photos went in.
+const REVIEW_PHOTO_MAX = 5;
+// { photos } on success, or { error } with a message for the guest.
+// Anything that is not an array means "no photos".
+function cleanReviewPhotos(input) {
+  if (input == null) return { photos: [] };
+  if (!Array.isArray(input)) return { error: 'Those photos could not be added. Please add them again.' };
+  const { isAervaBlobUrl } = require('./_listing-rules');
+  const trimmed = input.map(u => (typeof u === 'string' ? u.trim() : u));
+  if (trimmed.some(u => !isAervaBlobUrl(u))) return { error: 'Those photos could not be added. Please add them again.' };
+  const photos = [...new Set(trimmed)];
+  if (photos.length > REVIEW_PHOTO_MAX) return { error: `You can add up to ${REVIEW_PHOTO_MAX} photos to a review.` };
+  return { photos };
+}
+// A review's stored photos as shown to anyone: Aerva uploads only, at most
+// REVIEW_PHOTO_MAX, whatever the row holds (or [] before the migration).
+function reviewPhotosOut(value) {
+  const { isAervaBlobUrl } = require('./_listing-rules');
+  return Array.isArray(value) ? [...new Set(value.filter(isAervaBlobUrl).map(u => u.trim()))].slice(0, REVIEW_PHOTO_MAX) : [];
+}
+
+// ---------------------------------------------------------------------
 // Double-blind publication
 //
 // Neither side sees the other's review until both are in, or the window
@@ -160,7 +188,8 @@ const REVIEW_POLICY = {
         'A guest reviews the PROPERTY on five factors: hygiene, communication, services, value for money, and location. All five are mandatory, each 1-5.',
         'A host reviews the GUEST on four factors: cleanliness, communication, respectfulness, and rules followed. All four are mandatory, each 1-5.',
         'A written comment is mandatory on both sides. The comment is displayed but never scored — it carries no weight in any tier calculation.',
-        'A review missing any rating is not accepted. Reviews that somehow exist without ratings are treated as no review at all, in either direction.'
+        'A review missing any rating is not accepted. Reviews that somehow exist without ratings are treated as no review at all, in either direction.',
+        `A guest may add up to ${REVIEW_PHOTO_MAX} photos of the stay to their review (Aerva uploads only). Each is checked for contact details like every other photo; one that shows any is taken out of the review silently and listed in Removed photos. An administrator can remove any single photo (Reviews with photos).`
       ]
     },
     {
@@ -202,5 +231,5 @@ const REVIEW_POLICY = {
 module.exports = {
   REVIEW_WINDOW_DAYS, CONFLICT_CHECKS, REVIEW_POLICY,
   publicationState, submissionOpen, reviewWindowState, daysSinceCheckout,
-  localToday, toDateStr
+  localToday, toDateStr, REVIEW_PHOTO_MAX, cleanReviewPhotos, reviewPhotosOut
 };

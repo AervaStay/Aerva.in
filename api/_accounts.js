@@ -14,6 +14,8 @@
 // (isAccountDeleted, checked on every request that uses a session).
 
 const DELETED_NAME = 'Deleted user';
+// Shown in place of a review's text once its guest deleted their account (the stars stay).
+const REVIEW_REMOVED_TEXT = 'This review was removed because the guest deleted their account.';
 
 const { createToken } = require('./_approval-token');
 
@@ -133,6 +135,8 @@ async function blobUrlsOf(sql, guestId, hostId) {
   const urls = new Set();
   const scan = (v) => { (JSON.stringify(v || '').match(/https:\/\/[^"\s\\]+\.blob\.vercel-storage\.com\/[^"\s\\]+/g) || []).forEach(u => urls.add(u)); };
   scan((await sql`SELECT profile_photo_url FROM guests WHERE id = ${guestId}`)[0]);
+  // Photos they added to their reviews (migration 2026-11-09-08).
+  try { scan(await sql`SELECT to_jsonb(r)->'photos' AS photos FROM listing_reviews r WHERE guest_id = ${guestId}`); } catch (e) { /* best effort */ }
   if (hostId) {
     // Every photo anywhere in the host's listings and rooms (whatever the field).
     scan(await sql`SELECT * FROM listings WHERE host_id = ${hostId}`);
@@ -178,7 +182,19 @@ async function deleteAccount(sql, guestId) {
   await tryRun('conversation emails', sql`UPDATE conversations SET guest_email = ${placeholderEmail} WHERE guest_id = ${guestId}`);
   // Reviews: the text they wrote goes; star ratings stay (listing standing).
   // Reviews written ABOUT them (by hosts) are removed.
-  await tryRun('review text', sql`UPDATE listing_reviews SET comment = NULL WHERE guest_id = ${guestId}`);
+  // comment is NOT NULL with a 10-character minimum, so the text is replaced
+  // with a neutral line rather than emptied (NULL would fail every time).
+  // A failure here leaves the guest's words online: it is logged loudly.
+  try {
+    await sql`UPDATE listing_reviews SET comment = ${REVIEW_REMOVED_TEXT} WHERE guest_id = ${guestId}`;
+  } catch (e) {
+    console.error('deleteAccount: REVIEW TEXT NOT ERASED for guest', guestId, '-', e.message);
+    try {
+      await require('./_audit-log').logAudit(sql, { action: 'account_delete_review_text_failed', success: false, actorType: 'system',
+        targetType: 'guest', targetId: guestId, metadata: { error: String(e.message || e).slice(0, 300) } });
+    } catch (e2) { console.error('deleteAccount: audit of the review-text failure not written:', e2.message); }
+  }
+  await tryRun('review photos', sql`UPDATE listing_reviews SET photos = '[]'::jsonb WHERE guest_id = ${guestId}`);
   await tryRun('reviews about them', sql`DELETE FROM guest_reviews WHERE guest_id = ${guestId}`);
   // Payout records keep the amounts; the payee's name and account go.
   await tryRun('payout names', sql`UPDATE payouts SET bank_label = NULL WHERE payee_guest_id = ${guestId} OR (payee_type = 'host' AND host_id = ${hostId || 0})`);
@@ -237,5 +253,5 @@ async function reactivateIfPaused(sql, guestId) {
   }
 }
 
-module.exports = { assertNotSuspended, SUSPENDED_MESSAGE, isAccountDeleted, deletionBlockers, deleteAccount, reactivateIfPaused, DELETED_NAME,
+module.exports = { assertNotSuspended, SUSPENDED_MESSAGE, isAccountDeleted, deletionBlockers, deleteAccount, reactivateIfPaused, DELETED_NAME, REVIEW_REMOVED_TEXT,
                    sessionStatus, isSessionRevoked, newSessionToken, bumpSessionVersion };

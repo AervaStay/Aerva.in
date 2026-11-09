@@ -122,6 +122,22 @@
   .verify-error{font-size:13.5px; color:#a3402f; margin-top:6px; display:none;}
   .verify-rejection-note{font-size:14px; color:#a3402f; margin-bottom:8px;}
 
+  /* ---------- Guest reviews (below the listings) ---------- */
+  .host-reviews{margin-top:32px; border-top:1px solid #ece5da; padding-top:18px; max-width:760px;}
+  .host-reviews-title{font-family:Georgia, serif; font-weight:500; font-size:20px; margin:0 0 6px;}
+  .hr-item{padding:12px 0; border-bottom:1px solid #f1ebe2;}
+  .hr-head{display:flex; flex-wrap:wrap; gap:4px 10px; align-items:baseline; font-size:13px; color:#6e675d;}
+  .hr-head b{color:#1c1a17; font-weight:500;}
+  .hr-text{font-size:14px; line-height:1.6; margin:6px 0 0; white-space:pre-line; overflow-wrap:anywhere;}
+  .hr-photos{display:flex; flex-wrap:wrap; gap:6px; margin-top:8px;}
+  .hr-photos button{width:56px; height:56px; padding:0; border:none; border-radius:6px; overflow:hidden; cursor:zoom-in; background:#f2ece3;}
+  .hr-photos img{width:100%; height:100%; object-fit:cover; display:block;}
+  .hr-viewer{position:fixed; inset:0; z-index:1000; background:rgba(10,9,8,0.94); display:flex; align-items:center; justify-content:center; padding:24px;}
+  .hr-viewer img{max-width:100%; max-height:80vh; object-fit:contain;}
+  .hr-viewer button{position:absolute; width:44px; height:44px; border-radius:50%; border:none; background:rgba(255,255,255,0.14); color:#fff; font-size:22px; cursor:pointer;}
+  .hr-viewer .hr-x{top:16px; right:16px;} .hr-viewer .hr-prev{left:12px; top:50%;} .hr-viewer .hr-next{right:12px; top:50%;}
+  .hr-viewer .hr-n{position:absolute; bottom:16px; left:50%; transform:translateX(-50%); color:#fff; font-size:12.5px; opacity:0.8;}
+
   /* ---------- Listings two-column layout + right-side sidebar ---------- */
   .listings-layout{display:grid; grid-template-columns:1fr 680px; gap:24px; align-items:start;}
   @media (max-width: 1180px){ .listings-layout{grid-template-columns:1fr 400px;} }
@@ -511,7 +527,9 @@
     position:absolute; top:10px; right:14px; background:none; border:none;
     font-size:22px; cursor:pointer; color:#1c1a17; line-height:1; z-index:2;
   }
-  .profile-modal-tabs{display:flex; border-bottom:1px solid #e0d5c0; position:sticky; top:0; background:#f4ebe3; z-index:1;}
+  .profile-modal-tabs{display:flex; border-bottom:1px solid #e0d5c0; position:sticky; top:0; background:#f4ebe3; z-index:1; padding-right:40px;}
+  /* The close button rides in the sticky tab bar: clear of the last tab, and still there when the modal scrolls. */
+  .profile-modal-tabs .profile-modal-close{top:50%; transform:translateY(-50%); right:10px; padding:8px;}
   .profile-tab-btn{
     flex:1; background:none; border:none; padding:16px 8px; font-size:14px; cursor:pointer;
     color:#1c1a17; opacity:0.6; border-bottom:2px solid transparent;
@@ -720,10 +738,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
-<script src="aerva-cohost.js"></script>
+<script src="aerva-cohost.js?v=2026-11-09a"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
-<script src="aerva-policies.js?v=2026-11-09e"></script>
+<script src="aerva-policies.js?v=2026-11-10b"></script>
 </head>
 <body>
 
@@ -1078,6 +1096,13 @@
         </div>
       </div>
     </div>
+
+    <!-- Guest reviews of your homes, with the photos guests added (up to 5
+         each). Published reviews only, the same ones guests see. -->
+    <div class="host-reviews" id="hostReviewsSection" style="display:none;">
+      <h3 class="host-reviews-title">Guest reviews</h3>
+      <div id="hostReviewsList"></div>
+    </div>
   </div>
 
   <!-- Messages moved to index.html's header message icon (an overlay on
@@ -1099,8 +1124,8 @@
 <!-- ================= PROFILE MODAL ================= -->
 <div class="profile-modal-overlay" id="profileModalOverlay" style="display:none;">
   <div class="profile-modal">
-    <button type="button" class="profile-modal-close" id="profileModalCloseBtn" aria-label="Close">&times;</button>
     <div class="profile-modal-tabs">
+      <button type="button" class="profile-modal-close" id="profileModalCloseBtn" aria-label="Close">&times;</button>
       <button type="button" class="profile-tab-btn active" data-profile-tab="personal" id="profileTabPersonalBtn">Personal Details</button>
       <button type="button" class="profile-tab-btn" data-profile-tab="privacy" id="profileTabPrivacyBtn">Privacy</button>
       <button type="button" class="profile-tab-btn" data-profile-tab="verification" id="profileTabVerificationBtn">Verification</button>
@@ -1146,7 +1171,9 @@
           <div class="settings-row-main">
             <div class="settings-row-label">Phone</div>
             <div class="settings-row-value" id="profilePhoneDisplay">Not provided</div>
+            <div class="settings-row-value" id="profilePhoneVerifiedNote" style="font-size:13px; margin-top:2px;"></div>
           </div>
+          <button type="button" class="settings-edit-link" id="profilePhoneVerifyLink" data-edit-target="profilePhoneVerifyForm" style="display:none; margin-right:12px;">Verify</button>
           <button type="button" class="settings-edit-link" data-edit-target="profilePhoneEditForm">Edit</button>
         </div>
         <div class="settings-edit-form" id="profilePhoneEditForm">
@@ -1159,6 +1186,27 @@
             <button type="button" class="settings-cancel-btn" data-cancel-target="profilePhoneEditForm">Cancel</button>
           </div>
           <p class="profile-save-msg" id="profilePhoneMsg"></p>
+        </div>
+        <div class="settings-edit-form" id="profilePhoneVerifyForm">
+          <div class="field">
+            <label for="phoneVerifyNumber">Mobile number to verify</label>
+            <div style="display:flex; gap:8px;">
+              <select id="phoneVerifyCountry" aria-label="Country code" style="flex:0 0 auto; max-width:140px;"></select>
+              <input type="tel" id="phoneVerifyNumber" inputmode="numeric" autocomplete="tel-national" placeholder="10-digit number" style="flex:1; min-width:0;">
+            </div>
+          </div>
+          <div class="settings-edit-actions">
+            <button type="button" class="settings-save-btn" id="phoneVerifySendBtn">Send code</button>
+            <button type="button" class="settings-cancel-btn" data-cancel-target="profilePhoneVerifyForm">Cancel</button>
+          </div>
+          <div class="field" id="phoneVerifyOtpRow" style="display:none; margin-top:12px;">
+            <label for="phoneVerifyOtp">6-digit code</label>
+            <div style="display:flex; gap:8px;">
+              <input type="text" id="phoneVerifyOtp" inputmode="numeric" autocomplete="one-time-code" maxlength="6" style="flex:1; min-width:0;">
+              <button type="button" class="settings-save-btn" id="phoneVerifyOtpBtn" style="padding:9px 18px; font-size:13px; letter-spacing:0.04em; text-transform:uppercase; cursor:pointer; border:none;">Verify</button>
+            </div>
+          </div>
+          <p class="profile-save-msg" id="phoneVerifyMsg" role="status"></p>
         </div>
 
         <div class="settings-row" style="border-bottom:none;">
@@ -1746,7 +1794,7 @@
     if(item.host_cancel_rate == null) return '';
     const r = Number(item.host_cancel_rate) || 0;
     const tone = r === 0 ? '#3f6b3a' : r <= 3 ? '#8a6c39' : '#a3402f';
-    return `<div class="listing-meta" style="margin-top:4px; color:${tone};" title="Shown to guests on this listing’s card. It counts against your host badge.">Host Cancellation Rate: <strong>${r}%</strong>${item.host_cancel_bookings ? ` (${Number(item.host_cancel_count) || 0} of ${Number(item.host_cancel_bookings)} bookings)` : ''} · shown to guests</div>`;
+    return `<div class="listing-meta" style="margin-top:4px; color:${tone};" title="Shown to guests on this listing’s card. It counts against your host badge.">Host Cancellation Rate: <strong>${r}%</strong>${item.host_cancel_bookings ? ` (${Number(item.host_cancel_count) || 0} of ${Number(item.host_cancel_bookings)} booking${Number(item.host_cancel_bookings) === 1 ? '' : 's'})` : ''} · shown to guests</div>`;
   }
   function buildDashboardCard(item, isExperience){
     const interiorPhotos = Array.isArray(item.interior_photo_urls) ? item.interior_photo_urls : [];
@@ -1908,7 +1956,7 @@
       }
       return `<div class="cohost-empty-row">
         <div><b>${esc(c.hostName)}</b><span>${c.listingCount} listing${c.listingCount === 1 ? '' : 's'} · ${c.access === 'full' ? 'Full access' : 'Limited access'}</span></div>
-        <button type="button" class="sidebar-add-btn cohost-empty-btn" data-cohost-open="${esc(String(c.hostId))}" data-cohost-name="${esc(c.hostName)}" data-cohost-access="${esc(c.access)}">Open these listings</button>
+        <button type="button" class="sidebar-add-btn cohost-empty-btn" data-cohost-open="${esc(String(c.hostId))}" data-cohost-name="${esc(c.hostName)}" data-cohost-access="${esc(c.access)}" data-cohost-perms="${esc(JSON.stringify(Array.isArray(c.permissions) ? c.permissions : []))}">Open these listings</button>
       </div>`;
     }).join('');
 
@@ -1922,7 +1970,8 @@
       window.AervaCohost.start({
         hostId: Number(btn.dataset.cohostOpen),
         hostName: btn.dataset.cohostName,
-        access: btn.dataset.cohostAccess
+        access: btn.dataset.cohostAccess,
+        permissions: (function(){ try{ return JSON.parse(btn.dataset.cohostPerms || '[]'); }catch(e){ return []; } })()
       });
       // A reload is what puts co-host mode on every request this page
       // makes, rather than only the next one.
@@ -2140,9 +2189,10 @@
     document.getElementById('profileName').value = nameVal;
     document.getElementById('profilePhoneDisplay').textContent = phoneVal || 'Not provided';
     document.getElementById('profilePhone').value = phoneVal;
+    renderPhoneVerified(v);
     document.getElementById('profileEmailValue').textContent = gp.email || hostEmail || '—';
     // Collapse every edit form back closed on a fresh data load.
-    ['profileNameEditForm', 'profilePhoneEditForm'].forEach(id => {
+    ['profileNameEditForm', 'profilePhoneEditForm', 'profilePhoneVerifyForm'].forEach(id => {
       document.getElementById(id).style.display = 'none';
     });
 
@@ -2154,6 +2204,7 @@
     const parts = String(name || '').toUpperCase().replace(/[^A-Z ]+/g, ' ').split(/\s+/)
       .filter(t => t && !['MR','MRS','MS','MISS','DR','SHRI','SRI','SHREE','SMT','KUMARI','KUM','PROF','LATE','MASTER','THE'].includes(t));
     if(String(name || '').trim().length < 3 || !parts.length) return 'Enter your name exactly as it is printed on your PAN card.';
+    if(/\d/.test(String(name || ''))) return 'The name on the PAN cannot contain numbers. Type it exactly as printed, letters only.';
     const fifth = String(pan || '')[4];
     if(fifth && !parts.some(t => t[0] === fifth)) return 'The PAN and the name do not match. Check both against your PAN card.';
     return null;
@@ -2727,6 +2778,77 @@
     this.textContent = 'Save';
   });
 
+  // ---- Verify the phone number (OTP) — the "Verify your phone number"
+  // step of Getting set up. Same endpoints as the list-property form
+  // (host-listings.js sendHostPhoneOtp / verifyHostPhoneOtp); the verified
+  // number is then saved as the host's phone.
+  const PHONE_COUNTRIES = [['IN','+91','India',10],['US','+1','United States',10],['CA','+1','Canada',10],['GB','+44','United Kingdom',10],
+    ['AE','+971','United Arab Emirates',9],['AU','+61','Australia',9],['SG','+65','Singapore',8],['NP','+977','Nepal',10],
+    ['LK','+94','Sri Lanka',9],['BD','+880','Bangladesh',10],['DE','+49','Germany',11],['FR','+33','France',9]];
+  (function(){
+    const sel = document.getElementById('phoneVerifyCountry');
+    sel.innerHTML = PHONE_COUNTRIES.map(c => `<option value="${c[0]}">${c[1]} ${escH(c[2])}</option>`).join('');
+    sel.value = 'IN';
+  })();
+  function renderPhoneVerified(v){
+    const note = document.getElementById('profilePhoneVerifiedNote');
+    const link = document.getElementById('profilePhoneVerifyLink');
+    if(!v || window.AervaCohostActive){ note.textContent = ''; link.style.display = 'none'; return; }
+    note.textContent = v.phoneVerified ? 'Verified' : 'Not verified';
+    note.style.color = v.phoneVerified ? '#2f6b37' : '#a3402f';
+    link.style.display = v.phoneVerified ? 'none' : '';
+    // Start from the number on file: "+91 98765 00101" → India, 9876500101.
+    const raw = String(v.hostPhone || '').replace(/[\s\-().]/g, '');
+    const match = PHONE_COUNTRIES.slice().sort((a, b) => b[1].length - a[1].length).find(c => raw.startsWith(c[1]) && raw.length - c[1].length === c[3]);
+    if(match){ document.getElementById('phoneVerifyCountry').value = match[0]; document.getElementById('phoneVerifyNumber').value = raw.slice(match[1].length); }
+    else document.getElementById('phoneVerifyNumber').value = raw.replace(/^\+/, '');
+  }
+  function phoneVerifyMsg(text, bad){
+    const el = document.getElementById('phoneVerifyMsg');
+    el.textContent = text; el.style.color = bad ? '#a3402f' : '#2f6b37'; el.style.display = text ? 'block' : 'none';
+  }
+  document.getElementById('phoneVerifySendBtn').addEventListener('click', async function(){
+    phoneVerifyMsg('');
+    const countryCode = document.getElementById('phoneVerifyCountry').value;
+    const localNumber = document.getElementById('phoneVerifyNumber').value.trim();
+    this.disabled = true;
+    try{
+      const res = await fetch(API_BASE + '/api/host-listings', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken },
+        body: JSON.stringify({ sendHostPhoneOtp: { countryCode, localNumber } }) });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok){ phoneVerifyMsg(data.error || 'Could not send a code. Please try again.', true); }
+      else {
+        document.getElementById('phoneVerifyOtpRow').style.display = 'block';
+        // otpForTesting exists only while no SMS provider is connected (see host-listings.js).
+        phoneVerifyMsg(data.otpForTesting ? `No SMS provider connected yet — your test code is ${data.otpForTesting}` : 'A code has been sent to this number.');
+        document.getElementById('phoneVerifyOtp').focus();
+      }
+    }catch(e){ phoneVerifyMsg('Could not reach the server. Please try again.', true); }
+    this.disabled = false;
+  });
+  document.getElementById('phoneVerifyOtpBtn').addEventListener('click', async function(){
+    const otp = document.getElementById('phoneVerifyOtp').value.trim();
+    if(!/^[0-9]{6}$/.test(otp)){ phoneVerifyMsg('Please enter the 6-digit code.', true); return; }
+    this.disabled = true;
+    try{
+      const post = (body) => fetch(API_BASE + '/api/host-listings', { method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken }, body: JSON.stringify(body) });
+      const res = await post({ verifyHostPhoneOtp: { otp } });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok){ phoneVerifyMsg(data.error || 'Could not verify this code.', true); this.disabled = false; return; }
+      const c = PHONE_COUNTRIES.find(x => x[0] === document.getElementById('phoneVerifyCountry').value) || PHONE_COUNTRIES[0];
+      const digits = document.getElementById('phoneVerifyNumber').value.replace(/[\s\-().]/g, '').replace(/^0+/, '');
+      await post({ hostPhone: c[1] + digits }).catch(() => {});
+      document.getElementById('phoneVerifyOtpRow').style.display = 'none';
+      document.getElementById('phoneVerifyOtp').value = '';
+      phoneVerifyMsg('');
+      loadListings();
+      if(window.aervaSetup) window.aervaSetup.load();
+    }catch(e){ phoneVerifyMsg('Could not reach the server. Please try again.', true); }
+    this.disabled = false;
+  });
+
   async function loadGuestProfile(){
     try{
       const res = await fetch(API_BASE + '/api/guest-profile', {
@@ -2867,6 +2989,57 @@
         }).join('');
   }
 
+  // Guest reviews of this host's homes, with any photos the guests added.
+  // The same published reviews guests see (get-listings ?hostProfile, which
+  // is looked up through one live stay of the host).
+  async function loadHostReviews(listings){
+    const box = document.getElementById('hostReviewsSection');
+    const list = document.getElementById('hostReviewsList');
+    if(!box || !list) return;
+    const live = (listings || []).find(l => l.status === 'approved' && (!l.listing_type || l.listing_type === 'stay'));
+    if(!live){ box.style.display = 'none'; return; }
+    const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    try{
+      const res = await fetch(API_BASE + '/api/get-listings?hostProfile=' + Number(live.id) + '&reviewsOnly=1&limit=10', { headers: { 'Authorization': 'Bearer ' + sessionToken } });
+      const d = await res.json().catch(() => ({}));
+      const reviews = res.ok && Array.isArray(d.reviews) ? d.reviews : [];
+      box.style.display = '';
+      if(!reviews.length){ list.innerHTML = '<p style="font-size:13.5px; color:#6e675d;">No published reviews yet.</p>'; return; }
+      const isPhoto = (u) => typeof u === 'string' && /^https:\/\/[a-z0-9-]+\.public\.blob\.vercel-storage\.com\//i.test(u);
+      const monthOf = (ym) => { const m = /^(\d{4})-(\d{2})$/.exec(String(ym || '')); return m ? new Date(Number(m[1]), Number(m[2]) - 1, 1).toLocaleDateString('en-IN', { month: 'short', year: 'numeric' }) : ''; };
+      list.innerHTML = reviews.map((r, ri) => {
+        const photos = (Array.isArray(r.photos) ? r.photos : []).filter(isPhoto).slice(0, 5);
+        return `<div class="hr-item">
+          <div class="hr-head"><b>${esc(r.property)}</b><span>${esc(monthOf(r.month))}</span>${r.score ? `<span>${Number(r.score).toFixed(1)} ★</span>` : ''}</div>
+          ${r.comment ? `<p class="hr-text">${esc(r.comment)}</p>` : ''}
+          ${photos.length ? `<div class="hr-photos" data-hr-photos="${esc(JSON.stringify(photos))}">${photos.map((u, i) => `<button type="button" data-hr-i="${i}" aria-label="Open photo ${i + 1} of ${photos.length}"><img src="${esc(u)}" alt="" loading="lazy"></button>`).join('')}</div>` : ''}
+        </div>`;
+      }).join('');
+    }catch(err){ box.style.display = 'none'; }
+  }
+  // A simple viewer for review photos: Escape closes, arrow keys move.
+  (function(){
+    let photos = [], at = 0, el = null;
+    const close = () => { if(el){ el.remove(); el = null; document.removeEventListener('keydown', onKey); } };
+    const show = () => {
+      if(!el){ el = document.createElement('div'); el.className = 'hr-viewer'; el.setAttribute('role', 'dialog'); el.setAttribute('aria-label', 'Guest photo');
+        el.addEventListener('click', (e) => { if(e.target === el) close(); }); document.body.appendChild(el); document.addEventListener('keydown', onKey); }
+      const many = photos.length > 1;
+      el.innerHTML = `<button type="button" class="hr-x" aria-label="Close">×</button>${many ? '<button type="button" class="hr-prev" aria-label="Previous photo">←</button><button type="button" class="hr-next" aria-label="Next photo">→</button>' : ''}<img alt="" src="${photos[at].replace(/"/g, '%22')}">${many ? `<span class="hr-n">${at + 1} / ${photos.length}</span>` : ''}`;
+      el.querySelector('.hr-x').addEventListener('click', close);
+      if(many){ el.querySelector('.hr-prev').addEventListener('click', () => step(-1)); el.querySelector('.hr-next').addEventListener('click', () => step(1)); }
+    };
+    const step = (n) => { at = (at + n + photos.length) % photos.length; show(); };
+    function onKey(e){ if(e.key === 'Escape') close(); else if(e.key === 'ArrowLeft') step(-1); else if(e.key === 'ArrowRight') step(1); }
+    document.addEventListener('click', (e) => {
+      const b = e.target.closest('[data-hr-photos] [data-hr-i]');
+      if(!b) return;
+      try{ photos = JSON.parse(b.closest('[data-hr-photos]').dataset.hrPhotos || '[]'); }catch(err){ photos = []; }
+      if(!photos.length) return;
+      at = Number(b.dataset.hrI) || 0; show();
+    });
+  })();
+
   async function loadListings(){
     try{
       const res = await fetch(API_BASE + '/api/host-listings', {
@@ -2888,6 +3061,7 @@
         badgeEl.style.display = 'inline-block';
       }
       renderListings(data.listings || []);
+      loadHostReviews(data.listings || []);
       allHostBookings = data.bookings || [];
       renderVerification(data.verification);
 
@@ -3121,9 +3295,16 @@
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Guest Paid</div>
-          <div class="settings-row-value">${fmt(Number(booking.subtotal) + Number(booking.gst))}</div>
+          <div class="settings-row-value">${fmt(Number(booking.subtotal) + Number(booking.gst) + (Number(booking.free_cancel_fee) || 0))}</div>
         </div>
       </div>
+      ${Number(booking.free_cancel_fee) > 0 ? `
+      <div class="settings-row">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:14px;">Free cancellation add-on</div>
+          <div class="settings-row-value">${fmt(booking.free_cancel_fee)}<small style="display:block; font-size:12px; opacity:0.65; margin-top:2px;">The guest may cancel for a full refund until 48 hours before check-in. The add-on is yours (less Aerva’s commission) even if they cancel; it is in your payout.</small></div>
+        </div>
+      </div>` : ''}
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Your Payout</div>
@@ -3525,7 +3706,7 @@
         expResetSummaryToBase();
       };
       document.getElementById('expRemovePromoWholeBtn').onclick = () => {
-        if(window.confirm(`Remove the entire "${existingPromo.name}" promotion (${existingPromo.startDate} to ${existingPromo.endDate})?`)){
+        if(window.confirm(`Remove the entire "${existingPromo.name}" promotion (${existingPromo.startDate} to ${sbPrevDay(existingPromo.endDate)})?`)){
           expPromotionRows = expPromotionRows.filter(p => p !== existingPromo);
           expRenderPromotionsList(); expRenderCalendar();
           expResetSummaryToBase();
@@ -3602,7 +3783,7 @@
         ${escH(b.startDate)} to ${escH(b.endDate)} — Booked on ${escH(b.importedFrom)}
       </div>` : `
       <div class="sidebar-list-row">
-        ${escH(b.startDate)} to ${escH(b.endDate)}${b.reason ? ' — ' + escH(b.reason) : ''}
+        ${escH(b.startDate)} to ${escH(sbPrevDay(b.endDate))}${b.reason ? ' — ' + escH(b.reason) : ''}
         <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
       </div>
     `).join('');
@@ -3649,7 +3830,7 @@
       const discountLabel = p.discountType === 'flat' ? `₹${p.discountValue} off` : `${p.discountValue}% off`;
       return `
         <div class="sidebar-list-row">
-          <strong>${escH(p.name)}</strong><br>${escH(p.startDate)} to ${escH(p.endDate)} — ${escH(discountLabel)}
+          <strong>${escH(p.name)}</strong><br>${escH(p.startDate)} to ${escH(sbPrevDay(p.endDate))} — ${escH(discountLabel)}
           <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
         </div>
       `;
@@ -4059,7 +4240,7 @@
         ${escH(b.startDate)} to ${escH(b.endDate)} — Booked on ${escH(b.importedFrom)}
       </div>` : `
       <div class="sidebar-list-row">
-        ${escH(b.startDate)} to ${escH(b.endDate)}${b.reason ? ' — ' + escH(b.reason) : ''}
+        ${escH(b.startDate)} to ${escH(sbPrevDay(b.endDate))}${b.reason ? ' — ' + escH(b.reason) : ''}
         <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
       </div>
     `).join('');
@@ -4078,7 +4259,7 @@
       const discountLabel = p.discountType === 'flat' ? `₹${p.discountValue} off` : `${p.discountValue}% off`;
       return `
         <div class="sidebar-list-row">
-          <strong>${escH(p.name)}</strong><br>${escH(p.startDate)} to ${escH(p.endDate)} — ${escH(discountLabel)}${p.minNights ? `, ${Number(p.minNights)}+ nights` : ''}
+          <strong>${escH(p.name)}</strong><br>${escH(p.startDate)} to ${escH(sbPrevDay(p.endDate))} — ${escH(discountLabel)}${p.minNights ? `, ${Number(p.minNights)}+ nights` : ''}
           <button type="button" class="remove-row-btn" data-idx="${idx}">Remove</button>
         </div>
       `;
@@ -4743,16 +4924,22 @@
       const n = items.indexOf(next) + 1;
       const ov = document.createElement('div');
       ov.style.cssText = 'position:fixed; inset:0; background:rgba(28,26,23,0.45); z-index:3000; display:flex; align-items:center; justify-content:center; padding:16px;';
+      ov.setAttribute('role', 'dialog'); ov.setAttribute('aria-modal', 'true'); ov.setAttribute('aria-labelledby', 'setupStepTitle');
       ov.innerHTML = '<div style="background:#fff; border-radius:14px; max-width:440px; width:100%; padding:22px;">'
         + '<div style="font-size:12px; letter-spacing:0.12em; text-transform:uppercase; color:#8a6c39;">Step ' + n + ' of ' + items.length + '</div>'
-        + '<h2 style="font-family:Georgia,serif; font-weight:500; margin:6px 0 8px;">' + esc(next.label) + '</h2>'
+        + '<h2 id="setupStepTitle" style="font-family:Georgia,serif; font-weight:500; margin:6px 0 8px;">' + esc(next.label) + '</h2>'
         + '<p style="font-size:14.5px; line-height:1.6; margin:0 0 16px;">' + esc(next.why) + '</p>'
         + '<div style="display:flex; gap:10px; flex-wrap:wrap;"><a class="ch-btn primary" href="' + esc(next.href) + '" style="text-decoration:none;">Do it now</a>'
         + '<button type="button" class="ch-btn" id="setupSkip">Skip for now</button></div>'
         + '<p style="font-size:12.5px; opacity:0.65; margin:12px 0 0;">Skipped steps stay on your “Getting set up” list, in your profile and in the bell.</p></div>';
       document.body.appendChild(ov);
-      ov.addEventListener('click', (e) => { if(e.target === ov) ov.remove(); });
-      ov.querySelector('#setupSkip').addEventListener('click', () => { skip(next.key); ov.remove(); if(open_.some(i => i !== next && !skipped().includes(i.key))) open(false); });
+      // Keyboard: focus starts on "Do it now"; Escape closes, like a tap outside.
+      const onKey = (e) => { if(e.key === 'Escape') close(); };
+      const close = () => { ov.remove(); document.removeEventListener('keydown', onKey); };
+      document.addEventListener('keydown', onKey);
+      try{ ov.querySelector('a.ch-btn').focus(); }catch(e){}
+      ov.addEventListener('click', (e) => { if(e.target === ov) close(); });
+      ov.querySelector('#setupSkip').addEventListener('click', () => { skip(next.key); close(); if(open_.some(i => i !== next && !skipped().includes(i.key))) open(false); });
     }
     function load(){
       return fetch(API + '?setupChecklist=1', { headers: H }).then(r => r.json()).then(d => {
@@ -4768,21 +4955,30 @@
     return { load, items: () => items, listHtml };
   })();
 
-  // Action needed: a guest's emergency cancellation waiting for this host.
-  // Aerva reminds the host 3 times and then decides; its decision is final
-  // (_emergency-escalation.js, owner's rule 9 Nov 2026). Shown until answered.
+  // A guest's cancellation that Aerva is deciding, or an old one waiting
+  // for this host (_emergency-escalation.js). A natural disaster or
+  // government order (owner, 10 Nov 2026) is INFORMATION ONLY: Aerva checks
+  // the proof and decides; the host can add information in Messages. An old
+  // emergency request (sent before 10 Nov) still needs the host's answer.
   fetch(API + '?emergencyActions=1', { headers: H }).then(r => r.json()).then(d => {
     const wrap = document.querySelector('.wrap');
     if(!wrap) return;
     ((d && d.actions) || []).forEach(a => {
       const box = document.createElement('div');
-      box.className = 'notice-card notice-urgent';
+      box.className = a.info ? 'notice-card' : 'notice-card notice-urgent';
       box.style.cssText = 'margin:0 0 20px; padding:18px 20px;';
+      const where = '<p style="font-size:14.5px; line-height:1.6; margin:8px 0;">' + esc(a.listing) + ' · ' + esc(a.arrival) + ' → ' + esc(a.departure) + ' · booking ' + esc(a.code) + ' · ' + esc(a.reason) + '</p>';
+      if(a.info){
+        box.innerHTML = '<strong style="font-size:16px;">For your information: Aerva is deciding a cancellation</strong>' + where
+          + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">Your guest asked to cancel with proof of a natural disaster or a government order. Aerva checks the proof and decides; there is nothing for you to accept or decline. If Aerva approves, the guest’s payment becomes Aerva credit for new dates and there is no payout for this booking (it does not count as your cancellation). If not, the booking stands.</p>'
+          + '<div style="margin-top:10px;"><a class="ch-btn" href="index.html?view=messages" style="text-decoration:none;">Add information in Messages</a></div>';
+        wrap.insertBefore(box, wrap.firstChild);
+        return;
+      }
       const status = a.aervaDeciding ? 'You did not answer after ' + a.remindersMax + ' reminders, so <strong>Aerva is now deciding</strong>. Its decision will be final for you and the guest. You can still answer until it does.'
         : a.escalated ? 'Aerva has sent you reminder <strong>' + a.reminders + ' of ' + a.remindersMax + '</strong>. If there is no answer after ' + a.remindersMax + ' reminders, Aerva will decide, and its decision is final for you and the guest.'
         : 'Please answer by <strong>' + esc(new Date(a.answerBy).toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit' })) + '</strong>.';
-      box.innerHTML = '<strong style="font-size:16px;">Action needed: your guest asked to cancel for an emergency</strong>'
-        + '<p style="font-size:14.5px; line-height:1.6; margin:8px 0;">' + esc(a.listing) + ' · ' + esc(a.arrival) + ' → ' + esc(a.departure) + ' · booking ' + esc(a.code) + ' · ' + esc(a.reason) + '</p>'
+      box.innerHTML = '<strong style="font-size:16px;">Action needed: your guest asked to cancel for an emergency</strong>' + where
         + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">Accept: the guest gets the booking price, GST and any deposit back, with no charge or penalty to you. Decline: the booking stands and the guest gets no refund.</p>'
         + '<p class="notice-due" style="font-size:14px; line-height:1.6; margin:6px 0;">' + status + '</p>'
         + '<div style="margin-top:10px; display:flex; gap:14px; align-items:center; flex-wrap:wrap;"><a class="ch-btn primary" href="index.html?view=messages" style="text-decoration:none;">Answer in Messages</a><a href="index.html?view=help&mine=1" style="font-size:13.5px;">Your support request</a></div>';

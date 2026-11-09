@@ -114,7 +114,7 @@ const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES, refundSubunitForInr } = require('./_currency');
 const { createToken, verifyToken, secretMatches } = require('./_approval-token');
 const { adminSessionActive, sessionExtra, bumpSessionVersion, checkAdminSecret } = require('./_admin-auth');
-const { REVIEW_POLICY, CONFLICT_CHECKS, REVIEW_WINDOW_DAYS, publicationState } = require('./_review-policy');
+const { REVIEW_POLICY, CONFLICT_CHECKS, REVIEW_WINDOW_DAYS, publicationState, reviewPhotosOut } = require('./_review-policy');
 const { describeLadders, guestTier, hostTier, reviewScore, weakestFactor,
         REVIEW_FACTORS, GUEST_FACTORS, HOST_TIERS, GUEST_TIERS,
         bookingValueBand, QUALIFYING_BOOKING_MIN,
@@ -788,9 +788,11 @@ module.exports = async (req, res) => {
 
   // ---- Stay disputes (guest reported a problem during the stay) ----
   // GET ?cancellationRequests=1 · POST { decideCancellationRequest: { requestId, accept, note } }
-  // Emergency cancellation requests the host did not answer in 24 hours:
-  // Aerva approves (full refund of price, GST and deposit) or rejects
-  // (_cancellations.js decideByAerva). Closed by itself at check-in.
+  // Natural-disaster requests (from the moment they are sent): Aerva checks
+  // the proof and approves (everything paid → Aerva credit for new dates, no
+  // host payout) or rejects (booking stands). Also old emergency requests
+  // and reviews still open from before 10 Nov 2026. Decided by
+  // _cancellations.js decideByAerva. Closed by itself at check-in.
   if (req.method === 'GET' && req.query.cancellationRequests === '1') {
     try { return res.status(200).json({ requests: await require('./_cancellations').requestsForAerva(sql) }); }
     catch (err) { console.error('cancellationRequests failed:', err); return res.status(500).json({ error: 'Could not load cancellation requests.' }); }
@@ -799,17 +801,26 @@ module.exports = async (req, res) => {
     const b = req.body.decideCancellationRequest;
     if (b.accept !== true && String(b.note || '').trim().length < 5) return res.status(400).json({ error: 'Write the reason — the guest is told it.' });
     try {
-      // A review of a host's decline (the guest sent proof) or an unanswered request.
-      const isReview = (await sql`SELECT 1 FROM cancellation_requests WHERE id = ${Number(b.requestId) || 0} AND to_jsonb(cancellation_requests)->>'review_requested_at' IS NOT NULL AND to_jsonb(cancellation_requests)->>'review_decided_at' IS NULL`).length > 0;
-      if (isReview) {
-        const rv = await require('./_cancellations').decideReview(sql, razorpay, { requestId: Number(b.requestId) || 0, accept: b.accept === true, note: String(b.note || ''), adminLabel: ADMIN_ACTOR, refundPercent: b.refundPercent == null ? 100 : Number(b.refundPercent) });
-        return res.status(200).json({ success: true, review: true, ...rv });
-      }
-      const out = await require('./_cancellations').decideByAerva(sql, razorpay, { requestId: Number(b.requestId) || 0, accept: b.accept === true, note: String(b.note || ''), adminLabel: ADMIN_ACTOR, refundPercent: b.refundPercent == null ? 100 : Number(b.refundPercent) });
+      const out = await require('./_cancellations').decideByAerva(sql, razorpay, { requestId: Number(b.requestId) || 0, accept: b.accept === true, note: String(b.note || ''), adminLabel: ADMIN_ACTOR });
       return res.status(200).json({ success: true, ...out });
     } catch (err) {
       if (!err.isUserFacing) console.error('decideCancellationRequest failed:', err);
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not decide this request right now.' });
+    }
+  }
+
+  // POST { allowCreditRefund: { guestId, creditId?, allow, note? } } — ADMIN ONLY (owner, 00:54):
+  // let this guest have their credit for new dates only (a natural disaster)
+  // refunded to its original payment, or switch it off again (_fee-credits.js).
+  if (req.method === 'POST' && req.body && req.body.allowCreditRefund) {
+    if (ADMIN_ROLE !== 'admin') return res.status(403).json({ error: 'Only an admin can allow a refund of credit for new dates.' });
+    try {
+      const b = req.body.allowCreditRefund;
+      const out = await require('./_fee-credits').allowCashRefund(sql, { guestId: b.guestId, creditId: b.creditId == null ? null : b.creditId, allow: b.allow === true, note: b.note, adminLabel: ADMIN_ACTOR });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('allowCreditRefund failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
     }
   }
 
@@ -824,6 +835,41 @@ module.exports = async (req, res) => {
       return res.status(200).json({ success: true, ...out });
     } catch (err) {
       if (!err.isUserFacing) console.error('emergency escalation action failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
+    }
+  }
+
+  // ---- Aerva's check-in promise (_checkin-promise.js) ----
+  // GET ?checkinPromise=1 — reports on arrival, bookings of listings blocked
+  //     as fake, blocked listings, and what hosts owe Aerva.
+  // GET ?checkinCandidates=<reportId> — places the guest could move to.
+  // POST { checkinDecide: { reportId, upheld, note } }       confirm / clear
+  //      { checkinSendOffers: { reportId, options: [{ listingId, roomId }] } }  up to 3
+  //      { checkinRefund: { reportId, note } }               refund in full
+  //      { checkinListingReview: { orderId, note } }         a blocked listing's booking: move or refund its guest
+  //      { checkinUnblockListing: { listingId, note } }      only Aerva unblocks
+  if (req.method === 'GET' && (req.query.checkinPromise === '1' || req.query.checkinCandidates !== undefined)) {
+    try {
+      const CP = require('./_checkin-promise');
+      if (req.query.checkinCandidates !== undefined) return res.status(200).json(await CP.candidates(sql, { reportId: Number(req.query.checkinCandidates) || 0 }));
+      return res.status(200).json(await CP.adminView(sql));
+    } catch (err) {
+      if (!err.isUserFacing) console.error('checkinPromise failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not load the check-in promise right now.' });
+    }
+  }
+  const CP_KEYS = ['checkinDecide', 'checkinSendOffers', 'checkinRefund', 'checkinListingReview', 'checkinUnblockListing'];
+  if (req.method === 'POST' && req.body && CP_KEYS.some(k => req.body[k])) {
+    try {
+      const CP = require('./_checkin-promise');
+      const b = req.body;
+      if (b.checkinDecide) return res.status(200).json({ success: true, ...(await CP.decideReport(sql, { reportId: Number(b.checkinDecide.reportId) || 0, upheld: b.checkinDecide.upheld === true, note: b.checkinDecide.note, adminLabel: ADMIN_ACTOR })) });
+      if (b.checkinSendOffers) return res.status(200).json({ success: true, ...(await CP.sendOffers(sql, { reportId: Number(b.checkinSendOffers.reportId) || 0, options: b.checkinSendOffers.options, adminLabel: ADMIN_ACTOR })) });
+      if (b.checkinRefund) return res.status(200).json({ success: true, ...(await CP.refundInFull(sql, razorpay, { reportId: Number(b.checkinRefund.reportId) || 0, note: b.checkinRefund.note, adminLabel: ADMIN_ACTOR })) });
+      if (b.checkinListingReview) return res.status(200).json({ success: true, ...(await CP.startListingReview(sql, { orderId: Number(b.checkinListingReview.orderId) || 0, note: b.checkinListingReview.note, adminLabel: ADMIN_ACTOR })) });
+      return res.status(200).json({ success: true, ...(await CP.unblockListing(sql, { listingId: Number(b.checkinUnblockListing.listingId) || 0, note: b.checkinUnblockListing.note, adminLabel: ADMIN_ACTOR })) });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('check-in promise action failed:', err);
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
     }
   }
@@ -898,6 +944,8 @@ module.exports = async (req, res) => {
       }
       if (req.query.lookupGuest) {
         const out = await lookup.guestDetail(sql, req.query.lookupGuest);
+        // Credit for new dates only, and whether a refund is allowed (Admin switch).
+        out.newDatesCredits = await require('./_fee-credits').nonCashForAdmin(sql, out.guest.id);
         out.records = await actions.recordsFor(sql, { guestId: out.guest.id });
         out.role = ADMIN_ROLE;
         await logAudit(sql, { action: 'admin_lookup_viewed', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'guest', targetId: out.guest.id });
@@ -1017,6 +1065,18 @@ module.exports = async (req, res) => {
       migrations.pendingCount(sql).then(n => { if (n != null) counts.migrations = n; }),
       count('approvals', sql`SELECT count(*)::int AS n FROM support_actions WHERE status = 'pending'`)
         .then(() => priceReview.pendingCount(sql)).then(n => { if (n) counts.approvals = (counts.approvals || 0) + n; })
+        // Natural-disaster requests (at once), old emergency requests with Aerva (escalated, or
+        // unanswered for 24 hours) and old reviews: the same requests Approvals lists.
+        .then(async () => {
+          const C = require('./_cancellations');
+          const n = Number((await sql`SELECT count(*)::int AS n FROM cancellation_requests r JOIN orders o ON o.id = r.order_id
+            WHERE o.status = 'paid' AND o.arrival >= (now() AT TIME ZONE 'Asia/Kolkata')::date AND (
+              (r.status = 'pending' AND r.decided_at IS NULL AND r.reason_code = ANY(${Object.keys(C.EMERGENCY_REASONS)}))
+              OR (r.status = 'pending' AND r.decided_at IS NULL AND r.reason_code = ANY(${Object.keys(C.RETIRED_REASONS)})
+                AND (to_jsonb(r)->>'escalated_at' IS NOT NULL OR r.created_at < now() - interval '24 hours'))
+              OR (to_jsonb(r)->>'review_requested_at' IS NOT NULL AND to_jsonb(r)->>'review_decided_at' IS NULL))`)[0].n) || 0;
+          if (n) counts.approvals = (counts.approvals || 0) + n;
+        }).catch(() => { /* not available yet */ })
     ]);
     return res.status(200).json({ counts });
   }
@@ -1458,12 +1518,22 @@ module.exports = async (req, res) => {
           (SELECT COUNT(*) FROM listing_reviews WHERE published_at IS NULL AND admin_reverted_at IS NULL) AS listing_held,
           (SELECT COUNT(*) FROM guest_reviews   WHERE published_at IS NULL AND admin_reverted_at IS NULL) AS guest_held
       `;
+      // Guests' photos on reviews (migration 2026-11-09-08), newest first,
+      // so an admin can take out any single one. [] before the migration.
+      const withPhotos = (await sql`
+        SELECT lr.id, lr.order_id, lr.listing_id, l.property_name, g.name AS guest_name, lr.comment,
+               lr.created_at, lr.published_at, COALESCE(to_jsonb(lr)->'photos', '[]'::jsonb) AS photos
+        FROM listing_reviews lr JOIN listings l ON l.id = lr.listing_id LEFT JOIN guests g ON g.id = lr.guest_id
+        WHERE lr.admin_reverted_at IS NULL AND COALESCE(to_jsonb(lr)->'photos', '[]'::jsonb) <> '[]'::jsonb
+        ORDER BY lr.created_at DESC LIMIT 50
+      `).map(r => Object.assign(r, { photos: reviewPhotosOut(r.photos) }));
       return res.status(200).json({
         policy: REVIEW_POLICY,
         ladders: describeLadders(),
         windowDays: REVIEW_WINDOW_DAYS,
         checks: CONFLICT_CHECKS,
         conflicts: { mutualLow, reported, outliers },
+        withPhotos,
         held: heldCount[0] || { listing_held: 0, guest_held: 0 }
       });
     } catch (err) {
@@ -1523,7 +1593,7 @@ module.exports = async (req, res) => {
   if (req.method === 'GET' && req.query.propertyLookup !== undefined) {
     try {
       const q = String(req.query.propertyLookup || '').trim();
-      if (q.length < 2) return res.status(400).json({ error: 'Type at least two characters.' });
+      if (q.length < 2 && !/^[0-9]$/.test(q)) return res.status(400).json({ error: 'Type at least two characters.' });
       const asId = /^[0-9]+$/.test(q) ? Number(q) : -1;
       const like = '%' + q.toLowerCase() + '%';
 
@@ -1550,8 +1620,8 @@ module.exports = async (req, res) => {
       let cutoffs = {};
       try {
         const pool = await sql`
-          SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
-                 AVG(services) AS services, AVG(value_rating) AS value, AVG(location) AS location
+          SELECT AVG(r.hygiene) AS hygiene, AVG(r.communication) AS communication,
+                 AVG(r.services) AS services, AVG(r.value_rating) AS value, AVG(r.location) AS location
           FROM listing_reviews r
           JOIN listings l ON l.id = r.listing_id AND l.status = 'approved'
           WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
@@ -1654,9 +1724,9 @@ module.exports = async (req, res) => {
         let cutoffs = {};
         try {
           const pool = await sql`
-            SELECT AVG(hygiene) AS hygiene, AVG(communication) AS communication,
-                   AVG(services) AS services, AVG(value_rating) AS value,
-                   AVG(location) AS location
+            SELECT AVG(r.hygiene) AS hygiene, AVG(r.communication) AS communication,
+                   AVG(r.services) AS services, AVG(r.value_rating) AS value,
+                   AVG(r.location) AS location
             FROM listing_reviews r
             JOIN listings l ON l.id = r.listing_id AND l.status = 'approved'
             WHERE r.published_at IS NOT NULL AND r.admin_reverted_at IS NULL
@@ -1768,6 +1838,40 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('simulateTier error:', err);
       return res.status(500).json({ error: 'Could not run that simulation.' });
+    }
+  }
+
+  // ---- Admin removes one photo from a guest's review ----
+  // POST { removeReviewPhoto: { reviewId, url, reason } }
+  // The review itself stays; only that photo goes. The URL is kept in the
+  // audit log, so it can be put back by hand if it was a mistake.
+  if (req.method === 'POST' && req.body && req.body.removeReviewPhoto) {
+    try {
+      const x = req.body.removeReviewPhoto || {};
+      const reviewId = Number(x.reviewId) || 0;
+      const url = typeof x.url === 'string' ? x.url.trim() : '';
+      const why = typeof x.reason === 'string' ? x.reason.trim().slice(0, 500) : '';
+      if (!reviewId || !url) return res.status(400).json({ error: 'Which review, and which photo?' });
+      let rows;
+      try {
+        rows = await sql`
+          UPDATE listing_reviews r SET photos = COALESCE((SELECT jsonb_agg(e) FROM jsonb_array_elements(r.photos) e WHERE e <> to_jsonb(${url}::text)), '[]'::jsonb)
+          WHERE r.id = ${reviewId} AND r.photos ? ${url}
+          RETURNING r.id, r.order_id, r.listing_id, r.photos`;
+      } catch (err) {
+        if (err && err.code === '42703') return res.status(409).json({ error: 'Review photos are not switched on yet (database update 2026-11-09-08-review-photos.sql).' });
+        throw err;
+      }
+      if (!rows.length) return res.status(404).json({ error: 'That photo is not on this review (already removed?).' });
+      await logAudit(sql, {
+        action: 'review_photo_removed', success: true, actorType: 'admin', ...ADMIN_AUDIT,
+        targetType: 'listing_review', targetId: reviewId,
+        metadata: { orderId: rows[0].order_id, listingId: rows[0].listing_id, url, reason: why || null }
+      });
+      return res.status(200).json({ success: true, photos: reviewPhotosOut(rows[0].photos) });
+    } catch (err) {
+      console.error('removeReviewPhoto error:', err);
+      return res.status(500).json({ error: 'Could not remove that photo right now.' });
     }
   }
 
@@ -1914,6 +2018,8 @@ module.exports = async (req, res) => {
           UPDATE listings SET status = ${newStatus}, admin_status_reason = ${safeReason}
           WHERE id = ${id}
         `;
+        // Unblocking also ends a check-in promise block (only Aerva unblocks).
+        if (action === 'unblock') { try { await sql`UPDATE listings SET checkin_blocked_at = NULL WHERE id = ${id}`; } catch (e) { /* before the database update */ } }
 
         await logAudit(sql, {
           action: 'listing_status_changed', success: true, actorType: 'admin', ...ADMIN_AUDIT,
@@ -2135,6 +2241,8 @@ module.exports = async (req, res) => {
           let disputed = [];
           try { disputed = await sql`SELECT 1 FROM stay_disputes WHERE order_id = ${orderId} AND status IN ('open', 'host_responded') LIMIT 1`; } catch (e) { /* table not created yet */ }
           if (disputed.length) return res.status(409).json({ error: 'A problem reported on this stay is open. Decide it in Stay disputes first — the payout may change.' });
+          const cpHold = await require('./_checkin-promise').holdFor(sql, orderId);
+          if (cpHold) return res.status(409).json({ error: 'This payout is on hold (Aerva’s check-in promise): ' + cpHold.replace(/ \(\d{4}-[^)]*\)/, '') + '.' });
           await createPayoutRows(sql, orderId);
         }
         const payeeGuestId = isCohost ? (extra ? Number(extra.payee_guest_id) : (Number(b.cohostGuestId) || 0)) : null;
@@ -2166,6 +2274,8 @@ module.exports = async (req, res) => {
         // inoperative) — unless the admin typed the amount.
         if (!isDeposit && (b.tds === undefined || b.tds === null || b.tds === '')) row = await refreshTds(sql, row);
         let tds = Number(row.tds), deductions = Number(row.deductions), ids = row.deducted_penalty_ids || [];
+        // What the host owes Aerva (paid out, then no longer owed) always comes off.
+        if (!isCohost && !b.deductCoupons && (await require('./_checkin-promise').balances(sql, row.host_id)).length) b.deductCoupons = true;
         if (!isCohost) {
           if (b.tds !== undefined && b.tds !== null && b.tds !== '') tds = Math.max(0, Math.round((Number(b.tds) || 0) * 100) / 100);
           if (!b.deductCoupons) { deductions = 0; ids = []; }
@@ -2224,6 +2334,11 @@ module.exports = async (req, res) => {
         // should have made it was interrupted — e.g. a change refund).
         const retryable = rf.status === 'failed' || (rf.status === 'new' && rf.stale);
         if (!retryable) return res.status(409).json({ error: rf.status === 'processed' ? 'This refund has already been processed.' : 'This refund is in progress.' });
+        // A failed cancellation refund on a booking that still stands: refunding it here
+        // would pay the guest back while the stay stays booked.
+        if (/^cancellation/.test(String(rf.kind || '')) && (await sql`SELECT 1 FROM orders WHERE id = ${rf.order_id} AND status = 'paid'`).length) {
+          return res.status(409).json({ error: 'This booking was never cancelled (the refund failed first, so it still stands). Cancel it again from Lookup or Approvals instead; that refund is checked with Razorpay so nothing is refunded twice.' });
+        }
         // The row's own amount is the amount of record (_refunds.js keeps it
         // current), read fresh here, so a retry refunds exactly what is owed.
         const r = await safeRefund(sql, razorpay, { orderId: rf.order_id, paymentId: rf.razorpay_payment_id, amountSubunit: Number(rf.amount), kind: rf.kind });
@@ -2579,7 +2694,7 @@ module.exports = async (req, res) => {
       // Refunds not yet confirmed (in progress, or failed: admin retries).
       let openRefunds = [];
       try {
-        openRefunds = await sql`SELECT r.id, r.order_id, r.kind, r.amount, r.status, r.failure_reason, r.attempts, r.created_at, o.suite_name, o.guest_email, o.charge_currency
+        openRefunds = await sql`SELECT r.id, r.order_id, r.kind, r.amount, r.status, r.failure_reason, r.attempts, r.created_at, o.suite_name, o.guest_email, o.charge_currency, o.status AS order_status
                                 FROM refunds r JOIN orders o ON o.id = r.order_id WHERE r.status IN ('new', 'creating', 'pending', 'failed') ORDER BY r.created_at DESC LIMIT 100`;
       } catch (err) { /* migration_refunds.sql not run yet */ }
       // Bookings whose payout is held: a stay dispute is open (Mark paid refuses these too).
@@ -2609,7 +2724,9 @@ module.exports = async (req, res) => {
           failure: p.failure_reason, attempts: p.attempts, autoEligible: p.auto_eligible, listing: p.suite_name, hostName: p.host_name,
           kind: p.kind === 'deposit' ? 'deposit' : /^rest/.test(p.kind || '') ? 'rest' : 'adjustment', payeeType: p.payee_type, payeeName: p.payee_type === 'cohost' ? p.payee_name : p.host_name })),
         refunds: openRefunds.map(r => ({ id: r.id, orderId: r.order_id, kind: r.kind, amount: Number(r.amount) / 100, currency: r.charge_currency || 'INR', status: r.status,
-          failure: r.failure_reason, attempts: r.attempts, listing: r.suite_name, guestEmail: r.guest_email, createdAt: r.created_at })),
+          failure: r.failure_reason, attempts: r.attempts, listing: r.suite_name, guestEmail: r.guest_email, createdAt: r.created_at,
+          // A cancellation whose refund failed was never cancelled: retried by cancelling again.
+          bookingStands: /^cancellation/.test(String(r.kind || '')) && r.order_status === 'paid' })),
         penalties: penalties.map(p => ({ id: p.id, hostId: p.host_id, hostName: p.host_name, amount: Number(p.amount),
           kind: p.kind || 'coupon', payer: p.payer_guest_id ? 'cohost' : 'host', payerName: p.payer_guest_id ? (p.payer_name || p.payer_email || 'Co-host') : p.host_name,
           booking: p.suite_name, orderId: p.order_id, createdAt: p.created_at, overSixMonths: !!p.over_six_months })),
@@ -2839,6 +2956,12 @@ module.exports = async (req, res) => {
              l.listing_type, l.hosting_listing_id, l.experience_category,
              l.experience_price_unit, l.experience_duration_hours,
              l.pending_room_photos,
+             -- reviewed with the listing (_listing-special.js); before the migration these read empty
+             COALESCE(to_jsonb(l)->'special_highlights', '[]'::jsonb) AS special_highlights,
+             to_jsonb(l)->>'special_story' AS special_story,
+             COALESCE(to_jsonb(l)->'host_recommendations', '[]'::jsonb) AS host_recommendations,
+             COALESCE((SELECT jsonb_agg(jsonb_build_object('id', e.id, 'name', e.property_name, 'city', e.city, 'status', e.status) ORDER BY e.id)
+                       FROM listings e WHERE e.id IN (SELECT (jsonb_array_elements_text(COALESCE(to_jsonb(l)->'suggested_experience_ids', '[]'::jsonb)))::int)), '[]'::jsonb) AS suggested_experiences,
              h.property_name AS hosting_property_name,
              c.property_name AS cloned_from_property_name, c.status AS cloned_from_status,
              c.rejection_reason AS cloned_from_rejection_reason

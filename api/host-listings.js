@@ -87,7 +87,7 @@ const { safeRefund, refundAcrossPayments, hasChangePayments } = require('./_refu
 const { respondChange } = require('./_booking-changes');
 const { respondDispute } = require('./_stay-disputes');
 const { hoursUntilCheckIn, hoursUntilCheckInTime, paidByOrderRow, dateStr } = require('./_booking-rules');
-const { executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, HOST_CANCELLATIONS_PER_YEAR, claimForCancellation, releaseClaim, claimRequest, unclaimRequest, hostOption, postThreadMessage, REQUEST_REASONS, depositStillHeld, guestGetsBackFor, clearUnsentPayouts } = require('./_cancellations');
+const { executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, HOST_CANCELLATIONS_PER_YEAR, claimForCancellation, releaseClaim, claimRequest, unclaimRequest, hostOption, postThreadMessage, REASON_LABELS, depositStillHeld, guestGetsBackFor, clearUnsentPayouts } = require('./_cancellations');
 const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
@@ -461,6 +461,7 @@ const HOST_MONEY_KEYS = new Set([
   'commission', 'commission_amount', 'commission_rate', 'commissionAmount', 'commissionRate',
   'subtotal', 'gst', 'total', 'discount_amount', 'guest_service_fee', 'serviceFee',
   'not_earned', 'notEarned', 'deposit_resolution_amount', 'depositResolutionAmount',
+  'free_cancel_fee', 'free_cancel_commission',
   'refund_amount_subunit', 'cohost_share', 'coupon_cost', 'verification'
 ]);
 const HOST_MONEY_PREFIX = /^(bank|tds|pan)([A-Z_]|$)/;
@@ -483,10 +484,66 @@ const shareBucketKey = (r) => [r.month, r.stayMonth, r.listingId, r.bucket, r.st
 // The co-host's own money, for the trim: their share of each booking
 // (order_cohost_shares) and the guest coupons THEY paid for when they
 // cancelled. Fail-safe: before the co-host tables exist everything is 0.
+// ---- Where a booking's payout stands (owner, 9 Nov 2026) ----
+// The guest has paid for every confirmed booking; the payout goes the day
+// after check-in (_payouts.js runAutoPayouts). So a booking's payout is:
+//   'due'       not sent yet — due the day after check-in, or the payout
+//               row's arriving_by when it has one ('due' / 'processing');
+//   'sent'      the payout row (payouts.status 'sent'): date, bank reference;
+//   'on_hold'   the rest of it is held while a guest's request is open
+//               (orders.payout_rest_held_at);
+//   'failed'    the bank refused it (payouts.status 'failed'; Aerva retries);
+//   'cancelled' the booking was cancelled and nothing was paid out.
+// One payout row per payee per booking (idx_payouts_once_per_kind).
+// `who` is { hostId } for the host, or { payeeGuestId } for a co-host's own.
+async function loadPayoutRows(sql, ids, who) {
+  const out = new Map();
+  if (!ids || !ids.length) return out;
+  const rows = who.payeeGuestId
+    ? await sql`SELECT order_id, status, reference, to_char(arriving_by, 'YYYY-MM-DD') AS arriving_by,
+                       to_char(sent_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS sent_on
+                FROM payouts WHERE order_id = ANY(${ids}) AND payee_type = 'cohost' AND payee_guest_id = ${who.payeeGuestId}
+                  AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = 'booking'`
+    : await sql`SELECT order_id, status, reference, to_char(arriving_by, 'YYYY-MM-DD') AS arriving_by,
+                       to_char(sent_at AT TIME ZONE 'Asia/Kolkata', 'YYYY-MM-DD') AS sent_on
+                FROM payouts WHERE order_id = ANY(${ids}) AND payee_type = 'host' AND host_id = ${who.hostId || 0}
+                  AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') = 'booking'`;
+  rows.forEach(r => out.set(Number(r.order_id), r));
+  return out;
+}
+// The day each booking's payout falls due, and whether its rest is held.
+async function loadPayoutDue(sql, ids) {
+  const out = new Map();
+  if (!ids || !ids.length) return out;
+  const rows = await sql`SELECT id, to_char(arrival + 1, 'YYYY-MM-DD') AS due_on,
+                                (to_jsonb(orders)->>'payout_rest_held_at') IS NOT NULL AS held
+                         FROM orders WHERE id = ANY(${ids})`;
+  rows.forEach(r => out.set(Number(r.id), { dueOn: r.due_on, held: !!r.held }));
+  return out;
+}
+// b: { status, payout_day (the day after check-in), payout_held }; row: that
+// payee's payout row.
+function payoutStatusFor(b, row) {
+  const none = { payout_status: null, payout_due_on: null, payout_sent_on: null, payout_reference: null };
+  const cancelled = b.status === 'cancelled' || b.status === 'refunded';
+  if (b.status === 'paid' && b.payout_held) return { ...none, payout_status: 'on_hold' };
+  if (row && row.status === 'sent') {
+    return { ...none, payout_status: 'sent', payout_sent_on: row.sent_on || null, payout_reference: row.reference || null };
+  }
+  if (cancelled) return { ...none, payout_status: 'cancelled' };
+  if (b.status !== 'paid') return none;
+  if (row && row.status === 'failed') return { ...none, payout_status: 'failed' };
+  return { ...none, payout_status: 'due', payout_due_on: (row && row.arriving_by) || b.payout_day || null };
+}
+// The same, in Today's camelCase.
+const camelPayout = (p) => ({ payoutStatus: p.payout_status, payoutDueOn: p.payout_due_on, payoutSentOn: p.payout_sent_on, payoutReference: p.payout_reference });
+
 async function loadCohostMoney(ctx, accountId, mode) {
   ctx.shareByOrder = new Map();
   ctx.shareByBucket = new Map();
+  ctx.sharePaidByBucket = new Map();
   ctx.couponByOrder = new Map();
+  ctx.payoutByOrder = new Map();
   if (!['dashboard', 'statusCalendar', 'analytics'].includes(mode)) return;
   try {
     if (mode === 'analytics') {
@@ -501,6 +558,23 @@ async function loadCohostMoney(ctx, accountId, mode) {
         WHERE l.host_id = ${ctx.hostId} AND (s.cohost_id = ${ctx.cohostId} OR s.cohost_guest_id = ${accountId})
         GROUP BY 1, 2, 3, 4, 5`;
       rows.forEach(r => ctx.shareByBucket.set(shareBucketKey(r), Number(r.share) || 0));
+      // The part of it already sent to this co-host (their own payout row).
+      try {
+        const paid = await sql`
+          SELECT to_char(date_trunc('month', o.created_at), 'YYYY-MM') AS month,
+                 to_char(date_trunc('month', o.arrival), 'YYYY-MM')    AS "stayMonth",
+                 o.listing_id AS "listingId",
+                 CASE WHEN o.arrival <= CURRENT_DATE THEN 'current' ELSE 'upcoming' END AS bucket,
+                 o.status AS status,
+                 COALESCE(SUM(s.amount), 0)::int AS share
+          FROM order_cohost_shares s JOIN orders o ON o.id = s.order_id JOIN listings l ON l.id = o.listing_id
+          WHERE l.host_id = ${ctx.hostId} AND (s.cohost_id = ${ctx.cohostId} OR s.cohost_guest_id = ${accountId})
+            AND (to_jsonb(o)->>'payout_rest_held_at') IS NULL
+            AND EXISTS (SELECT 1 FROM payouts p WHERE p.order_id = o.id AND p.payee_type = 'cohost' AND p.payee_guest_id = ${accountId}
+                          AND p.status = 'sent' AND COALESCE(to_jsonb(p)->>'kind', 'booking') = 'booking')
+          GROUP BY 1, 2, 3, 4, 5`;
+        paid.forEach(r => ctx.sharePaidByBucket.set(shareBucketKey(r), Number(r.share) || 0));
+      } catch (err) { console.error('co-host paid-out shares unavailable (non-fatal):', err.message); }
     } else {
       const rows = await sql`
         SELECT s.order_id, COALESCE(SUM(s.amount), 0)::int AS share
@@ -511,6 +585,10 @@ async function loadCohostMoney(ctx, accountId, mode) {
     }
   } catch (err) { console.error('co-host shares unavailable (non-fatal):', err.message); }
   if (mode !== 'dashboard') return;
+  try {
+    // The co-host's OWN payout for each booking they earn a share from.
+    ctx.payoutByOrder = await loadPayoutRows(sql, [...ctx.shareByOrder.keys()], { payeeGuestId: accountId });
+  } catch (err) { console.error('co-host payouts unavailable (non-fatal):', err.message); }
   try {
     // Same rule as the host's coupon_cost, but only coupons this co-host paid.
     const rows = await sql`
@@ -536,17 +614,36 @@ const COHOST_CALENDAR_BOOKING_KEYS = ['id', 'start_date', 'end_date', 'guest_ema
 const COHOST_TODAY_KEYS = ['orderId', 'guestName', 'guests', 'arrival', 'departure', 'nights', 'listingId', 'listingName',
   'photoUrl', 'guestPhotoUrl', 'checkInTime', 'checkOutTime', 'nightsLeft', 'kind', 'startTime', 'petTypes',
   'serviceAnimals', 'youngLitter', 'daysAway'];
+// A co-host WITHOUT bookings access still sees the bookings they earn a
+// share from (owner, 9 Nov 2026) — but only the stay itself: the listing,
+// the dates, the nights, the booking's status and the guest's FIRST name
+// (added in trimForCohost). No guest email, phone, photo, party size,
+// animals, deposit or messages: those stay behind 'bookings' / 'messages'.
+// can_cancel: every co-host may cancel (ALWAYS_PERMISSIONS 'cancel').
+const COHOST_SHARE_BOOKING_KEYS = ['id', 'suite_name', 'listing_id', 'arrival', 'departure', 'nights', 'status',
+  'created_at', 'cancelled_at', 'cancelled_by', 'can_cancel'];
+const COHOST_SHARE_TODAY_KEYS = ['orderId', 'arrival', 'departure', 'nights', 'listingId', 'listingName',
+  'photoUrl', 'checkInTime', 'checkOutTime', 'nightsLeft', 'kind', 'startTime', 'daysAway'];
+const firstNameOnly = (name) => String(name || '').trim().split(/\s+/)[0] || 'Guest';
 
 function trimForCohost(ctx, mode, body) {
   if (!body || typeof body !== 'object' || body.error) return stripHostMoney(body);
   const inScope = (id) => cohostHasListing(ctx, id);
   const shareOf = (orderId) => (ctx.shareByOrder && ctx.shareByOrder.get(Number(orderId))) || 0;
+  // Where the co-host's OWN share stands (never the host's payout row);
+  // nothing when they have no share in the booking.
+  const myPayout = (b) => shareOf(b.id) > 0
+    ? payoutStatusFor(b, ctx.payoutByOrder && ctx.payoutByOrder.get(Number(b.id)))
+    : payoutStatusFor({ status: 'none' }, null);
+  const myPayoutToday = (r) => shareOf(r.orderId) > 0
+    ? camelPayout(payoutStatusFor({ status: 'paid', payout_day: r.payoutDay, payout_held: r.payoutHeld }, ctx.payoutByOrder && ctx.payoutByOrder.get(Number(r.orderId))))
+    : {};
   if (mode === 'dashboard') {
     const seesBookings = cohostCan(ctx, 'bookings');
     // What these listings earn (booking total, the host's payout), for the
     // co-host's own listings only — every co-host sees it.
     const seesHostMoney = cohostCan(ctx, 'host_earnings');
-    const HOST_FIGURES = ['total', 'subtotal', 'gst', 'payout_amount', 'commission_amount', 'commission_rate', 'not_earned', 'guest_service_fee'];
+    const HOST_FIGURES = ['total', 'subtotal', 'gst', 'payout_amount', 'commission_amount', 'commission_rate', 'not_earned', 'guest_service_fee', 'free_cancel_fee', 'free_cancel_commission'];
     const out = {
       // Every co-host gets the Manage page, through their own link: it
       // stops working when they are removed and cannot rename the listing.
@@ -556,14 +653,18 @@ function trimForCohost(ctx, mode, body) {
       // coupons they paid for — never the host's figures.
       bookings: seesBookings ? (body.bookings || []).filter(b => inScope(b.listing_id))
         .map(b => ({ ...pickKeys(b, COHOST_BOOKING_KEYS), ...(seesHostMoney ? pickKeys(b, HOST_FIGURES) : {}), cohost_share: shareOf(b.id),
-                     my_coupon_cost: (ctx.couponByOrder && ctx.couponByOrder.get(Number(b.id))) || 0 })) : [],
+                     my_coupon_cost: (ctx.couponByOrder && ctx.couponByOrder.get(Number(b.id))) || 0, ...myPayout(b) }))
+        // No bookings access: only the bookings this co-host earns a share
+        // from, cut to COHOST_SHARE_BOOKING_KEYS (shareOnly).
+        : (body.bookings || []).filter(b => inScope(b.listing_id) && shareOf(b.id) > 0)
+        .map(b => ({ ...pickKeys(b, COHOST_SHARE_BOOKING_KEYS), guest_name: firstNameOnly(b.guest_name),
+                     ...(seesHostMoney ? pickKeys(b, HOST_FIGURES) : {}), cohost_share: shareOf(b.id),
+                     my_coupon_cost: (ctx.couponByOrder && ctx.couponByOrder.get(Number(b.id))) || 0, shareOnly: true, ...myPayout(b) })),
       // Which period was fetched, so the co-host's page knows what it is
       // holding. The counts are deliberately NOT carried over: they
       // describe the host's whole list, and this one has been cut to
       // the listings this co-host works on.
-      bookingsMeta: seesBookings && body.bookingsMeta
-        ? { period: body.bookingsMeta.period, truncated: false }
-        : { period: (body.bookingsMeta && body.bookingsMeta.period) || null, truncated: false },
+      bookingsMeta: { period: (body.bookingsMeta && body.bookingsMeta.period) || null, truncated: false },
       verification: null, // never shown to a co-host
       complianceNotices: (body.complianceNotices || []).filter(n => inScope(n.listingId))
         .map(n => ({ ...n, manageLink: cohostManageLink(n.listingId, ctx.cohostId) })),
@@ -573,9 +674,17 @@ function trimForCohost(ctx, mode, body) {
     if (seesBookings && body.today) {
       for (const k of Object.keys(out.today)) {
         out.today[k] = (body.today[k] || []).filter(r => inScope(r.listingId))
-          .map(r => ({ ...pickKeys(r, COHOST_TODAY_KEYS), share: shareOf(r.orderId) }));
+          .map(r => ({ ...pickKeys(r, COHOST_TODAY_KEYS), share: shareOf(r.orderId), ...myPayoutToday(r) }));
+      }
+    } else if (body.today) {
+      // No bookings access: the stays they earn a share from, guest's first
+      // name only (shareOnly: the page opens no messages for these).
+      for (const k of Object.keys(out.today)) {
+        out.today[k] = (body.today[k] || []).filter(r => inScope(r.listingId) && shareOf(r.orderId) > 0)
+          .map(r => ({ ...pickKeys(r, COHOST_SHARE_TODAY_KEYS), guestName: r.guestFirstName || 'Guest', share: shareOf(r.orderId), shareOnly: true, ...myPayoutToday(r) }));
       }
     }
+    if (body.today && Number(body.today.upcomingDays)) out.today.upcomingDays = Number(body.today.upcomingDays);
     const keep = new Set(['cohost_share', 'verification'].concat(seesHostMoney ? HOST_FIGURES : []));
     return stripHostMoney(out, keep);
   }
@@ -587,6 +696,8 @@ function trimForCohost(ctx, mode, body) {
       rows: (body.rows || []).filter(r => inScope(r.listingId)).map(r => ({
         ...pickKeys(r, ['month', 'stayMonth', 'listingId', 'listingName', 'listingType', 'bucket', 'status', 'nights', 'bookings']),
         share: (ctx.shareByBucket && ctx.shareByBucket.get(shareBucketKey(r))) || 0,
+        // The part of that share already sent to them.
+        paidOut: (ctx.sharePaidByBucket && ctx.sharePaidByBucket.get(shareBucketKey(r))) || 0,
         // The host's payout in the same bucket (these listings only).
         ...(seesHostMoneyA ? { hostEarned: Number(r.payout) || 0 } : {})
       })),
@@ -765,6 +876,8 @@ async function handleCohostModes(req, res, accountId) {
       const account = String(x.accountNumber || '').replace(/\s+/g, '');
       const ifsc = String(x.ifsc || '').trim().toUpperCase();
       const panName = String(x.panName || '').replace(/\s+/g, ' ').trim().slice(0, 120);
+      // Names in letters only (owner, 9 Nov 2026).
+      { const bad = bankCheck.nameCharsProblem(holder, 'payout name') || bankCheck.nameCharsProblem(panName, 'name on the PAN'); if (bad) { res.status(400).json({ error: bad }); return true; } }
       // Typed twice on the form; a page that sends both must send the same.
       if (x.accountNumberConfirm != null && String(x.accountNumberConfirm).replace(/\s+/g, '') !== account) {
         res.status(400).json({ error: 'The two account numbers do not match. Type them again.' }); return true;
@@ -1931,6 +2044,46 @@ module.exports = async (req, res) => {
         GROUP BY 1, 2, 3, 4, 5, 6, 7
       `;
 
+      // The host's payout is what is left after co-host shares — the same
+      // figure the earnings table shows (payout_amount − cohost_share).
+      // Fail-safe: before the co-host tables exist, no shares.
+      const sharesByBucket = new Map();
+      try {
+        const sh = await sql`
+          SELECT to_char(date_trunc('month', o.created_at), 'YYYY-MM') AS month,
+                 to_char(date_trunc('month', o.arrival), 'YYYY-MM')    AS "stayMonth",
+                 o.listing_id AS "listingId",
+                 CASE WHEN o.arrival <= CURRENT_DATE THEN 'current' ELSE 'upcoming' END AS bucket,
+                 o.status AS status,
+                 COALESCE(SUM(s.amount), 0) AS share
+          FROM order_cohost_shares s JOIN orders o ON o.id = s.order_id JOIN listings l ON l.id = o.listing_id
+          WHERE l.host_id = ${guest.host_id} AND o.created_at >= ${windowStart} AND o.created_at < ${windowEnd}
+          GROUP BY 1, 2, 3, 4, 5`;
+        sh.forEach(r => sharesByBucket.set(shareBucketKey(r), Number(r.share) || 0));
+      } catch (err) { console.error('analytics co-host shares unavailable (non-fatal):', err.message); }
+
+      // The part of the host's payout already SENT (their payout row is
+      // 'sent' and nothing of it is held) — the rest is still coming.
+      // Same figure as above: payout_amount less co-host shares.
+      const paidByBucket = new Map();
+      try {
+        const pd = await sql`
+          SELECT to_char(date_trunc('month', o.created_at), 'YYYY-MM') AS month,
+                 to_char(date_trunc('month', o.arrival), 'YYYY-MM')    AS "stayMonth",
+                 o.listing_id AS "listingId",
+                 CASE WHEN o.arrival <= CURRENT_DATE THEN 'current' ELSE 'upcoming' END AS bucket,
+                 o.status AS status,
+                 COALESCE(SUM(GREATEST(0, COALESCE(o.payout_amount, 0)
+                   - COALESCE((SELECT SUM(s.amount) FROM order_cohost_shares s WHERE s.order_id = o.id), 0))), 0) AS paid
+          FROM orders o JOIN listings l ON l.id = o.listing_id
+          WHERE l.host_id = ${guest.host_id} AND o.created_at >= ${windowStart} AND o.created_at < ${windowEnd}
+            AND (to_jsonb(o)->>'payout_rest_held_at') IS NULL
+            AND EXISTS (SELECT 1 FROM payouts p WHERE p.order_id = o.id AND p.payee_type = 'host' AND p.host_id = ${guest.host_id}
+                          AND p.status = 'sent' AND COALESCE(to_jsonb(p)->>'kind', 'booking') = 'booking')
+          GROUP BY 1, 2, 3, 4, 5`;
+        pd.forEach(r => paidByBucket.set(shareBucketKey(r), Number(r.paid) || 0));
+      } catch (err) { console.error('analytics paid-out unavailable (non-fatal):', err.message); }
+
       // Every approved listing, including ones with no bookings at all —
       // the filter dropdown should offer them, and "this listing earned
       // nothing this year" is a real answer a host needs to see.
@@ -1951,7 +2104,9 @@ module.exports = async (req, res) => {
           bucket: r.bucket,
           status: r.status,
           gross: Number(r.gross) || 0,
-          payout: Number(r.payout) || 0,
+          payout: Math.max(0, (Number(r.payout) || 0) - (sharesByBucket.get(shareBucketKey(r)) || 0)),
+          // Of that payout, what has been sent (the rest is coming).
+          paidOut: paidByBucket.get(shareBucketKey(r)) || 0,
           commission: Number(r.commission) || 0,
           nights: Number(r.nights) || 0,
           bookings: Number(r.bookings) || 0
@@ -2087,6 +2242,7 @@ module.exports = async (req, res) => {
                 AND o.arrival < ${endStr}::date AND o.departure > ${startStr}::date
             `;
             const bookedRanges = bookedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
+            await require('./_gifts').decorateHostRows(sql, bookedRanges);   // a gift: the guest staying, no phone until accepted
             const blockedRangesRaw = await sql`
               SELECT b.start_date, b.end_date, b.source_feed_id, f.name AS feed_name FROM listing_blocked_dates b
               LEFT JOIN calendar_feeds f ON f.id = b.source_feed_id
@@ -2132,6 +2288,7 @@ module.exports = async (req, res) => {
               AND o.arrival < ${endStr}::date AND o.departure > ${startStr}::date
           `;
           const bookedRanges = bookedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
+          await require('./_gifts').decorateHostRows(sql, bookedRanges);   // a gift: the guest staying, no phone until accepted
           const blockedRangesRaw = await sql`
             SELECT b.start_date, b.end_date, b.source_feed_id, f.name AS feed_name FROM listing_blocked_dates b
             LEFT JOIN calendar_feeds f ON f.id = b.source_feed_id
@@ -3024,6 +3181,10 @@ module.exports = async (req, res) => {
     // A payout not yet sent is cancelled with the booking.
     try { await sql`UPDATE payouts SET status = 'cancelled' WHERE order_id = ANY(${cancelledIds}) AND status = 'due'`; }
     catch (err) { /* payouts table not created yet */ }
+    // The free cancellation add-on went back to the guest with everything
+    // else (the host cancelled): recorded for Accounts (_pricing.js).
+    try { await sql`UPDATE orders SET free_cancel_refunded = true WHERE id = ANY(${cancelledIds}) AND free_cancel_fee > 0`; }
+    catch (err) { /* before migrations/2026-11-10-01-free-cancellation.sql: no add-on */ }
 
     await restoreCouponValue(order, cancelledIds, paidMap);
     // The service fee becomes the guest's credit — or, within 48 hours (or
@@ -3311,7 +3472,7 @@ module.exports = async (req, res) => {
     }
   }
 
-  // ---- Guest cancellation requests (hazard / life-threatening / emergency) ----
+  // ---- Guest cancellation requests (change of plans; a natural disaster is shown, Aerva decides) ----
   // GET ?cancellationRequests=1 → open requests on my listings.
   // POST { respondCancellationRequest: { requestId, accept, note } }
   //   accept → full refund (booking and deposit), no coupon, no charge to
@@ -3335,20 +3496,36 @@ module.exports = async (req, res) => {
       if (cohostActor) rows = rows.filter(r => cohostHasListing(cohostActor.ctx, r.listing_id));
       for (const r of rows) {
         const opt = hostOption(r);
+        // A natural disaster: information only — what Aerva would hold as credit.
+        if (opt.type === 'disaster') { r.disaster = await require('./_cancellations').disasterOutcome(sql, r.order_id); r.guest_gets_back = null; continue; }
         r.guest_gets_back = opt.type === 'choose' ? null : await guestGetsBackFor(sql, r.order_id, opt.percent);
       }
       return res.status(200).json({ requests: rows.map(r => ({ id: r.id, orderId: r.order_id, listing: r.suite_name, arrival: r.arrival, departure: r.departure,
         total: Number(r.total), guestName: r.guest_name, details: r.details || '', createdAt: r.created_at,
-        reason: REQUEST_REASONS[r.reason_code] || (r.reason_code === 'late_cancellation' ? 'Cancellation' : r.reason_code),
+        reason: REASON_LABELS[r.reason_code] || (r.reason_code === 'late_cancellation' ? 'Cancellation' : r.reason_code),
         daysBefore: r.days_before,
         // Only this booking's own choice — never the other brackets.
-        option: hostOption(r), guestGetsBack: r.guest_gets_back })) });
+        option: hostOption(r), guestGetsBack: r.guest_gets_back, disaster: r.disaster || null, aervaDecides: hostOption(r).type === 'disaster' })) });
     } catch (err) {
       console.error('cancellationRequests failed:', err);
       return res.status(500).json({ error: 'Could not load cancellation requests right now.' });
     }
   }
-  // GET ?emergencyActions=1 → emergency cancellations waiting for this host, with Aerva's reminders (host dashboard "Action needed").
+  // GET ?checkinPromise=1 → what this host owes Aerva, payouts on hold and
+  // why, reports on arrival open on their listings (_checkin-promise.js).
+  // The host only (a co-host is refused by cohostGate).
+  if (req.method === 'GET' && (req.query || {}).checkinPromise === '1') {
+    try {
+      const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      if (!g || !g.host_id) return res.status(200).json({ owed: 0, owedItems: [], held: [], reports: [], blocked: [] });
+      return res.status(200).json(await require('./_checkin-promise').hostView(sql, g.host_id));
+    } catch (err) {
+      console.error('checkinPromise (host) failed:', err);
+      return res.status(500).json({ error: 'Could not load this right now.' });
+    }
+  }
+  // GET ?emergencyActions=1 → the host dashboard: natural-disaster requests Aerva is deciding (information only),
+  // and old emergency requests still waiting for this host, with Aerva's reminders.
   if (req.method === 'GET' && (req.query || {}).emergencyActions === '1') {
     try {
       const g = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
@@ -3368,6 +3545,8 @@ module.exports = async (req, res) => {
       const note = String(req.body.respondCancellationRequest.note || '').trim().slice(0, 500);
       const rq = (await sql`SELECT * FROM cancellation_requests WHERE id = ${Number(requestId) || 0}`)[0];
       if (!rq) return res.status(404).json({ error: 'Request not found.' });
+      // A natural disaster is Aerva's to decide (owner, 10 Nov 2026): the host cannot accept or decline it.
+      if (hostOption(rq).type === 'disaster') return res.status(409).json({ error: 'Aerva checks the proof and decides a natural-disaster request; there is nothing to accept or decline. You can add anything Aerva should know in the booking’s Messages.' });
       if (rq.status !== 'pending' || rq.decided_at) return res.status(409).json({ error: 'This request has already been answered.' });
       const loaded = await loadCancellableOrder(rq.order_id, false); // requests: no 48-hour cut-off
       if (loaded.error) return res.status(loaded.status).json({ error: loaded.error });
@@ -3381,33 +3560,20 @@ module.exports = async (req, res) => {
                   WHERE id = ${rq.id} AND status = 'pending'`;
         claimedId = null;
         // An emergency request Aerva was chasing: both sides' support requests close with the answer.
-        if (option.type === 'emergency' || option.type === 'emergency_late') {
+        if (option.type === 'emergency') {
           await require('./_emergency-escalation').closeEscalation(sql, rq.id, status === 'accepted'
-            ? { guestText: `Your host accepted your emergency cancellation. ${Number(pct) === 100 ? 'The booking price, GST and any deposit are refunded in full' : `${pct}% of the booking price and its GST, and any deposit in full, are refunded`}; Aerva’s service fee is not refunded.`, hostText: 'Thank you — you accepted the cancellation. The guest has been refunded.' }
+            ? { guestText: 'Your host accepted your emergency cancellation. The booking price, GST and any deposit are refunded in full; Aerva’s service fee is not refunded.', hostText: 'Thank you — you accepted the cancellation. The guest has been refunded.' }
             : { guestText: `Your host declined your emergency cancellation${note ? ': “' + note + '”' : ''}. The booking stands and there is no refund. If you need help, reply here.`, hostText: 'You declined the cancellation. The booking stands.' });
         }
       };
 
-      if (option.type === 'emergency_late') {
-        // Asked for with less than a day to check-in: the host chooses —
-        // refund in full, keep 25% or keep 50% — or declines. The deposit
-        // always comes back; Aerva's service fee is kept; Aerva's
-        // commission is taken only on what the host keeps.
-        if (accept === true) {
-          const pct = Math.round(Number(req.body.respondCancellationRequest.refundPercent == null ? 100 : req.body.respondCancellationRequest.refundPercent));
-          if (!option.choices.includes(pct)) { await unclaimRequest(sql, rq.id); claimedId = null; return res.status(400).json({ error: 'Choose: refund in full, keep 25% or keep 50%.' }); }
-          await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct, by: 'emergency', note });
-          await decide('accepted', pct);
-          await require('./_cancellations').emergencyApproved(sql, rq.id);
-          return res.status(200).json({ success: true, accepted: true, refundPercent: pct });
-        }
-      } else if (option.type === 'emergency') {
-        // The booking price, GST and deposit come back in full. Aerva's
-        // service fee is kept, as in every cancellation a guest asks for.
+      if (option.type === 'emergency') {
+        // An old request with a removed reason (before 10 Nov 2026): the
+        // booking price, GST and deposit come back in full; Aerva's service
+        // fee is kept (no fee credit any more).
         if (accept === true) {
           await executePolicyCancellation(sql, razorpay, { orderId: rq.order_id, pct: 100, by: 'emergency' });
           await decide('accepted', 100);
-          await require('./_cancellations').emergencyApproved(sql, rq.id);
           return res.status(200).json({ success: true, accepted: true, refundPercent: 100 });
         }
       } else if (option.type === 'fixed') {
@@ -3660,6 +3826,12 @@ module.exports = async (req, res) => {
       let panChanged = false;
       let panNameTypedShort = null;      // the name as typed, when the PAN card adds a middle name
       let cleanPanName = typeof panName === 'string' ? panName.replace(/\s+/g, ' ').trim().slice(0, 120) : '';
+      // Names in letters only (owner, 9 Nov 2026: a PROD test had "Tanish1 Jain").
+      {
+        const bad = bankCheck.nameCharsProblem(cleanPanName, 'name on the PAN')
+          || (bankAccountNumber && typeof bankAccountHolderName === 'string' ? bankCheck.nameCharsProblem(bankAccountHolderName, 'payout name') : null);
+        if (bad) return res.status(400).json({ error: bad });
+      }
 
       // ---- Name as printed on the PAN, for a PAN already on file without it ----
       // (PANs entered before this was asked.) Once only; checked against the
@@ -3871,7 +4043,9 @@ module.exports = async (req, res) => {
           await sql`
             UPDATE hosts SET
               name = COALESCE(${safeName ?? null}, name),
-              phone = COALESCE(${safePhone ?? null}, phone)
+              phone = COALESCE(${safePhone ?? null}, phone),
+              -- a different number must be verified again
+              phone_verified = CASE WHEN ${safePhone ?? null}::text IS NOT NULL AND ${safePhone ?? null}::text IS DISTINCT FROM phone THEN FALSE ELSE phone_verified END
             WHERE id = ${guest.host_id}
           `;
           await logAudit(sql, {
@@ -3936,7 +4110,13 @@ module.exports = async (req, res) => {
              experience_instructions, experience_special_instructions,
              experience_available_from, experience_available_until,
              -- read by "Clone listing" (aerva.js) to copy the pet policy and deposit
-             pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit
+             pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
+             -- resuming a draft keeps these (_listing-special.js); read this
+             -- way so the dashboard loads before the migration
+             COALESCE(to_jsonb(listings)->'special_highlights', '[]'::jsonb) AS special_highlights,
+             to_jsonb(listings)->>'special_story' AS special_story,
+             COALESCE(to_jsonb(listings)->'host_recommendations', '[]'::jsonb) AS host_recommendations,
+             COALESCE(to_jsonb(listings)->'suggested_experience_ids', '[]'::jsonb) AS suggested_experience_ids
       FROM listings
       WHERE host_id = ${guest.host_id}
         -- a removed listing is gone for good from the host's own list
@@ -3987,6 +4167,10 @@ module.exports = async (req, res) => {
       SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.nights, o.guests,
              o.subtotal, o.discount_amount, o.gst,
              o.commission_rate, o.commission_amount, o.payout_amount,
+             -- The free cancellation add-on the guest bought (_pricing.js):
+             -- inside commission_amount / payout_amount; shown on its own.
+             COALESCE((to_jsonb(o)->>'free_cancel_fee')::int, 0) AS free_cancel_fee,
+             COALESCE((to_jsonb(o)->>'free_cancel_commission')::int, 0) AS free_cancel_commission,
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
              -- the host may still raise a concern (same rule as raiseDispute)
              (o.deposit_release_at IS NOT NULL
@@ -4011,6 +4195,8 @@ module.exports = async (req, res) => {
       ORDER BY o.created_at DESC
       LIMIT ${bookingsLimit}
     `;
+    // A gift: the guest staying, marked "Gift — booked by …" (_gifts.js).
+    await require('./_gifts').decorateHostRows(sql, bookings, { phoneKey: '__none' });
     // Each booking's co-host shares, so the host sees what is theirs after
     // co-hosts. Separate and fail-safe: before migration_cohost_commission.sql
     // has run there is no shares table, and bookings must still load.
@@ -4119,6 +4305,25 @@ module.exports = async (req, res) => {
       delete b.listing_timezone; delete b.listing_check_in_time;
     });
 
+    // Where each booking's payout stands (payoutStatusFor): due the day
+    // after check-in until the payout row says it was sent. Fail-safe:
+    // without the payouts table every confirmed booking reads as due.
+    try {
+      const ids = bookings.map(b => b.id);
+      const due = await loadPayoutDue(sql, ids);
+      let rows = new Map();
+      try { rows = await loadPayoutRows(sql, ids, { hostId: guest.host_id }); }
+      catch (e) { console.error('payout rows unavailable (non-fatal):', e.message); }
+      bookings.forEach(b => {
+        const d = due.get(Number(b.id)) || {};
+        b.payout_day = d.dueOn || null;
+        b.payout_held = !!d.held;
+        Object.assign(b, payoutStatusFor(b, rows.get(Number(b.id))));
+      });
+    } catch (err) {
+      console.error('payout status unavailable (non-fatal):', err.message);
+    }
+
     // Identity & address proof: an ID verified on the account (as a guest,
     // before hosting, or here) counts for hosting too (_id-verify.js).
     try {
@@ -4161,6 +4366,7 @@ module.exports = async (req, res) => {
     const verification = h ? {
       hostName: h.name,
       hostPhone: h.phone,
+      phoneVerified: !!(h.j && h.j.phone_verified),
       aadhaarStatus: h.aadhaar_status,
       aadhaarRejectionReason: h.aadhaar_rejection_reason,
       aadhaarSubmitted: !!h.aadhaar_status && h.aadhaar_status !== 'not_submitted',
@@ -4233,6 +4439,8 @@ module.exports = async (req, res) => {
                       THEN l.photos->>0 ELSE l.photos->0->>'url' END
                ) AS cover_photo_url,
                o.pet_types, o.service_animal_types, o.young_litter_count,
+               to_char(o.arrival + 1, 'YYYY-MM-DD') AS payout_due_on,
+               (to_jsonb(o)->>'payout_rest_held_at') IS NOT NULL AS payout_held,
                (o.arrival = local.today) AS arriving,
                (o.departure = local.today) AS departing,
                (o.departure - local.today) AS nights_left
@@ -4246,9 +4454,13 @@ module.exports = async (req, res) => {
           AND o.arrival <= local.today AND o.departure >= local.today
         ORDER BY o.arrival ASC, o.id ASC
       `;
+      await require('./_gifts').decorateHostRows(sql, rows, { phoneKey: '__none' });
       const shape = (r) => ({
         orderId: r.id,
         guestName: String(r.guest_name || '').trim() || (r.guest_email || 'Guest').split('@')[0],
+        // For a co-host who sees only the stay (trimForCohost): never
+        // built from the email address.
+        guestFirstName: firstNameOnly(r.guest_name),
         guests: Number(r.guests) || 1,
         // Enough for the panel that opens when a host taps the row: the
         // dates, the stay, and what they paid out. No guest email or
@@ -4257,6 +4469,9 @@ module.exports = async (req, res) => {
         departure: r.departure,
         nights: Number(r.nights) || null,
         payout: Number(r.payout_amount) || null,
+        // When it is paid out (payoutStatusFor; status added below).
+        payoutDay: r.payout_due_on || null,
+        payoutHeld: !!r.payout_held,
         listingId: r.listing_id,
         listingName: r.suite_name,
         photoUrl: r.cover_photo_url || null,
@@ -4295,6 +4510,7 @@ module.exports = async (req, res) => {
                g.name AS guest_name, g.profile_photo_url, COALESCE(l.listing_type, 'stay') AS listing_type, l.experience_start_time,
                l.check_in_time, l.check_out_time, o.pet_types, o.service_animal_types, o.young_litter_count,
                COALESCE(NULLIF(btrim(l.cover_photo_url), ''), CASE WHEN jsonb_typeof(l.exterior_photo_urls->0) = 'string' THEN l.exterior_photo_urls->>0 ELSE l.exterior_photo_urls->0->>'url' END) AS cover_photo_url,
+               to_char(o.arrival + 1, 'YYYY-MM-DD') AS payout_due_on, (to_jsonb(o)->>'payout_rest_held_at') IS NOT NULL AS payout_held,
                false AS arriving, false AS departing, (o.departure - o.arrival) AS nights_left, (o.arrival - local.today) AS days_away
         FROM orders o JOIN listings l ON l.id = o.listing_id LEFT JOIN guests g ON g.id = o.guest_id
         CROSS JOIN LATERAL (SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS today) local
@@ -4302,6 +4518,14 @@ module.exports = async (req, res) => {
         ORDER BY o.arrival ASC, o.id ASC LIMIT 60`;
       today.upcoming = next.map(r => ({ ...shape(r), daysAway: Number(r.days_away) || 0 }));
       today.upcomingDays = UPCOMING_DAYS;
+      // The host's payout status on each (a co-host gets their own instead).
+      try {
+        const lists = ['arrivals', 'departures', 'staying', 'experiences', 'upcoming'];
+        const ids = [...new Set(lists.flatMap(k => today[k].map(r => r.orderId)))];
+        const prow = await loadPayoutRows(sql, ids, { hostId: guest.host_id });
+        lists.forEach(k => today[k].forEach(r => Object.assign(r, camelPayout(payoutStatusFor(
+          { status: 'paid', payout_day: r.payoutDay, payout_held: r.payoutHeld }, prow.get(Number(r.orderId)))))));
+      } catch (e) { console.error('today payout status unavailable (non-fatal):', e.message); }
     } catch (err) {
       console.error('today view failed (non-fatal):', err);
     }

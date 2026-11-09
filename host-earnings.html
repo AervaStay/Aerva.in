@@ -38,6 +38,14 @@
   .status-paid{background:#e3f0e5; color:#3a7d44;}
   .status-refunded{background:#f5ecd7; color:#8a6c39;}
   .status-cancelled{background:#f5e0da; color:#a3402f;}
+  /* Where a booking's payout stands (host-listings.js payoutStatusFor). */
+  .payout-badge{display:inline-block; font-size:11px; padding:3px 9px; border-radius:3px; letter-spacing:0.02em; white-space:nowrap;}
+  .payout-due{background:#f5ecd7; color:#8a6c39;}
+  .payout-sent{background:#e3f0e5; color:#3a7d44;}
+  .payout-on_hold{background:#ece6f5; color:#5b4a8a;}
+  .payout-failed{background:#f5e0da; color:#a3402f;}
+  .payout-cancelled{background:#e6e6e6; color:#555;}
+  .payout-note{display:block; font-size:11.5px; opacity:0.6; margin-top:4px;}
   .manage-link{font-size:12.5px; color:#8a6c39; text-decoration:underline; white-space:nowrap;}
   .empty{text-align:center; opacity:0.6; padding:60px 0;}
   .loading{text-align:center; opacity:0.6; padding:60px 0;}
@@ -242,7 +250,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
-<script src="aerva-cohost.js"></script>
+<script src="aerva-cohost.js?v=2026-11-09a"></script>
 </head>
 <body>
 
@@ -292,6 +300,43 @@
 
   function statusBadgeHtml(status){
     return `<span class="status-badge status-${status}">${status}</span>`;
+  }
+
+  // Where this booking's payout stands (owner, 9 Nov 2026) — for a host
+  // their payout, for a co-host their own share (the server works it out:
+  // host-listings.js payoutStatusFor). The guest has paid for every
+  // confirmed booking; the payout goes the day after check-in.
+  //   Payout due <date> · Payout sent <date> (bank ref) · On hold · Failed · Cancelled
+  function payoutDay(v){
+    const d = new Date(String(v || '').slice(0, 10) + 'T00:00:00Z');
+    return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' });
+  }
+  function payoutStatusHtml(b){
+    const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&':'&amp;', '<':'&lt;', '>':'&gt;', '"':'&quot;', "'":'&#39;' }[c]));
+    const st = b.payout_status;
+    // An older server, or a co-host with no share in this booking.
+    if(!st) return statusBadgeHtml(b.status);
+    const label = st === 'sent' ? 'Payout sent' + (b.payout_sent_on ? ' ' + payoutDay(b.payout_sent_on) : '')
+      : st === 'due' ? 'Payout due' + (b.payout_due_on ? ' ' + payoutDay(b.payout_due_on) : '')
+      : st === 'on_hold' ? 'On hold'
+      : st === 'failed' ? 'Failed'
+      : 'Cancelled';
+    const notes = [];
+    if(b.status === 'paid') notes.push('Guest paid');
+    if(st === 'sent' && b.payout_reference) notes.push('Ref ' + b.payout_reference);
+    if(st === 'on_hold') notes.push('Until the guest’s request is settled');
+    if(st === 'failed') notes.push('The bank returned it; Aerva will retry');
+    return `<span class="payout-badge payout-${esc(st)}">${esc(label)}</span>`
+      + notes.map(n => `<small class="payout-note">${esc(n)}</small>`).join('');
+  }
+  // Paid out vs still coming, from rows already worked out above.
+  function payoutSplit(bookings, amountOf){
+    return bookings.reduce((a, b) => {
+      const v = amountOf(b);
+      if(b.payout_status === 'sent') a.sent += v;
+      else if(b.payout_status === 'due' || b.payout_status === 'on_hold' || b.payout_status === 'failed') a.coming += v;
+      return a;
+    }, { sent: 0, coming: 0 });
   }
 
   // The earnings block below calls loadListings() after a dispute,
@@ -394,7 +439,8 @@
   // quietly included one would be wrong. So they are separate views
   // with their own columns, rather than one table with a filter.
   //
-  //   'earned'    — confirmed bookings. What you were paid.
+  //   'earned'    — confirmed bookings. What you earn, and whether each
+  //                 payout has been sent yet or is still due.
   //   'cancelled' — cancellations and refunds. What fell through, what
   //                 it cost you, and whether the guest's money is
   //                 actually back.
@@ -556,7 +602,10 @@
     // sees what the host gets from each booking.
     const HOSTFIG = IS_COHOST && bookings.some(b => b.payout_amount !== undefined);
     const rows = bookings.map(b => {
-      const guestPaidForStay = (Number(b.subtotal) || 0) + (Number(b.gst) || 0);
+      // The free cancellation add-on the guest bought is the host's (less
+      // Aerva's commission, inside commission_amount) — shown in what they paid.
+      const freeCancelFee = Number(b.free_cancel_fee) || 0;
+      const guestPaidForStay = (Number(b.subtotal) || 0) + (Number(b.gst) || 0) + freeCancelFee;
       // Dates arrive as ISO strings; only the YYYY-MM-DD part is the stay
       // date. Read as a local date so no timezone can shift it a day.
       const ymdLocal = (v) => new Date(String(v || '').slice(0, 10) + 'T00:00:00');
@@ -713,7 +762,7 @@
           ` : ''}
           ${HOSTFIG && !cancelled ? `<td data-label="Host’s payout" class="num">${b.payout_amount !== undefined ? fmt(Math.max(0, (Number(b.payout_amount) || 0) - myShare)) : '—'}</td>` : ''}
           <td data-label="Your share" class="num payout-value">${myShare > 0 ? fmt(myShare) : '—'}</td>
-          <td data-label="Status">${statusBadgeHtml(b.status)}</td>
+          <td data-label="Payout">${payoutStatusHtml(b)}</td>
           <td data-label="" class="${detailHtml.trim() ? '' : 'is-blank'}">${detailHtml.trim()
             ? `<button type="button" class="earn-more" data-earn-toggle="${b.id}" aria-expanded="${isOpen}">${isOpen ? 'Hide' : 'Details'}</button>`
             : ''}</td>
@@ -735,19 +784,19 @@
           ${cancelled ? `
           <td data-label="Cancelled" class="earn-when">${b.cancelled_at ? new Date(b.cancelled_at).toLocaleDateString('en-IN', { month:'short', day:'numeric', year:'numeric' }) : '—'}
             <small>${b.cancelled_by === 'guest' ? 'by the guest' : b.cancelled_by === 'host' ? 'by you' : ''}</small>
-            ${b.cancelled_by === 'guest' && myPayout > 0 ? `<small>you still get ${fmt(myPayout)}</small>` : ''}</td>
+            ${b.cancelled_by === 'guest' && myPayout > 0 ? `<small>you still get ${fmt(myPayout)}${freeCancelFee > 0 ? ' (incl. the free cancellation add-on)' : ''}</small>` : ''}</td>
           <td data-label="Refund to guest" class="num">${earnRefundText(b)}</td>
           <td data-label="Cost to you" class="num">${Number(b.coupon_cost) > 0
             ? `<span class="earn-cost">− ${fmt(b.coupon_cost)}</span><small style="display:block; opacity:0.6;">guest coupon</small>`
             : '—'}</td>
           <td data-label="Not earned" class="num earn-lost">${fmt(notEarned)}</td>
           ` : `
-          <td data-label="Guest paid" class="num">${fmt(guestPaidForStay)}</td>
+          <td data-label="Guest paid" class="num">${fmt(guestPaidForStay)}${freeCancelFee > 0 ? `<small style="display:block; opacity:0.6;">incl. ${fmt(freeCancelFee)} free cancellation</small>` : ''}</td>
           <td data-label="Commission" class="num">− ${fmt(Number(b.commission_amount) || 0)}${Number.isFinite(commissionRate) && b.commission_rate !== null && b.commission_rate !== '' ? `<small style="display:block; opacity:0.5;">${commissionRate}%</small>` : ''}</td>
           <td data-label="Co-host" class="num">${Number(b.cohost_share) > 0 ? '− ' + fmt(b.cohost_share) : '—'}</td>
           <td data-label="Your payout" class="num payout-value">${fmt(myPayout)}</td>
           `}
-          <td data-label="Status">${statusBadgeHtml(b.status)}</td>
+          <td data-label="Payout">${payoutStatusHtml(b)}</td>
           <td data-label="" class="${detailHtml.trim() ? '' : 'is-blank'}">${detailHtml.trim()
             ? `<button type="button" class="earn-more" data-earn-toggle="${b.id}" aria-expanded="${isOpen}">${isOpen ? 'Hide' : 'Details'}</button>`
             : ''}</td>
@@ -785,6 +834,10 @@
       ? `Showing <b>${bookings.length} cancelled or refunded booking${bookings.length===1?'':'s'}</b> from <b>${anEsc(earnScopeLabel())}</b>${filterNote}.`
         + (anyRefundProblem ? ' <b class="earn-cost">A refund failed — please write to hello@aerva.in.</b>' : '')
       : `Showing <b>${bookings.length} booking${bookings.length===1?'':'s'}</b> paid for in <b>${anEsc(earnScopeLabel())}</b>${filterNote}.`
+        + (bookings.some(b => b.payout_status)
+          ? (() => { const sp = payoutSplit(bookings, b => IS_COHOST ? (Number(b.cohost_share) || 0) : Math.max(0, (Number(b.payout_amount) || 0) - (Number(b.cohost_share) || 0)));
+              return ` ${IS_COHOST ? 'Your share' : 'Your payout'}: <b>${fmt(sp.sent)} paid out</b>, <b>${fmt(sp.coming)} coming</b>.`; })()
+          : '')
         + (cancelledCount ? ` ${cancelledCount} cancelled or refunded booking${cancelledCount===1?' is':'s are'} under “Cancelled &amp; refunded”.` : '');
 
     // The rolling views ("All time" above all) still work from the most
@@ -798,15 +851,15 @@
       ? (cancelled
         ? `<th>Booking</th><th>Stay</th><th>Cancelled</th>
            <th class="num">Refund to guest</th><th class="num">Cost to you</th>
-           <th class="num">Your share</th><th>Status</th><th></th>`
-        : `<th>Booking</th><th>Stay</th>${HOSTFIG ? '<th class="num">Host’s payout</th>' : ''}<th class="num">Your share</th><th>Status</th><th></th>`)
+           <th class="num">Your share</th><th>Payout</th><th></th>`
+        : `<th>Booking</th><th>Stay</th>${HOSTFIG ? '<th class="num">Host’s payout</th>' : ''}<th class="num">Your share</th><th>Payout</th><th></th>`)
       : cancelled
       ? `<th>Booking</th><th>Stay</th><th>Cancelled</th>
          <th class="num">Refund to guest</th><th class="num">Cost to you</th>
-         <th class="num">Not earned</th><th>Status</th><th></th>`
+         <th class="num">Not earned</th><th>Payout</th><th></th>`
       : `<th>Booking</th><th>Stay</th><th class="num">Guest paid</th>
          <th class="num">Commission</th><th class="num">Co-host</th>
-         <th class="num">Your payout</th><th>Status</th><th></th>`;
+         <th class="num">Your payout</th><th>Payout</th><th></th>`;
 
     const foot = IS_COHOST
       ? `<td class="foot-label" data-label="">${bookings.length} booking${bookings.length===1?'':'s'}</td>
@@ -1013,11 +1066,10 @@
   // nothing else on this page loads a third-party script, and an SVG
   // with a viewBox and no fixed width scales itself on a phone.
 
-  // Two buckets, not three. The host is paid in full at booking time, so
-  // every rupee here has already landed — what differs is whether the
-  // STAY has been delivered yet. 'Upcoming' is therefore revenue already
-  // banked against nights still owed, which is the forecast a host cares
-  // about, not money still to arrive.
+  // Two buckets, not three: whether the STAY has been delivered yet. The
+  // money is a separate question — the payout goes the day after check-in,
+  // so the totals also split what has been paid out (sent) from what is
+  // still coming (rows' paidOut, from host-listings.js ?analytics=1).
   const AN_BUCKETS = [
     { key:'current',  label:'Stays delivered', color:'#3a7d44' },
     { key:'upcoming', label:'Still to deliver', color:'#c2b49a' }
@@ -1099,7 +1151,7 @@
     const slots = [];
     for(let m = 1; m <= 12; m++){
       slots.push({ month: year + '-' + String(m).padStart(2,'0'),
-                   current:0, upcoming:0, total:0, payout:0, bookings:0, nights:0 });
+                   current:0, upcoming:0, total:0, payout:0, bookings:0, nights:0, paidOut:0, coming:0 });
     }
     const byKey = {};
     slots.forEach(s => { byKey[s.month] = s; });
@@ -1114,19 +1166,29 @@
       s.payout += r.payout;
       s.bookings += r.bookings;
       s.nights += r.nights;
+      anAddPaid(s, r);
     });
     return slots;
   }
 
   function anYearTotals(year){
-    const t = { current:0, upcoming:0, total:0, payout:0, bookings:0, nights:0 };
+    const t = { current:0, upcoming:0, total:0, payout:0, bookings:0, nights:0, paidOut:0, coming:0 };
     anRows().forEach(r => {
       if(r.month.slice(0,4) !== String(year)) return;
       const v = anMetric === 'bookings' ? r.bookings : r.payout;
       t[r.bucket] += v; t.total += v;
       t.payout += r.payout; t.bookings += r.bookings; t.nights += r.nights;
+      anAddPaid(t, r);
     });
     return t;
+  }
+
+  // Sent vs still to come. Only a confirmed booking's unpaid part is
+  // "coming" — a cancelled one's is not coming at all.
+  function anAddPaid(t, r){
+    const paid = Math.min(Number(r.paidOut) || 0, Number(r.payout) || 0);
+    t.paidOut += paid;
+    if(r.status === 'paid') t.coming += Math.max(0, (Number(r.payout) || 0) - paid);
   }
 
   // Stacked monthly bars, one stack per month, segments in past →
@@ -1234,6 +1296,9 @@
     return `<p class="an-sub">${anEsc(caption)}</p><div class="an-totals">
       ${AN_BUCKETS.map(b => `<div class="an-total"><span class="an-label"><i class="an-swatch" style="background:${b.color}"></i>${b.label}</span><span class="an-value">${anFmt(t[b.key])}</span></div>`).join('')}
       <div class="an-total"><span class="an-label">${anMetric === 'bookings' ? 'Total bookings' : (IS_COHOST ? 'Your share' : 'Total payout')}</span><span class="an-value payout-value">${anFmt(t.total)}</span></div>
+      ${anMetric === 'bookings' ? '' : `
+      <div class="an-total"><span class="an-label">Paid out</span><span class="an-value">${anMoney(t.paidOut)}</span></div>
+      <div class="an-total"><span class="an-label">Coming</span><span class="an-value">${anMoney(t.coming)}</span></div>`}
     </div>`;
   }
 
@@ -1316,16 +1381,17 @@
       const sel = anSelectedMonth && anSelectedMonth.slice(0,4) === String(anYear)
         ? series.find(s => s.month === anSelectedMonth) : null;
       const scopeTotals = sel
-        ? { current:sel.current, upcoming:sel.upcoming, total:sel.total, payout:sel.payout, bookings:sel.bookings, nights:sel.nights }
+        ? { current:sel.current, upcoming:sel.upcoming, total:sel.total, payout:sel.payout, bookings:sel.bookings, nights:sel.nights, paidOut:sel.paidOut, coming:sel.coming }
         : anYearTotals(anYear);
       const statusWord = { paid:'confirmed', all:'', cancelled:'cancelled', refunded:'refunded' }[anStatus];
       const scopeLabel = sel ? `${anMonthLabel(sel.month)} ${anYear}` : String(anYear);
       const caption = `${scopeLabel} — ${scopeTotals.bookings} ${statusWord ? statusWord + ' ' : ''}booking${scopeTotals.bookings===1?'':'s'}`
         + `, ${scopeTotals.nights} night${scopeTotals.nights===1?'':'s'}`
-        + (IS_COHOST ? `, your share ${anMoneyFull(scopeTotals.payout)}` : `, ${anMoneyFull(scopeTotals.payout)} paid out`);
+        + `, ${IS_COHOST ? 'your share' : 'payout'} ${anMoneyFull(scopeTotals.payout)}`
+        + ` (${anMoneyFull(scopeTotals.paidOut)} paid out, ${anMoneyFull(scopeTotals.coming)} coming)`;
       body = anTotalsStrip(scopeTotals, caption)
         + `<div class="an-card"><h4>${anMetric === 'bookings' ? 'Bookings' : AN_MONEY_WORD} by booking month</h4>
-           <p class="an-sub">Counted in the month ${IS_COHOST ? 'the booking was paid' : 'you were paid'}, split by whether the stay has happened yet. Tap a month for its own numbers.${sel?' <button type="button" class="an-clear" id="anClearMonth">Show whole year</button>':''}</p>
+           <p class="an-sub">Counted in the month the guest paid for the booking, split by whether the stay has happened yet. Tap a month for its own numbers.${sel?' <button type="button" class="an-clear" id="anClearMonth">Show whole year</button>':''}</p>
            ${anMonthChart(series)}
            <div class="an-legend">${AN_BUCKETS.map(b=>`<span><i class="an-swatch" style="background:${b.color}"></i>${b.label}</span>`).join('')}</div>
            </div>`
@@ -1402,7 +1468,7 @@
       // A co-host's rows carry their own `share` in place of the host's
       // payout; the charts read it through the same field.
       if(IS_COHOST || d.shareOnly){
-        d.rows = d.rows.map(r => ({ ...r, payout: Number(r.share) || 0, gross: 0, commission: 0 }));
+        d.rows = d.rows.map(r => ({ ...r, payout: Number(r.share) || 0, paidOut: Number(r.paidOut) || 0, gross: 0, commission: 0 }));
       }
       anData = d;
       anYear = d.years[d.years.length - 1];
@@ -1507,7 +1573,9 @@ async function loadCancellationRequests(){
       + list.map(r => `<div style="padding:12px 0; border-top:1px solid #f0e9df; font-size:14.5px;" data-req="${Number(r.id)}">
           <strong>${esc(r.guestName)}</strong> · ${esc(r.listing)} · ${esc(day(r.arrival))} – ${esc(day(r.departure))}${r.daysBefore != null ? ' · ' + (r.daysBefore === 0 ? 'check-in today' : r.daysBefore === 1 ? 'check-in tomorrow' : r.daysBefore + ' days before check-in') : ''}<br>
           <span>${esc(r.reason)}</span>${r.details ? `<br><span style="opacity:0.75;">${esc(r.details)}</span>` : ''}
-          ${r.option && r.option.type === 'choose'
+          ${r.option && r.option.type === 'disaster'
+            ? `<p style="font-size:13.5px; line-height:1.55; margin:10px 0 0;"><strong>Aerva decides this request</strong> — there is nothing for you to accept or decline. If Aerva approves, everything the guest paid${r.disaster && r.disaster.credit ? ' (₹' + Math.round(Number(r.disaster.credit) || 0).toLocaleString('en-IN') + ')' : ''} becomes Aerva credit for new dates and there is no payout for this booking; it does not count as your cancellation. If not, the booking stands. Add anything Aerva should know in the booking’s Messages.</p>`
+            : r.option && r.option.type === 'choose'
             ? `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
                  <label style="font-size:13px;">Refund <input type="number" min="0" max="100" step="1" value="0" data-pct="${Number(r.id)}" style="width:70px; padding:6px; border:1px solid #d9cfc2; border-radius:6px; font-size:16px;"> %</label>
                  <button type="button" class="btn-small" data-choose="${Number(r.id)}">Confirm</button>

@@ -344,10 +344,14 @@ const restoreLinks = (text, urls) => text.replace(/([-])/g, (_m, c) 
 // keepNumbers: phone numbers stay; keepEmails: email addresses stay (both
 // for a live booking's chat — see _message-guard.js). Links, social
 // handles and UPI IDs still go.
+// spread: false drops the "10+ digits anywhere is a number spread out" rule
+// (numbers of 7+ digits, however written, still go). For long public text
+// a host writes and Aerva reviews — the listing description — where that
+// rule would wipe every figure ("2 bedrooms, 1200 sq ft, 15 km, 45 minutes").
 const EMAIL_RE = /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/g;
 const UPI_HANDLES = /@(?:ok[a-z]+|ybl|ibl|axl|apl|upi|paytm|ptyes|ptaxis|pthdfc|ptsbi|yapl|ikwik|jupiteraxis|fbl|waicici|wahdfcbank|wasbi|waaxis|kotak|icici|hdfcbank|sbi|axisbank|pingpay|freecharge)$/i;
-function redactContactInfo(input, { keepNumbers = false, keepEmails = false } = {}) {
-  if (!keepEmails) return redactCore(input, { keepNumbers });
+function redactContactInfo(input, { keepNumbers = false, keepEmails = false, spread = true } = {}) {
+  if (!keepEmails) return redactCore(input, { keepNumbers, spread });
   // Emails are set aside (private-use placeholders), the rest is checked,
   // then they are put back.
   const kept = [];
@@ -355,10 +359,10 @@ function redactContactInfo(input, { keepNumbers = false, keepEmails = false } = 
     if (UPI_HANDLES.test(m)) return m;                    // a UPI ID is not an email
     kept.push(m); return String.fromCharCode(0xE400 + kept.length - 1);
   });
-  const r = redactCore(masked, { keepNumbers });
+  const r = redactCore(masked, { keepNumbers, spread });
   return { displayText: r.displayText.replace(/[\uE400-\uE4FF]/g, (c) => kept[c.charCodeAt(0) - 0xE400] || ''), wasRedacted: r.wasRedacted };
 }
-function redactCore(input, { keepNumbers = false } = {}) {
+function redactCore(input, { keepNumbers = false, spread = true } = {}) {
   const first = removeLinksAndHandles(input);
   let text = first.text;
   let redacted = first.redacted;
@@ -367,7 +371,7 @@ function redactCore(input, { keepNumbers = false } = {}) {
   const groups = findNumbers(text, safe);
   const total = groups.reduce((n, g) => n + g.digits, 0);
   let spans;
-  if (total >= 10) {
+  if (total >= 10 && spread) {
     spans = groups.flatMap(g => g.units.map(u => [u.start, u.end]));           // spread out: every digit goes
   } else {
     spans = groups.filter(g => g.digits >= 7).map(g => [g.units[0].start, g.units[g.units.length - 1].end]);
