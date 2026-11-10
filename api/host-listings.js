@@ -4253,6 +4253,7 @@ module.exports = async (req, res) => {
              latitude, longitude, formatted_address, pincode,
              exterior_photo_urls, interior_photo_urls, cover_photo_url, created_at,
              pending_room_photos, to_jsonb(listings)->'draft_room_photos' AS draft_room_photos, check_in_time, check_out_time,
+             (to_jsonb(listings)->>'included_guests')::int AS included_guests, (to_jsonb(listings)->>'extra_guest_fee')::int AS extra_guest_fee,
              listing_type, hosting_listing_id, experience_category, experience_price_unit,
              experience_duration_hours, experience_duration_days, experience_type, experience_arranges_travel,
              experience_travel_details, experience_meeting_point_type,

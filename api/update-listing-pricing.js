@@ -317,6 +317,7 @@ module.exports = async (req, res) => {
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
                experience_price_unit, commission_rate,
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
+               COALESCE((to_jsonb(listings)->>'included_guests')::int, 2) AS included_guests, COALESCE((to_jsonb(listings)->>'extra_guest_fee')::int, 1500) AS extra_guest_fee,
                auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review, status_before_compliance_block, admin_status_reason, timezone,
                COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy,
                -- the host's choice (2026-11-10-06-free-cancel-optin.sql); missing = off
@@ -377,7 +378,8 @@ module.exports = async (req, res) => {
       // single-unit listing has no rooms at all, this just comes back
       // empty for those.
       const rooms = await sql`
-        SELECT id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, photo_urls, is_active, pending_review, pending_changes, last_rejection_reason, last_rejected_at
+        SELECT id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, photo_urls, is_active, pending_review, pending_changes, last_rejection_reason, last_rejected_at,
+               COALESCE((to_jsonb(listing_rooms)->>'included_guests')::int, 2) AS included_guests, COALESCE((to_jsonb(listing_rooms)->>'extra_guest_fee')::int, 1500) AS extra_guest_fee
         FROM listing_rooms WHERE listing_id = ${listingId} ORDER BY sort_order ASC, created_at ASC
       `;
 
@@ -556,7 +558,7 @@ module.exports = async (req, res) => {
       }
 
       const before = await sql`
-        SELECT nightly_rate, exterior_photo_urls, interior_photo_urls, cover_photo_url, property_name,
+        SELECT nightly_rate, exterior_photo_urls, interior_photo_urls, cover_photo_url, property_name, max_guests,
                pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
                property_type, bedrooms, status, rooms_pending_review, status_before_compliance_block,
                listing_type, experience_price_unit, discount_type, discount_value, discount_min_nights, discount_description, host_email
@@ -591,6 +593,25 @@ module.exports = async (req, res) => {
       // Free cancellation price (owner, 10 Nov 2026): switched on, a fixed ₹
       // amount per booking (₹100 – ₹1,00,000) is required — refused before
       // anything is saved. Not sent = left as it is.
+      // Extra guests (owner, 11 Nov 2026): how many guests the nightly rate
+      // covers and the fee per extra guest per night. Not sent = left as it is.
+      let extraGuestSetting = null;
+      if ((sent('includedGuests') || sent('extraGuestFee')) && before[0].listing_type !== 'experience' && before[0].property_type !== 'Resort') {
+        extraGuestSetting = require('./_pricing').parseExtraGuestSetting(req.body.includedGuests, req.body.extraGuestFee, sent('maxGuests') && String(req.body.maxGuests || '').trim() ? req.body.maxGuests : before[0].max_guests);
+        if (extraGuestSetting.error) return res.status(400).json({ error: extraGuestSetting.error, field: extraGuestSetting.field });
+      }
+      // The same per ROOM for a Resort: each room's own two numbers, checked
+      // before anything is saved and written once its rooms are (below).
+      const roomGuestTerms = [];
+      if (Array.isArray(rooms) && before[0].property_type === 'Resort') {
+        for (const r of rooms) {
+          if (!r || (r.includedGuests === undefined && r.extraGuestFee === undefined)) continue;
+          const t = require('./_pricing').parseExtraGuestSetting(r.includedGuests, r.extraGuestFee, r.maxOccupancy);
+          const label = typeof r.roomName === 'string' && r.roomName.trim() ? r.roomName.trim() : 'a room';
+          if (t.error) return res.status(400).json({ error: `${label}: ${t.error.replace('the maximum guests', 'the room’s max guests')}`, field: t.field });
+          if (t.included != null || t.fee != null) roomGuestTerms.push({ id: Number(r.id) || null, name: typeof r.roomName === 'string' ? r.roomName.trim().slice(0, 100) : '', included: t.included, fee: t.fee });
+        }
+      }
       let freeCancelSetting = null;
       if (sent('freeCancelOffered') && before[0].listing_type !== 'experience') {
         freeCancelSetting = parseFreeCancelSetting(req.body.freeCancelOffered === true && before[0].property_type !== 'Resort', req.body.freeCancelFee);
@@ -795,6 +816,12 @@ module.exports = async (req, res) => {
       `;
       const listing = updated[0];
       const specialSaved = await special.saveSpecial(sql, listingId, specialIn.values);
+      if (extraGuestSetting) {
+        try {
+          await sql`UPDATE listings SET included_guests = COALESCE(${extraGuestSetting.included}, included_guests), extra_guest_fee = COALESCE(${extraGuestSetting.fee}, extra_guest_fee) WHERE id = ${listingId}`;
+          await logAudit(sql, { action: 'listing_extra_guest_terms_changed', success: true, actorType: actorKind, actorIdentifier: requester, targetType: 'listing', targetId: listingId, metadata: extraGuestSetting });
+        } catch (err) { console.error('extra guest terms not saved (apply 2026-11-11-04-extra-guest-terms.sql):', err.message); }
+      }
 
       // When the check-in instructions go out (Manage → Guest Check-In Info
       // → Scheduling; _template-scheduling.js). Saved apart, so a save
@@ -1464,6 +1491,18 @@ module.exports = async (req, res) => {
       if (specialSaved.note) specialNotes.push(specialSaved.note);
       else if (specialIn.redacted) specialNotes.push('We took a phone number, email or link out of \u201cWhat\u2019s special\u201d or your recommendations \u2014 guests book and talk through Aerva.');
       if (specialSaved.saved && specialIn.dropped) specialNotes.push(`${specialIn.dropped === 1 ? 'One suggested experience is' : specialIn.dropped + ' suggested experiences are'} no longer live on Aerva and ${specialIn.dropped === 1 ? 'was' : 'were'} left out.`);
+      // Each room's extra-guest terms (validated above), written once the
+      // rooms themselves are saved: by id, or by name for a room added in
+      // this same save. They take effect at once, like the listing's own.
+      if (roomGuestTerms.length) {
+        try {
+          for (const t of roomGuestTerms) {
+            if (t.id) await sql`UPDATE listing_rooms SET included_guests = COALESCE(${t.included}, included_guests), extra_guest_fee = COALESCE(${t.fee}, extra_guest_fee) WHERE id = ${t.id} AND listing_id = ${listingId}`;
+            else if (t.name) await sql`UPDATE listing_rooms SET included_guests = COALESCE(${t.included}, included_guests), extra_guest_fee = COALESCE(${t.fee}, extra_guest_fee) WHERE listing_id = ${listingId} AND room_name = ${t.name}`;
+          }
+          await logAudit(sql, { action: 'room_extra_guest_terms_changed', success: true, actorType: actorKind, actorIdentifier: requester, targetType: 'listing', targetId: listingId, metadata: { rooms: roomGuestTerms } });
+        } catch (err) { console.error('room extra guest terms not saved (apply 2026-11-11-05-room-extra-guest-terms.sql):', err.message); }
+      }
       const warning = [...priceNotes, paidAmenitiesError, blockedDatesError, promotionsError, roomsWarning, freeCancelNote].filter(Boolean).join(' ') || undefined;
       return res.status(200).json({ success: true, warning, priceHeld: priceNotes.length ? priceNotes : undefined,
         note: specialNotes.length ? specialNotes.join(' ') : undefined, specialSkipped: specialSaved.skipped || undefined });

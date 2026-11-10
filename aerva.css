@@ -2690,11 +2690,12 @@ input, select, textarea{ font-size:16px; }          /* also stops phones zooming
 /* Full-strength photos: a short, light dark fade only behind the badges. */
 .suite-photo{ aspect-ratio:1/1; background:#e9e2d8; border-radius:14px; overflow:hidden; }
 .suite-card:hover .suite-photo{ box-shadow:0 6px 20px rgba(28,27,25,0.16); }
-.suite-photo::before{
-  height:72px;
-  background:linear-gradient(180deg, rgba(20,18,15,0.34) 0%, rgba(20,18,15,0.14) 55%, rgba(20,18,15,0) 100%);
-}
-.suite-photo img, .suite-photo-slider img{ filter:contrast(1.04) saturate(1.06); }
+/* Listing photos are shown exactly as the host uploaded them (owner, 11 Nov
+   2026): no dark band across the top, no contrast or colour filter. The
+   badge, heart, like and "Check availability" buttons have their own
+   backgrounds, so they stay readable on any photo. */
+.suite-photo::before{ content:none; display:none; background:none; }
+.suite-photo img, .suite-photo-slider img{ filter:none; }
 .suite-card:hover .suite-photo img{ transform:scale(1.03); }
 .suite-badge{
   background:#fff; color:var(--ink);
@@ -2765,7 +2766,7 @@ input, select, textarea{ font-size:16px; }          /* also stops phones zooming
 .suite-line .suite-star{ font-size:13px; }
 .suite-line .suite-rating-new{ font-size:14px; color:var(--ink-3); margin:0; display:inline; }
 .suite-card--unavailable{ opacity:1; filter:none; }
-.suite-card--unavailable .suite-photo img{ filter:grayscale(35%) brightness(0.92); }
+.suite-card--unavailable .suite-photo img{ filter:none; }
 .suite-card--unavailable .suite-check-availability{ font-size:13px; padding:9px 12px; border-radius:8px; letter-spacing:0; }
 .suites-empty{ font-size:15px; color:var(--ink-2); opacity:1; }
 .browse-row-head h3{ font-size:30px; }

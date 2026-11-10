@@ -43,7 +43,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="aerva.css?v=2026-11-11d">
+<link rel="stylesheet" href="aerva.css?v=2026-11-11t">
 <script src="aerva-cohost.js?v=2026-11-11d"></script>
 </head>
 <body class="showing-hero">
@@ -816,6 +816,22 @@
         <input id="listPrice" name="Expected Nightly Rate" type="number" min="0" placeholder="e.g. 4500" required>
       </div>
       <p id="listPriceResortNote" style="font-size:11.5px; opacity:0.6; margin-top:-8px; margin-bottom:16px; display:none;">Not needed for a Resort — the price shown to guests is worked out automatically from your rooms' own prices below (the lowest one, as a "from" price), so there's nothing redundant to fill in here.</p>
+      <!-- Extra guests (owner, 11 Nov 2026): the host chooses how many guests the nightly rate covers and the fee for each extra one. -->
+      <div id="listExtraGuestField" style="border:1px solid var(--line-dark); border-radius:10px; padding:16px 16px 4px; margin-bottom:20px;">
+        <p style="font-size:15px; font-weight:500; margin:0 0 4px;">Extra guests</p>
+        <p style="font-size:12.5px; opacity:0.65; margin:0 0 14px;">Your nightly rate covers some of your guests. Each guest above that number pays the fee you set here, per night.</p>
+        <div style="display:flex; gap:16px; flex-wrap:wrap;">
+          <div class="field" style="flex:1 1 200px;">
+            <label for="listIncludedGuests">Guests included in the nightly rate</label>
+            <select id="listIncludedGuests" aria-describedby="listExtraGuestExample"></select>
+          </div>
+          <div class="field" style="flex:1 1 200px;" id="listExtraGuestFeeWrap">
+            <label for="listExtraGuestFee"><span id="listExtraGuestFeeLabel">Fee per extra guest, per night (₹)</span></label>
+            <input id="listExtraGuestFee" type="number" inputmode="numeric" placeholder="e.g. 500 (0 for no charge)" aria-describedby="listExtraGuestExample">
+          </div>
+        </div>
+        <p id="listExtraGuestExample" aria-live="polite" style="font-size:12.5px; opacity:0.75; margin:-6px 0 12px;"></p>
+      </div>
       <div class="field">
         <label for="listSecurityDeposit"><span id="listSecurityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, refundable, held for 24 hours after check-out</span></label>
         <input id="listSecurityDeposit" name="Security Deposit" type="number" min="0" placeholder="e.g. 2000">
@@ -1603,7 +1619,7 @@
 <script src="aerva-bank-fields.js?v=2026-10-13a" defer></script>
 <script src="aerva-special.js?v=2026-11-10a" defer></script>
 <script src="aerva-guest-verify.js?v=2026-11-11d" defer></script>
-<script src="aerva.js?v=2026-11-11r" defer></script>
+<script src="aerva.js?v=2026-11-11v" defer></script>
 
 </body>
 </html>

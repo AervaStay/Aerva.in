@@ -359,6 +359,14 @@ async function applyDecision(listingId, action, reason = null, actor = { actorId
             INSERT INTO listing_rooms (listing_id, room_name, cover_photo_url, photo_urls, max_occupancy, nightly_rate, sort_order, is_active)
             VALUES (${listing.id}, ${room.roomName.trim().slice(0, 100)}, ${coverUrl}, ${JSON.stringify(restUrls.map(url => ({ url })))}, ${maxOccupancy}, ${price}, ${i}, ${maxOccupancy != null && price != null})
           `;
+          // The room's own extra-guest terms, when the host set them on the form (2026-11-11-05).
+          if (room.includedGuests != null || room.extraGuestFee != null) {
+            try {
+              await sql`UPDATE listing_rooms SET included_guests = ${Number.isInteger(Number(room.includedGuests)) && Number(room.includedGuests) >= 1 ? Math.min(Number(room.includedGuests), maxOccupancy || 100) : null},
+                                                extra_guest_fee = ${room.extraGuestFee != null && Number(room.extraGuestFee) >= 0 ? Math.round(Number(room.extraGuestFee)) : null}
+                        WHERE listing_id = ${listing.id} AND room_name = ${room.roomName.trim().slice(0, 100)}`;
+            } catch (err) { console.error('room extra guest terms not saved:', err.message); }
+          }
         }
       }
       // Consumed — cleared regardless of whether it actually inserted

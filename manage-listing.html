@@ -383,6 +383,23 @@
         <p style="font-size:11.5px; opacity:0.6; margin-top:4px;">The most guests this property can sleep — used to stop a booking for more people than the space actually fits.</p>
       </div>
 
+      <!-- Extra guests (owner, 11 Nov 2026): guests covered by the nightly rate, and the fee for each extra one. -->
+      <div id="extraGuestField" style="border:1px solid #e6dccb; border-radius:10px; padding:14px 16px 2px; margin-bottom:18px;">
+        <p style="font-size:15px; font-weight:500; margin:0 0 4px;">Extra guests</p>
+        <p style="font-size:12.5px; opacity:0.65; margin:0 0 12px;">Your nightly rate covers some of your guests. Each guest above that number pays the fee you set here, per night. New bookings use what you save; bookings already made keep what they paid.</p>
+        <div class="form-row">
+          <div class="field">
+            <label for="includedGuests">Guests included in the nightly rate</label>
+            <input id="includedGuests" type="number" min="1" step="1" inputmode="numeric" placeholder="e.g. 2">
+          </div>
+          <div class="field">
+            <label for="extraGuestFee">Fee per extra guest, per night (₹)</label>
+            <input id="extraGuestFee" type="number" min="0" step="1" inputmode="numeric" placeholder="e.g. 500 (0 for no charge)">
+          </div>
+        </div>
+        <p id="extraGuestExample" aria-live="polite" style="font-size:12.5px; opacity:0.75; margin:-4px 0 12px;"></p>
+      </div>
+
       <div class="form-row" id="discountFieldsRow">
         <div class="field">
           <label for="discountType">Discount Type</label>
@@ -1381,6 +1398,18 @@
                 <input type="number" min="1" placeholder="—" data-room-field="nightlyRate" value="${escM(room.nightlyRate || '')}" ${isPending ? 'disabled' : ''}>
               </div>
             </div>
+            <!-- Extra guests in this room (owner, 11 Nov 2026): how many the price covers, and the fee for each extra one. -->
+            <div class="room-card-numbers" style="margin-top:8px;">
+              <div class="room-card-number-field">
+                <label>Guests included in the price</label>
+                <input type="number" min="1" step="1" inputmode="numeric" placeholder="2" data-room-field="includedGuests" value="${escM(room.includedGuests != null ? room.includedGuests : '')}">
+              </div>
+              <div class="room-card-number-field">
+                <label>Fee per extra guest / night (₹)</label>
+                <input type="number" min="0" step="1" inputmode="numeric" placeholder="0 for no charge" data-room-field="extraGuestFee" value="${escM(room.extraGuestFee != null ? room.extraGuestFee : '')}">
+              </div>
+            </div>
+            <p style="font-size:12px; opacity:0.65; margin:4px 0 10px;">Guests above the included number each pay this fee per night, up to the room’s max guests. Leave both empty for 2 guests and ₹1,500.</p>
             <textarea rows="2" class="room-description-input" placeholder="Description (optional)" data-room-field="description" ${isPending ? 'disabled' : ''}>${escM(room.description || '')}</textarea>
           </div>
           ${roomGalleryHtml(room, idx)}
@@ -1759,6 +1788,21 @@
     const lo = Math.ceil(sub * 5 / 100), hi = Math.floor(sub * 30 / 100);
     return hi < lo ? Math.max(0, hi) : Math.min(hi, Math.max(lo, f));
   }
+  // Extra guests: a line saying what the two numbers mean together.
+  function syncExtraGuestExample(){
+    const ex = document.getElementById('extraGuestExample'); if(!ex) return;
+    const max = parseInt(document.getElementById('maxGuests').value, 10), inc = parseInt(document.getElementById('includedGuests').value, 10);
+    const feeRaw = document.getElementById('extraGuestFee').value.trim(), fee = Number(feeRaw);
+    const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
+    if(!(inc >= 1)){ ex.textContent = 'Enter how many guests the nightly rate covers.'; return; }
+    if(max >= 1 && inc > max){ ex.textContent = `This cannot be more than the maximum guests (${max}).`; return; }
+    const extras = max >= 1 ? max - inc : null;
+    ex.textContent = extras === 0 ? 'All guests are covered by the nightly rate: no extra guest fee.'
+      : feeRaw === '' ? 'Enter the fee for each extra guest, per night; 0 for no charge.'
+      : fee === 0 ? `Guests above ${inc} stay at no extra charge.`
+      : `Each guest above ${inc} pays ${inr(fee)} per night${extras ? ` (up to ${extras} extra guest${extras === 1 ? '' : 's'})` : ''}.`;
+  }
+  ['maxGuests', 'includedGuests', 'extraGuestFee'].forEach(id => { const el = document.getElementById(id); if(el) el.addEventListener('input', syncExtraGuestExample); });
   function freeCancelPriceProblem(){
     if(document.getElementById('freeCancelField').style.display === 'none') return '';
     if(!document.getElementById('freeCancelOffered').checked) return '';
@@ -1964,6 +2008,11 @@
       });
 
       document.getElementById('securityDeposit').value = l.security_deposit || '';
+      // Extra guests: what the nightly rate covers, and the fee per extra guest (stays, not Resorts).
+      document.getElementById('includedGuests').value = l.included_guests != null ? String(l.included_guests) : '2';
+      document.getElementById('extraGuestFee').value = l.extra_guest_fee != null ? String(l.extra_guest_fee) : '1500';
+      document.getElementById('extraGuestField').style.display = (l.listing_type === 'experience' || l.property_type === 'Resort') ? 'none' : '';
+      syncExtraGuestExample();
       // Stays only: an experience has its own page for its details.
       if(window.AervaSpecial && l.listing_type !== 'experience'){
         if(!manageSpecialEditor) manageSpecialEditor = window.AervaSpecial.mountEditor(document.getElementById('manageSpecialEditor'), { idPrefix: 'manageSpecial', selfId: l.id, getCity: () => document.getElementById('listingCity').value });
@@ -2066,6 +2115,7 @@
           restPhotos.forEach(p => { if (p && p.url) photos.push({ url: p.url, file: null }); });
           return {
             id: r.id, roomName: r.room_name, maxOccupancy: r.max_occupancy,
+            includedGuests: r.included_guests, extraGuestFee: r.extra_guest_fee,
             nightlyRate: r.nightly_rate, description: r.description || '', isActive: r.is_active !== false,
             photos, pendingReview: !!r.pending_review, pendingChanges: r.pending_changes || null,
             lastRejectionReason: r.last_rejection_reason || null
@@ -2214,6 +2264,8 @@
           services: Array.from(document.querySelectorAll('input[name="service"]:checked')).map(cb => cb.value),
           paidAmenities: paidAmenityRows,
           securityDeposit: toInr(document.getElementById('securityDeposit').value),
+          // Extra guests (only where the section is shown: stays, not Resorts).
+          ...(document.getElementById('extraGuestField').style.display === 'none' ? {} : { includedGuests: document.getElementById('includedGuests').value.trim(), extraGuestFee: document.getElementById('extraGuestFee').value.trim() }),
           cancellationPolicy: document.getElementById('cancellationPolicy').value,
           freeCancelOffered: document.getElementById('freeCancelOffered').checked,
           freeCancelFee: document.getElementById('freeCancelFee').value.trim() === '' ? null : Number(document.getElementById('freeCancelFee').value),

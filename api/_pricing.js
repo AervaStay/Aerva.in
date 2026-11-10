@@ -148,6 +148,32 @@ async function orderMoneyColumnsReady(sql) {
 // the only copy and everything that priced or booked a stay used a plain
 // Number() instead, which is how capacity came to be enforced in search
 // but not at checkout.
+// A listing's extra-guest terms (owner, 11 Nov 2026): the host chooses how
+// many guests the nightly rate covers and the fee per extra guest per night.
+// A Resort sets them on each room. Not set: 2 guests and ₹1,500, as before.
+function extraGuestTerms(listing) {
+  const inc = listing ? parseInt(listing.included_guests, 10) : NaN;
+  const fee = listing && listing.extra_guest_fee != null && listing.extra_guest_fee !== '' ? Number(listing.extra_guest_fee) : NaN;
+  return { included: Number.isInteger(inc) && inc >= 1 ? inc : BASE_OCCUPANCY, fee: Number.isFinite(fee) && fee >= 0 ? Math.round(fee) : EXTRA_GUEST_RATE };
+}
+// The host's form input → { included, fee } to save (null = leave as the default), or { error }.
+function parseExtraGuestSetting(rawIncluded, rawFee, maxGuests) {
+  const blank = (v) => v == null || String(v).trim() === '';
+  const out = { included: null, fee: null };
+  if (!blank(rawIncluded)) {
+    const n = Number(rawIncluded);
+    const max = parseInt(maxGuests, 10);
+    if (!Number.isInteger(n) || n < 1 || n > 100) return { error: 'Choose how many guests the nightly rate covers.', field: 'includedGuests' };
+    if (Number.isInteger(max) && max >= 1 && n > max) return { error: `The guests included in the nightly rate (${n}) cannot be more than the maximum guests (${max}).`, field: 'includedGuests' };
+    out.included = n;
+  }
+  if (!blank(rawFee)) {
+    const f = Number(String(rawFee).replace(/[,\s₹]/g, ''));
+    if (!Number.isFinite(f) || Math.round(f) !== f || f < 0 || f > 100000) return { error: 'Enter the fee per extra guest as a whole amount between ₹0 and ₹1,00,000.', field: 'extraGuestFee' };
+    out.fee = f;
+  }
+  return out;
+}
 function parseMaxGuests(raw) {
   if (!raw) return null;
   const numbers = String(raw).match(/\d+/g);
@@ -322,6 +348,8 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
                discount_min_nights, commission_rate, security_deposit,
                pet_friendly, max_pets_allowed, pet_fee, allowed_pet_types,
                max_guests, property_type, listing_type, timezone, to_jsonb(listings)->>'same_day_until' AS same_day_until,
+               -- the host's extra-guest terms (2026-11-11-04-extra-guest-terms.sql); missing = 2 guests, ₹1,500
+               to_jsonb(listings)->>'included_guests' AS included_guests, to_jsonb(listings)->>'extra_guest_fee' AS extra_guest_fee,
                to_jsonb(listings)->>'check_in_time' AS check_in_time,
                -- the host's choice (2026-11-10-06-free-cancel-optin.sql); missing = off
                COALESCE((to_jsonb(listings)->>'free_cancel_offered')::boolean, false) AS free_cancel_offered,
@@ -351,7 +379,9 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
           return { error: `Stay ${i + 1}: please select a specific room for this resort.` };
         }
         const roomRows = await sql`
-          SELECT id, room_name, max_occupancy, nightly_rate, is_active
+          SELECT id, room_name, max_occupancy, nightly_rate, is_active,
+                 -- the room's own extra-guest terms (2026-11-11-05); missing = 2 guests, ₹1,500
+                 to_jsonb(listing_rooms)->>'included_guests' AS included_guests, to_jsonb(listing_rooms)->>'extra_guest_fee' AS extra_guest_fee
           FROM listing_rooms WHERE id = ${s.roomId} AND listing_id = ${listing.id}
         `;
         room = roomRows[0];
@@ -492,8 +522,12 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
       // an integer column and never had the problem.
       const rate = room ? Math.round(Number(room.nightly_rate)) : Number(listing.nightly_rate);
       const roomTotal = rate * nights;
-      const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
-      const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
+      // How many guests the nightly rate covers and what each extra one
+      // pays per night: the host's own — the room's for a Resort, the
+      // listing's otherwise (2 guests / ₹1,500 where none is set).
+      const egTerms = extraGuestTerms(room || listing);
+      const extraGuests = Math.max(guests - egTerms.included, 0);
+      const extraTotal = extraGuests * egTerms.fee * nights;
       const beforeDiscount = roomTotal + extraTotal;
       // A promotion set on one resort room applies to that room only; one
       // with no room (room_id NULL) applies to the whole listing.
@@ -636,6 +670,7 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
         subtotal: staySubtotal,
         discountAmount,
         extraGuestCharge: extraTotal, // broken out for the guest-facing summary
+        includedGuests: egTerms.included, extraGuestFee: egTerms.fee, extraGuests,
         petFeeAmount, // broken out for the guest-facing summary
         serviceAnimalFee,
         petTypes: requestedPetTypes, // trusted server-side validated list, not re-trusted from the browser at verify time
@@ -768,5 +803,6 @@ module.exports = {
   discountAmountFor, calculateDiscount, priceStay, priceExperience, parseMaxGuests,
   activePromotions, MAX_EXPERIENCE_GUESTS,
   FREE_CANCEL_PERCENT, FREE_CANCEL_HOURS, FREE_CANCEL_MIN_PCT, FREE_CANCEL_MAX_PCT, FREE_CANCEL_FIXED_MIN, FREE_CANCEL_FIXED_MAX,
+  extraGuestTerms, parseExtraGuestSetting,
   freeCancelCharge, freeCancelFixedOf, parseFreeCancelSetting, freeCancelUntilMs, freeCancelLabel, addOnOf, freeCancelActive, orderMoneyColumnsReady
 };

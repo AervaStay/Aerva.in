@@ -256,7 +256,7 @@ module.exports = async (req, res) => {
       discountType, discountValue, discountMinNights, discountDescription,
       exteriorPhotoUrls, interiorPhotoUrls, roomPhotos, photoHashes, coverPhotoUrl,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
-      securityDeposit, checkInTime, checkOutTime,
+      securityDeposit, checkInTime, checkOutTime, includedGuests, extraGuestFee,
       hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceDurationDays, experienceType,
       latitude, longitude, formattedAddress, pincode,
       experienceArrangesTravel, experienceTravelDetails,
@@ -380,6 +380,24 @@ module.exports = async (req, res) => {
       const isExistingExperience = existingDraft.listing_type === 'experience';
       if (!isExistingExperience && existingDraft.status !== 'draft' && existingDraft.status !== 'rejected') {
         return res.status(400).json({ error: 'Only drafts and rejected listings can be edited this way — approved or pending listings go through the review team.' });
+      }
+    }
+
+    // Extra guests (owner, 11 Nov 2026): how many guests the nightly rate
+    // covers, and the fee per extra guest per night. Empty = the default
+    // (2 guests, ₹1,500). Stays only; a Resort's rooms keep the default.
+    let extraGuestSetting = null;
+    if (listingType !== 'experience' && propertyType !== 'Resort' && (includedGuests !== undefined || extraGuestFee !== undefined)) {
+      extraGuestSetting = require('./_pricing').parseExtraGuestSetting(includedGuests, extraGuestFee, maxGuests);
+      if (extraGuestSetting.error) return res.status(400).json({ error: extraGuestSetting.error, field: extraGuestSetting.field });
+    }
+
+    // A Resort: the same two numbers on each room (owner, 11 Nov 2026).
+    if (listingType !== 'experience' && propertyType === 'Resort' && Array.isArray(roomPhotos)) {
+      for (const r of roomPhotos) {
+        if (!r || !r.isBedroom || (r.includedGuests === undefined && r.extraGuestFee === undefined)) continue;
+        const t = require('./_pricing').parseExtraGuestSetting(r.includedGuests, r.extraGuestFee, r.maxOccupancy);
+        if (t.error) return res.status(400).json({ error: `${typeof r.roomName === 'string' && r.roomName.trim() ? r.roomName.trim() : 'A room'}: ${t.error.replace('the maximum guests', 'the room’s max guests')}`, field: t.field });
       }
     }
 
@@ -1064,7 +1082,10 @@ module.exports = async (req, res) => {
             roomName: r.roomName.trim().slice(0, 100),
             urls: r.urls.filter(isAervaBlobUrl),
             maxOccupancy: Number(r.maxOccupancy) > 0 ? Number(r.maxOccupancy) : null,
-            price: Number(r.price) > 0 ? Number(r.price) : null
+            price: Number(r.price) > 0 ? Number(r.price) : null,
+            // The room's own extra-guest terms (validated above); null = 2 guests, ₹1,500.
+            includedGuests: Number.isInteger(Number(r.includedGuests)) && Number(r.includedGuests) >= 1 ? Number(r.includedGuests) : null,
+            extraGuestFee: r.extraGuestFee != null && r.extraGuestFee !== '' && Number.isInteger(Number(r.extraGuestFee)) && Number(r.extraGuestFee) >= 0 ? Number(r.extraGuestFee) : null
           }))
         : [];
       await sql`UPDATE listings SET pending_room_photos = ${JSON.stringify(safeRoomPhotos)} WHERE id = ${listing.id}`;
@@ -1076,6 +1097,11 @@ module.exports = async (req, res) => {
       try {
         await sql`UPDATE listings SET check_in_time = COALESCE(${checkTimes.inTime}, check_in_time), check_out_time = COALESCE(${checkTimes.outTime}, check_out_time) WHERE id = ${listing.id}`;
       } catch (err) { console.error('check-in times not saved:', err.message); }
+    }
+
+    if (extraGuestSetting && (extraGuestSetting.included != null || extraGuestSetting.fee != null)) {
+      try { await sql`UPDATE listings SET included_guests = COALESCE(${extraGuestSetting.included}, included_guests), extra_guest_fee = COALESCE(${extraGuestSetting.fee}, extra_guest_fee) WHERE id = ${listing.id}`; }
+      catch (err) { console.error('extra guest terms not saved (apply 2026-11-11-04-extra-guest-terms.sql):', err.message); }
     }
 
     // Every room's and space's photos as the form had them (owner, 11 Nov
