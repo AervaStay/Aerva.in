@@ -48,7 +48,7 @@ const Razorpay = require('razorpay');
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
 const { getEnabledInternationalCurrencies, convertInrToForeignSubunit, ZERO_DECIMAL_CURRENCIES } = require('./_currency');
-const { sessionStatus } = require('./_accounts');
+const { sessionStatus, SUSPENDED_MESSAGE } = require('./_accounts');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { logAudit } = require('./_audit-log');
 
@@ -115,7 +115,7 @@ async function sessionRefusal(payload) {
   if (!payload) return null;
   const st = await sessionStatus(sql, payload);
   if (st === 'ok') return null;
-  return st === 'deleted' ? 'This account has been deleted.' : st === 'suspended' ? 'This account has been suspended. To ask about it, raise a request in Aerva Support (Help → Raise a request) from any account you can sign in to.' : 'Please log in again.';
+  return st === 'deleted' ? 'This account has been deleted.' : st === 'suspended' ? SUSPENDED_MESSAGE : 'Please log in again.';
 }
 
 // Price quotes need no account, so they are limited per address instead:

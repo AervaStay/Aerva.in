@@ -35,7 +35,7 @@ window.AERVA_POLICIES = {
     { id: '2026-11-10-checkin-promise', audience: 'hosts', published: '2026-11-10', effective: '2026-12-10',
       title: 'Aerva’s check-in promise: when payouts are sent',
       summary: [
-        'Until a guest confirms one of your listings is real and as listed, each booking of that listing is paid at its check-out time instead of the day after check-in. Once one guest confirms, later bookings are paid as usual.',
+        'The first payout for each of your listings is sent after its first guest checks out, instead of the day after check-in. Every later booking is paid as usual.',
         'This applies to stays arriving on or after 10 December 2026. Stays arriving before then are paid as they are today.',
         'Already in place: if a guest reports on arrival that a listing does not exist and Aerva confirms it, that listing is blocked and you are not paid for that booking. While a guest’s report is open, that booking’s payout waits.',
         'Already in place: if Aerva moves or refunds a guest after the payout was sent, that amount is deducted from your later payouts (shown in My Earnings → Payout details).'
@@ -453,7 +453,7 @@ window.AERVA_POLICIES = {
         'Payouts go only to a verified bank account held by the person or business named in the payout details (the host or someone else), alone or jointly. When a PAN is given, it must be in that same name, and TDS is deducted against it. A company, LLP or partnership firm is paid only to its own account, against its own PAN.',
         'When bank details change, payouts wait 48 hours, and the account owner is emailed about the change.',
         'Aerva may hold, adjust or withhold a payout for disputes, refunds, damage claims, suspected fraud or legal reasons.',
-        'Check-in promise: for stays arriving from 10 December 2026, until a guest confirms a listing is real and as listed, the payout of each of its bookings is held until that booking’s check-out time, and released then if no report is open. Once a guest confirms, later bookings of that listing are paid as usual. While a guest’s report on arrival is open, that booking’s payout is held; while a report that a listing does not exist is open, or the listing is blocked, all of that listing’s unsent payouts are held. If Aerva upholds a report, the host is not paid for that booking, and anything already paid out for it is deducted from the host’s later payouts (shown in My Earnings → Payout details).',
+        'Check-in promise: for stays arriving from 10 December 2026, the first payout for each listing is sent after its first guest’s check-out time (if no report is open), instead of the day after check-in. Every later booking of that listing is paid as usual. While a guest’s report on arrival is open, that booking’s payout is held; while a report that a listing does not exist is open, or the listing is blocked, all of that listing’s unsent payouts are held. If Aerva upholds a report, the host is not paid for that booking, and anything already paid out for it is deducted from the host’s later payouts (shown in My Earnings → Payout details).',
         'Aerva pays hosts and co-hosts their own shares only. Each co-host’s share is the percentage the host set and the co-host agreed to, worked out on the final booking amount: while a guest’s request is open, a co-host’s share is held just like the host’s payout, so both match the booking once it is settled. Any other money between a host and a co-host is for them to settle between themselves.'
       ]}
     ]},
@@ -878,7 +878,18 @@ window.AERVA_POLICIES = {
       { key: 'report_content',        label: 'Report a listing, review or message',   audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'none' },
       { key: 'privacy_data',          label: 'My personal data',                      audience: 'both', booking: 'none', bookingAs: 'any', listing: 'none' },
       { key: 'grievance',             label: 'Formal grievance (Grievance Officer)',  audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' },
-      { key: 'other',                 label: 'Something else',                        audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' }
+      { key: 'other',                 label: 'Something else',                        audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' },
+      // Raised from “Can’t sign in?” only (signed out); never offered on the signed-in form.
+      { key: 'account_access',        label: 'Account access',                        audience: 'signed_out', booking: 'none', bookingAs: 'any', listing: 'none' }
+    ],
+
+    // “Can’t sign in?” (index.html?view=help&signin=1): a request without an
+    // account. Keys must match SIGNIN_PROBLEMS in api/_support.js.
+    signinProblems: [
+      { key: 'suspended',     label: 'My account is suspended' },
+      { key: 'email_changed', label: 'Someone changed my email / I’m locked out' },
+      { key: 'no_codes',      label: 'I don’t receive sign-in codes' },
+      { key: 'other',         label: 'Other sign-in problem' }
     ],
 
     // Help topics. group: 'guest', 'host' or 'everyone'. category: what the
@@ -1072,7 +1083,7 @@ window.AERVA_POLICIES = {
           ]},
           { title: 'A payout on hold or failed', points: [
             'A payout may be held while a guest’s report, a refund or a damage claim is open. It is released once that is settled.',
-            'Check-in promise: for stays arriving from 10 December 2026, until a guest confirms one of your listings is real and as listed, each booking of that listing is paid at its check-out time instead of the day after check-in (released then if no report is open). Once a guest confirms, later bookings are paid as usual.',
+            'Check-in promise: for stays arriving from 10 December 2026, the first payout for each of your listings is sent after its first guest checks out (if no report is open), instead of the day after check-in. Every later booking is paid as usual.',
             'If a guest reports on arrival that the place is not as listed or not available, that booking’s payout is held until Aerva decides. If Aerva upholds it, you are not paid for that booking; anything already paid out for it is your balance owed to Aerva and is deducted from your later payouts (shown in Payout details).',
             'A failed payout is usually a bank detail that does not match. Check your bank details in your account; the payout is tried again.',
             'If a payout is late or the amount looks wrong, raise a request and choose the booking.'
@@ -1211,7 +1222,7 @@ window.AERVA_POLICIES = {
         sections: [
           { title: 'Signing in', points: [
             'Use the email address or phone number on your account. If a code does not arrive, check your spam folder and wait a minute before asking again.',
-            'If you can no longer reach your email or phone number, raise a request from any account you can sign in to.'
+            'If you cannot sign in — your account is suspended, someone changed your email, or sign-in codes do not arrive — use “Can’t sign in?” in Aerva Support. You do not need an account for it.'
           ]},
           { title: 'Deleting your account', points: [
             'Delete it in Account Settings once nothing is open. Deletion cannot be undone.'

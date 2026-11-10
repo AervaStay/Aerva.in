@@ -3070,7 +3070,7 @@ footer .foot-bottom{ margin-top:0; }
 .hc-field{ display:flex; flex-direction:column; gap:7px; }
 .hc-field[hidden]{ display:none; }
 .hc-field label{ font-size:14.5px; font-weight:500; color:var(--ink-2); }
-.hc-field select, .hc-field input[type="text"], .hc-field input[type="tel"], .hc-field textarea{
+.hc-field select, .hc-field input[type="text"], .hc-field input[type="tel"], .hc-field input[type="email"], .hc-field textarea{
   width:100%; font-family:'Jost', sans-serif; font-size:16px; color:var(--ink); background:#fff;
   border:1px solid #d6cbbd; border-radius:10px; padding:12px 14px; line-height:1.5;
 }
@@ -3096,6 +3096,15 @@ footer .foot-bottom{ margin-top:0; }
 .hc-signin a:not(.btn){ color:var(--gold-text); }
 
 .hc-sent{ max-width:640px; }
+/* "Can't sign in?" (aerva-help.js renderSignin) */
+.hc-contact-signin{ border-color:#dccfbd; }
+.hc-signin-form{ max-width:620px; }
+.hc-radios{ border:0; padding:0; margin:0; min-width:0; gap:10px; }
+.hc-radios legend{ font-size:14.5px; font-weight:500; color:var(--ink-2); padding:0; margin:0 0 8px; }
+.hc-radios .hc-check{ padding:12px 14px; border:1px solid #d6cbbd; border-radius:10px; min-height:44px; box-sizing:border-box; align-items:center; }
+.hc-radios .hc-check input{ margin-top:0; }
+.hc-radios .hc-check:has(input:checked){ border-color:var(--ink); background:var(--surface-2); }
+.hc-hp{ position:absolute !important; left:-9999px !important; top:auto; width:1px; height:1px; overflow:hidden; }
 .hc-ref{ font-size:18px; margin:14px 0; }
 .hc-ref strong{ font-family:'Jost', sans-serif; letter-spacing:0.06em; padding:4px 10px; background:var(--surface-2); border-radius:8px; margin-left:6px; }
 

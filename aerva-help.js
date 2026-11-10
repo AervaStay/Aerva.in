@@ -9,6 +9,11 @@
 //                                       raise a request (signed in)
 //   ?view=help&mine=1                   My requests
 //   ?view=help&request=SR-12345678      one request and its conversation
+//   ?view=help&signin=1[&problem=<key>] "Can't sign in?" — a request WITHOUT
+//                                       an account (suspended, locked out
+//                                       after an email change, no codes);
+//                                       api/guest-auth.js mode
+//                                       'support-signed-out'
 //
 // The words (topics, badges, contact numbers, commitments) live in
 // aerva-policies.js under AERVA_POLICIES.support. The requests themselves
@@ -25,6 +30,7 @@
   var MAX_FILES = 5, MAX_FILE_BYTES = 8 * 1024 * 1024;
   var SUBJECT_MAX = 120, BODY_MIN = 20, BODY_MAX = 4000;
   var FILE_TYPES = ['image/jpeg', 'image/png', 'image/webp', 'application/pdf'];
+  var SO_BODY_MIN = 20, SO_BODY_MAX = 2000;     // "Can't sign in?" (api/_support.js)
 
   var root = null;
   var options = null;          // supportOptions, once per page load
@@ -183,6 +189,13 @@
       + '<h3>Raise a request</h3>'
       + '<p>Tracked from start to finish, with a reference number. Best for anything about a booking, a stay or a payout.</p>'
       + hlink('new=1', 'Raise a request', 'btn') + '</div>');
+    // Signed out: a way in for someone who cannot sign in at all.
+    if(!token()){
+      cards.push('<div class="hc-contact hc-contact-signin">'
+        + '<h3>Can’t sign in?</h3>'
+        + '<p>Account suspended, your email changed without your permission, or sign-in codes not arriving? Tell us here — you do not need an account.</p>'
+        + hlink('signin=1', 'Can’t sign in?', 'btn') + '</div>');
+    }
     if(c.tollFree){
       cards.push('<div class="hc-contact"><h3>Call us, toll-free</h3>'
         + '<p>Speak to our support team. Have your booking or request reference ready.</p>'
@@ -290,7 +303,7 @@
     return '<div class="hc-signin"><h2>Log in to ' + esc(what) + '</h2>'
       + '<p>Requests are tied to your Aerva account, so we can see your bookings and keep you updated. It also keeps your details private.</p>'
       + '<a class="btn solid" href="' + esc(loginUrl()) + '">Log in or create an account</a>'
-      + '<p class="hc-muted">Cannot sign in? ' + hlink('topic=account', 'See help with your account') + '.</p>'
+      + '<p class="hc-muted">Can’t sign in? ' + hlink('signin=1', 'Tell us here — no account needed') + '.</p>'
       + '</div>';
   }
 
@@ -714,10 +727,100 @@
     });
   }
 
+  // --------------------------------------------------------- can't sign in
+  // A request without an account. The answer is the same whether or not the
+  // email has an account; Aerva replies by phone or at the email given.
+  function signinProblems(){
+    var p = S().signinProblems;
+    return (p && p.length) ? p : [
+      { key: 'suspended', label: 'My account is suspended' },
+      { key: 'email_changed', label: 'Someone changed my email / I’m locked out' },
+      { key: 'no_codes', label: 'I don’t receive sign-in codes' },
+      { key: 'other', label: 'Other sign-in problem' }
+    ];
+  }
+
+  function renderSignin(){
+    var want = params().get('problem') || '';
+    var head = '<p class="policy-back">' + hlink('', '‹ Resolution Center') + '</p>'
+      + '<div class="privacy-eyebrow">Aerva Support</div>'
+      + '<h1 class="policies-title">Can’t sign in?</h1>'
+      + '<p class="hc-intro">If your account is suspended, someone changed your email without your permission, or sign-in codes do not arrive, tell us here. You do not need to sign in. Aerva will contact you by phone or by email.</p>';
+    var form = '<form class="hc-form hc-signin-form" id="hcSoForm" novalidate>'
+      + '<fieldset class="hc-field hc-radios"><legend>What is the problem?</legend>'
+      + signinProblems().map(function(p){
+          return '<label class="hc-check"><input type="radio" name="hcSoProblem" value="' + esc(p.key) + '"' + (p.key === want ? ' checked' : '') + '><span>' + esc(p.label) + '</span></label>';
+        }).join('') + '</fieldset>'
+      + '<div class="hc-field"><label for="hcSoEmail">Email on your Aerva account</label>'
+      + '<input type="email" id="hcSoEmail" maxlength="254" autocomplete="email" inputmode="email" placeholder="you@example.com"></div>'
+      + '<div class="hc-field"><label for="hcSoPhone">Phone number we can call</label>'
+      + '<input type="tel" id="hcSoPhone" maxlength="20" autocomplete="tel" inputmode="tel" placeholder="+91 98765 43210">'
+      + '<p class="hc-hint">Add the country code if it is not an Indian number.</p></div>'
+      + '<div class="hc-field"><label for="hcSoContact">Email we can reach you at now <span class="label-hint">(optional)</span></label>'
+      + '<input type="email" id="hcSoContact" maxlength="254" autocomplete="off" inputmode="email" placeholder="Only if it is different">'
+      + '<p class="hc-hint">If you cannot use the email on your account any more. We will write to this one instead.</p></div>'
+      + '<div class="hc-field"><label for="hcSoBody">What happened?</label>'
+      + '<textarea id="hcSoBody" rows="6" maxlength="' + SO_BODY_MAX + '" placeholder="What you see when you try to sign in, since when, and anything that changed on your account."></textarea>'
+      + '<p class="hc-hint"><span id="hcSoCount">0</span> / ' + SO_BODY_MAX + '</p></div>'
+      // People never see or fill this; automated form-fillers do.
+      + '<div class="hc-hp" aria-hidden="true"><label for="hcSoWebsite">Website</label><input type="text" id="hcSoWebsite" name="website" tabindex="-1" autocomplete="off"></div>'
+      + '<p class="hc-error" id="hcSoError" role="alert" hidden></p>'
+      + '<div class="hc-actions"><button type="submit" class="btn solid" id="hcSoSubmit">Send</button>'
+      + '<span class="hc-muted">Aerva will never ask for your password or a sign-in code.</span></div>'
+      + '</form>';
+    root.innerHTML = frame('signin', head + form);
+    wireLinks(root);
+    document.title = 'Can’t sign in? — Aerva Resolution Center';
+    var body = document.getElementById('hcSoBody'), count = document.getElementById('hcSoCount');
+    body.addEventListener('input', function(){ count.textContent = body.value.length; });
+    document.getElementById('hcSoForm').addEventListener('submit', async function(e){
+      e.preventDefault();
+      var errEl = document.getElementById('hcSoError'), btn = document.getElementById('hcSoSubmit');
+      var fail = function(msg){ errEl.textContent = msg; errEl.hidden = false; btn.disabled = false; btn.textContent = 'Send'; };
+      errEl.hidden = true;
+      var picked = root.querySelector('input[name="hcSoProblem"]:checked');
+      var email = document.getElementById('hcSoEmail').value.trim();
+      var phone = document.getElementById('hcSoPhone').value.trim();
+      var contact = document.getElementById('hcSoContact').value.trim();
+      var text = body.value.trim();
+      var looksEmail = function(v){ return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(v); };
+      if(!picked) return fail('Choose what the problem is.');
+      if(!looksEmail(email)) return fail('Enter the email address on your Aerva account.');
+      if(phone.replace(/\D/g, '').length < 8) return fail('Enter a phone number we can call you on.');
+      if(contact && !looksEmail(contact)) return fail('Enter a valid email address we can reach you at, or leave it empty.');
+      if(text.length < SO_BODY_MIN) return fail('Please describe the problem in a few sentences (at least ' + SO_BODY_MIN + ' characters).');
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try{
+        var res = await fetch(API + '/api/guest-auth', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ mode: 'support-signed-out', problem: picked.value, accountEmail: email, phone: phone,
+            contactEmail: contact, description: text, website: document.getElementById('hcSoWebsite').value }) });
+        var data = {};
+        try{ data = await res.json(); }catch(x){ data = {}; }
+        if(!res.ok) return fail(data.error || 'Your request could not be sent right now. Please try again in a few minutes.');
+        renderSigninSent(data.ref, data.message);
+      }catch(x){ fail('Your request could not be sent right now. Please check your connection and try again.'); }
+    });
+  }
+
+  function renderSigninSent(ref, message){
+    var html = '<div class="hc-sent">'
+      + '<div class="privacy-eyebrow">Request received</div>'
+      + '<h1 class="policies-title">Thank you.</h1>'
+      + '<p class="hc-ref">Your reference number <strong>' + esc(ref) + '</strong></p>'
+      + '<p>' + esc(message || ('Thanks — reference ' + ref + '; Aerva will contact you by phone or at the email you gave.')) + '</p>'
+      + '<p class="hc-muted">Keep the reference number. Aerva will never ask for your password or a sign-in code.</p>'
+      + '<div class="hc-actions">' + hlink('', 'Back to the Resolution Center', 'btn') + '</div>'
+      + '</div>';
+    root.innerHTML = frame('signin', html);
+    wireLinks(root);
+    window.scrollTo(0, 0);
+  }
+
   // ----------------------------------------------------------------- router
   function render(){
     if(!root) return;
     var q = params();
+    if(q.get('signin')) return renderSignin();
     if(q.get('request')) return renderRequest(q.get('request'));
     if(q.get('new')) return renderNew();
     if(q.get('mine')) return renderMine();

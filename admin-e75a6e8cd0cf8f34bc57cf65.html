@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-10t"></script>
+<script src="aerva-policies.js?v=2026-11-10v"></script>
 </head>
 <body>
 
@@ -2943,9 +2943,9 @@
       list.innerHTML = '<table class="tds-table"><thead><tr><th>Reference</th><th>Subject</th><th>From</th><th>Status</th><th>Raised</th><th>Last activity</th></tr></thead><tbody>'
         + d.tickets.map(t => `<tr class="sup-row" onclick="openSupport(${Number(t.id)})">
             <td><strong>${escAdmin(t.ref)}</strong><div class="tds-sub">${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}</div></td>
-            <td style="white-space:normal; min-width:220px;">${t.category === 'safety' ? '<span class="sup-flag sup-safety">Safety</span>' : ''}${escAdmin(t.subject)}
+            <td style="white-space:normal; min-width:220px;">${t.signed_out && t.status !== 'resolved' && t.status !== 'closed' ? '<span class="sup-flag sup-late">Account access</span>' : ''}${t.category === 'safety' ? '<span class="sup-flag sup-safety">Safety</span>' : ''}${escAdmin(t.subject)}
               <div>${t.urgent && t.status !== 'resolved' && t.status !== 'closed' ? '<span class="sup-flag sup-late">Action needed now</span>' : ''}${t.overdue ? '<span class="sup-flag sup-late">Overdue</span>' : ''}${t.awaiting_us ? '<span class="sup-flag sup-us">Awaiting our reply</span>' : ''}${t.channel === 'chat' ? '<span class="sup-flag sup-wa">Chat</span>' : ''}${t.callback_phone ? '<span class="sup-flag sup-late">Call back: ' + escAdmin(t.callback_phone) + '</span>' : ''}${t.feedback_rating ? '<span class="sup-flag" style="background:#e9f2ea; color:#2f6b3a;">' + '★'.repeat(Number(t.feedback_rating)) + '</span>' : ''}${t.auto_closed ? '<span class="sup-flag">No feedback</span>' : ''}${t.order_id ? '<span class="sup-flag">Booking #' + Number(t.order_id) + '</span>' : ''}${t.listing_id ? '<span class="sup-flag">Listing #' + Number(t.listing_id) + '</span>' : ''}</div></td>
-            <td>${escAdmin(t.person_name || '—')}<div class="tds-sub">${escAdmin(t.person_email || '')}</div></td>
+            <td>${t.signed_out ? 'Can’t sign in<div class="tds-sub">' + escAdmin(t.contact_email || '') + (t.account_email && t.account_email !== t.contact_email ? '<br>account: ' + escAdmin(t.account_email) : '') + '</div>' : escAdmin(t.person_name || '—') + '<div class="tds-sub">' + escAdmin(t.person_email || '') + '</div>'}</td>
             <td>${escAdmin((labels[t.status]) || t.status)}</td>
             <td>${escAdmin(supDate(t.created_at))}</td>
             <td>${escAdmin(supDate(t.updated_at))}</td>
@@ -2970,8 +2970,12 @@
   function supFactsHtml(d){
     const t = d.ticket, labels = supStatusLabels(d);
     const day = (v) => v ? String(v).slice(0, 10) : '';
+    // Raised without signing in ("Can't sign in?"): who wrote is not proven to
+    // be the account holder; replies are emailed to the address they gave.
+    const signedOut = t.channel === 'signed_out';
     return [
-      `<div><strong>Person</strong><br>${escAdmin(t.person_name || 'Deleted account')}<br>${escAdmin(t.person_email || '')}${t.person_phone ? '<br>' + escAdmin(t.person_phone) : ''}${t.channel === 'chat' ? '<br><span class="sup-flag sup-wa">Chat</span> <span class="tds-sub">Your replies appear in their Aerva Support chat in Messages (and by email).</span>' : ''}${t.callback_phone ? `<br><strong style="color:#a3402f;">Call them back: <a href="tel:${escAdmin(String(t.callback_phone).replace(/[^\d+]/g, ''))}">${escAdmin(t.callback_phone)}</a></strong>` : ''}</div>`,
+      signedOut ? `<div><strong>Can’t sign in</strong> <span class="sup-flag sup-late">Account access</span><br>Account email given: ${escAdmin(t.account_email || '')}<br>Replies are emailed to: <strong>${escAdmin(t.contact_email || t.account_email || '')}</strong><br>Matching account: ${t.guest_id ? '#' + Number(t.guest_id) + ' ' + escAdmin(t.person_name || '') + ' (' + escAdmin(t.person_email || '') + ')' : 'none'}<br><span class="tds-sub">Not signed in — confirm who they are by phone before acting on the account.</span>${t.callback_phone ? `<br><strong style="color:#a3402f;">Call them: <a href="tel:${escAdmin(String(t.callback_phone).replace(/[^\d+]/g, ''))}">${escAdmin(t.callback_phone)}</a></strong>` : ''}</div>` : '',
+      signedOut ? '' : `<div><strong>Person</strong><br>${escAdmin(t.person_name || 'Deleted account')}<br>${escAdmin(t.person_email || '')}${t.person_phone ? '<br>' + escAdmin(t.person_phone) : ''}${t.channel === 'chat' ? '<br><span class="sup-flag sup-wa">Chat</span> <span class="tds-sub">Your replies appear in their Aerva Support chat in Messages (and by email).</span>' : ''}${t.callback_phone ? `<br><strong style="color:#a3402f;">Call them back: <a href="tel:${escAdmin(String(t.callback_phone).replace(/[^\d+]/g, ''))}">${escAdmin(t.callback_phone)}</a></strong>` : ''}</div>`,
       t.timings ? `<div><strong>Timeline</strong><br>First reply: ${t.timings.firstResponseMinutes != null ? escAdmin(supDur(t.timings.firstResponseMinutes)) : `<span style="color:${new Date(t.timings.firstResponseDueAt) < new Date() ? '#a3402f' : 'inherit'};">due by ${escAdmin(supDate(t.timings.firstResponseDueAt))}</span>`}<br>Resolved: ${t.timings.resolvedMinutes != null ? 'after ' + escAdmin(supDur(t.timings.resolvedMinutes)) : '—'}</div>` : '',
       `<div><strong>Request</strong><br>${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}<br>Status: ${escAdmin(labels[t.status] || t.status)}<br>Raised ${escAdmin(supDate(t.created_at))}${t.first_response_at ? '<br>First reply ' + escAdmin(supDate(t.first_response_at)) : '<br><span style="color:#a3402f;">No reply yet</span>'}</div>`,
       t.order_id ? `<div><strong>Booking #${Number(t.order_id)}</strong>${t.confirmation_code ? ' · ' + escAdmin(t.confirmation_code) : ''}<br>${escAdmin(t.suite_name || '')}<br>${escAdmin(day(t.arrival))} → ${escAdmin(day(t.departure))}<br>${escAdmin(t.booking_status || '')}${t.total != null ? ' · ₹' + Number(t.total).toLocaleString('en-IN') : ''}${t.booking_guest_id != null && Number(t.booking_guest_id) !== Number(t.guest_id) ? '<br><em>Raised by the host of this booking</em>' : ''}</div>` : '',
@@ -2999,7 +3003,7 @@
       const m = e.m;
       if(m.sender === 'system') return `<div class="sup-msg system">${escAdmin(m.body)} · ${escAdmin(supDate(m.created_at))}</div>`;
       const cls = m.internal ? 'internal' : m.sender;
-      const who = m.sender === 'user' ? (t.person_name || 'The person') : (m.internal ? 'Internal note' : 'Aerva Support') + (m.admin_email ? ' — ' + m.admin_email : '');
+      const who = m.sender === 'user' ? (t.channel === 'signed_out' ? 'The person (not signed in)' : (t.person_name || 'The person')) : (m.internal ? 'Internal note' : 'Aerva Support') + (m.admin_email ? ' — ' + m.admin_email : '');
       if(m.via === 'chat-transcript') return `<div class="sup-msg user sup-transcript"><strong>Conversation with the assistant</strong> <span class="tds-sub">handed over ${escAdmin(supDate(m.created_at))}</span>
         <div class="sup-msg-body">${escAdmin(m.body)}</div></div>`;
       const via = m.via === 'chat' ? ' <span class="sup-flag sup-wa">Chat</span>' : '';
@@ -3060,7 +3064,7 @@
           <div id="supSuggestList"></div>
           <div class="sup-quick" id="supQuick"></div>
         </div>
-        <textarea id="supText" placeholder="${t.channel === 'chat' ? 'Reply to the person (appears in their Aerva Support chat, and is emailed), or an internal note. Enter sends, Shift+Enter for a new line.' : 'Reply to the person (emailed to them), or an internal note'}"></textarea>
+        <textarea id="supText" placeholder="${t.channel === 'signed_out' ? 'Reply to the person (emailed to ' + escAdmin(t.contact_email || t.account_email || '') + ' — they cannot sign in), or an internal note' : t.channel === 'chat' ? 'Reply to the person (appears in their Aerva Support chat, and is emailed), or an internal note. Enter sends, Shift+Enter for a new line.' : 'Reply to the person (emailed to them), or an internal note'}"></textarea>
         <div class="tds-bar">
           <label>Status after this
             <select id="supNext"><option value="">${t.status === 'closed' ? 'Leave closed' : 'Automatic (a reply → waiting for the person)'}</option>

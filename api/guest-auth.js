@@ -20,6 +20,9 @@
 //     Sends a fresh verification link, for when the first one expired or
 //     got lost.
 //
+//   POST { mode: 'support-signed-out', problem, accountEmail, phone, contactEmail?, description }
+//     "Can't sign in?" — a support request without an account (see below).
+//
 //   POST { mode: 'forgot-password', email }
 //     Sends a password reset link if an account exists for this email,
 //     and responds with the same success message either way. That is not
@@ -62,7 +65,7 @@ require('./_env'); // production vs UAT safety rails — must load first
 const bcrypt = require('bcryptjs');
 const { neon } = require('@neondatabase/serverless');
 const { createToken, verifyToken } = require('./_approval-token');
-const { isAccountDeleted, reactivateIfPaused, sessionStatus, newSessionToken, bumpSessionVersion, assertNotSuspended } = require('./_accounts');
+const { isAccountDeleted, reactivateIfPaused, sessionStatus, newSessionToken, bumpSessionVersion, assertNotSuspended, SUSPENDED_MESSAGE } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { tierByKey, GUEST_TIERS, HOST_TIERS } = require('./_tiers');
 const { REVIEW_WINDOW_DAYS } = require('./_review-policy');
@@ -389,7 +392,7 @@ module.exports = async (req, res) => {
         });
         return res.status(200).json(out);
       } catch (err) {
-        if (err.suspended) return res.status(403).json({ error: err.message });
+        if (err.suspended) return res.status(403).json({ error: err.message, suspended: true, signinHelp: true });
       console.error('guest-auth (verify) error:', err);
         return res.status(500).json({ error: 'Could not verify your email right now. Please try again.' });
       }
@@ -410,7 +413,7 @@ module.exports = async (req, res) => {
     {
       const st = await sessionStatus(sql, payload);
       if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.', deleted: true });
-      if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. To ask about it, raise a request in Aerva Support (Help → Raise a request) from any account you can sign in to.', suspended: true });
+      if (st === 'suspended') return res.status(401).json({ error: SUSPENDED_MESSAGE, suspended: true, signinHelp: true });
       if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
       if (st !== 'ok') return res.status(503).json({ error: 'Could not check your session right now.' });
     }
@@ -634,6 +637,29 @@ module.exports = async (req, res) => {
     }
   }
 
+  // ---- "Can't sign in?" — a support request without an account ----
+  // POST { mode: 'support-signed-out', problem, accountEmail, phone,
+  //        contactEmail?, description, website? }
+  // From Help → Can't sign in? (aerva-help.js, index.html?view=help&signin=1),
+  // for a suspended account, someone locked out after an email change, or
+  // someone who gets no sign-in codes (_support.js createSignedOutRequest).
+  // The answer is the same whether or not the email has an account.
+  // 'website' is a hidden field people never fill (a bot does). 3 per IP per
+  // hour, 3 per account email per day. Before
+  // 2026-11-10-05-signed-out-support.sql: 503 "not open yet".
+  if (mode === 'support-signed-out') {
+    const b = req.body || {};
+    try {
+      const out = await require('./_support').createSignedOutRequest(sql, { problem: b.problem, accountEmail: b.accountEmail, phone: b.phone,
+        contactEmail: b.contactEmail, description: b.description, honeypot: b.website, ip: clientIp });
+      return res.status(200).json({ success: true, ref: out.ref, message: out.message });
+    } catch (err) {
+      if (err.isUserFacing) return res.status(err.status || 400).json({ error: err.message });
+      console.error('guest-auth (support-signed-out) error:', err);
+      return res.status(500).json({ error: 'Your request could not be sent right now. Please try again in a few minutes.' });
+    }
+  }
+
   // ---- Resend a verification link ----
   if (mode === 'resend-verification') {
     if (!email || typeof email !== 'string' || !EMAIL_PATTERN.test(email.trim())) {
@@ -789,7 +815,7 @@ module.exports = async (req, res) => {
       });
       return res.status(200).json(out);
     } catch (err) {
-      if (err.suspended) return res.status(403).json({ error: err.message });
+      if (err.suspended) return res.status(403).json({ error: err.message, suspended: true, signinHelp: true });
       console.error('guest-auth (reset-password) error:', err);
       return res.status(500).json({ error: 'Could not reset your password right now. Please try again.' });
     }
@@ -819,7 +845,7 @@ module.exports = async (req, res) => {
       return res.status(200).json(out);
     } catch (err) {
       if (err.needsConsent) return res.status(400).json({ error: err.message, needsConsent: true, termsVersion: TERMS_VERSION });
-      if (err.suspended) return res.status(403).json({ error: err.message });
+      if (err.suspended) return res.status(403).json({ error: err.message, suspended: true, signinHelp: true });
       console.error('guest-auth (google) error:', err);
       await logAudit(sql, {
         action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: verified.email,
@@ -1003,7 +1029,7 @@ module.exports = async (req, res) => {
             await emailOtp.requestCode(sql, guest.email, { purpose: 'locked' });
           } catch (e) {
             // e.g. "please wait 40 seconds" — the code already sent still works.
-            return res.status(e.status || 500).json({ error: e.isUserFacing ? e.message : 'We could not send the code right now. Please try again.', otpRequired: true, maskedEmail: emailOtp.maskEmail(guest.email) });
+            return res.status(e.status || 500).json({ error: e.isUserFacing ? e.message : 'We could not send the code right now. Please try again.', otpRequired: true, maskedEmail: emailOtp.maskEmail(guest.email), ...(e.signinHelp ? { signinHelp: true } : {}) });
           }
           await logAudit(sql, {
             action: 'guest_login_otp_sent', success: true, actorType: 'guest', actorIdentifier: cleanEmail,
@@ -1048,7 +1074,7 @@ module.exports = async (req, res) => {
 
       return res.status(200).json(out);
     } catch (err) {
-      if (err.suspended) return res.status(403).json({ error: err.message });
+      if (err.suspended) return res.status(403).json({ error: err.message, suspended: true, signinHelp: true });
       console.error('guest-auth (login) error:', err);
       await logAudit(sql, {
         action: 'guest_login', success: false, actorType: 'guest', actorIdentifier: cleanEmail,

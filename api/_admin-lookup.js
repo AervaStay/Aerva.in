@@ -305,7 +305,7 @@ async function accountAction(sql, { guestId, action, reason, adminLabel }) {
   if (process.env.RESEND_API_KEY && g.email && action !== 'signOut') {
     const subject = action === 'suspend' ? 'Your Aerva account has been suspended' : 'Your Aerva account is active again';
     const body = action === 'suspend'
-      ? `<p>Your Aerva account has been suspended, so you cannot sign in or book for now.</p><p>${escH(why)}</p><p>If you think this is a mistake, ${helpLink({ category: 'account_signin' }, 'raise a request in Aerva Support')} from any account you can sign in to.</p>`
+      ? `<p>Your Aerva account has been suspended, so you cannot sign in or book for now.</p><p>${escH(why)}</p><p>If you think this is a mistake, ${require('./_help-link').signinHelpLink({ problem: 'suspended' }, 'tell us through “Can’t sign in?” in Aerva Support')} — you do not need to sign in.</p>`
       : `<p>Your Aerva account is active again — you can sign in as usual.</p>`;
     try {
       await fetch('https://api.resend.com/emails', { method: 'POST',
