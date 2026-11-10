@@ -70,6 +70,19 @@ async function hostEmail(sql, hostId) {
 
 async function raiseDispute(sql, { orderId, guestId, reason, details, evidence }) {
   const o = await loadOrder(sql, orderId);
+  // The guest staying on a gift (its accepted recipient) may report a problem
+  // ON ARRIVAL too — they are the one at the door (owner, 11 Nov 2026). The
+  // report is the booking's: the person who paid is told, chooses any new
+  // place and receives any refund, as if they had reported it themselves.
+  let byRecipient = false;
+  if (o && o.guest_id !== guestId) {
+    const role = await require('./_gifts').sharedRole(sql, guestId, orderId);
+    if (role !== 'recipient') throw userError('Booking not found.', 404);
+    if (!require('./_checkin-promise').isArrivalReason(reason)) throw userError('As the guest staying, you can report a problem on arrival (the place does not exist, is not as listed or is not available). For anything else, ask the person who booked to report it.', 403);
+    byRecipient = true;
+  }
+  const reporterId = guestId;
+  if (byRecipient) guestId = o.guest_id;
   if (!o || o.guest_id !== guestId) throw userError('Booking not found.', 404);
   if (o.status !== 'paid' || (o.order_type || 'stay') !== 'stay') throw userError('Only a confirmed stay can be reported.');
   const today = dateStr(o.local_today), arrival = dateStr(o.arrival), departure = dateStr(o.departure);
@@ -97,8 +110,9 @@ async function raiseDispute(sql, { orderId, guestId, reason, details, evidence }
   if (onArrival && !(await CP.ready(sql))) throw userError(CP.NOT_READY, 503);
   const files = cleanFiles(evidence);
   if (!files.length) throw userError('Please add at least one photo or document as evidence.');
-  const text = String(details || '').trim().slice(0, 2000);
+  let text = String(details || '').trim().slice(0, 2000);
   if (text.length < 10) throw userError('Please describe the problem in a few words.');
+  if (byRecipient) text = ('Reported by the guest staying (gift recipient). ' + text).slice(0, 2000);
   let row;
   try {
     row = (await sql`INSERT INTO stay_disputes (order_id, guest_id, raised_date, reason, details, evidence)
@@ -107,8 +121,8 @@ async function raiseDispute(sql, { orderId, guestId, reason, details, evidence }
     if (/idx_stay_disputes_open|duplicate key/.test(err.message)) throw userError('You have already reported a problem on this stay. Aerva is looking into it.', 409);
     throw err;
   }
-  await logAudit(sql, { action: 'stay_dispute_raised', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: orderId,
-    metadata: { disputeId: row.id, reason, files: files.length } });
+  await logAudit(sql, { action: 'stay_dispute_raised', success: true, actorType: 'guest', actorIdentifier: String(reporterId), targetType: 'order', targetId: orderId,
+    metadata: { disputeId: row.id, reason, files: files.length, ...(byRecipient ? { byGiftRecipient: true } : {}) } });
   await postThreadMessage(sql, orderId, 'guest', `I have reported a problem with this stay to Aerva: ${REASONS[reason]}. ${text}`);
   // On arrival: Aerva's check-in promise takes it from here (urgent requests, holds, emails).
   if (onArrival) {

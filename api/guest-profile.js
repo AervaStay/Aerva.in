@@ -185,7 +185,7 @@ async function threadReviewPrompt(sql, conversationId, role) {
   try {
     const o = (await sql`
       SELECT o.id, o.suite_name, COALESCE(o.order_type, 'stay') AS order_type, o.departure,
-             COALESCE(g.name, o.guest_email) AS guest_name, o.deposit_status, o.deposit_amount,
+             COALESCE(NULLIF(btrim(g.name), ''), 'Guest') AS guest_name, o.deposit_status, o.deposit_amount,
              (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today
       FROM conversations c JOIN orders o ON o.id = c.order_id
       JOIN listings l ON l.id = o.listing_id LEFT JOIN guests g ON g.id = o.guest_id
@@ -696,14 +696,14 @@ module.exports = async (req, res) => {
                  (SELECT COALESCE(json_agg(json_build_object('label', field_label, 'value', field_value) ORDER BY sort_order), '[]'::json)
                     FROM listing_custom_fields WHERE listing_id = l.id) AS custom_fields,
                  CASE WHEN c.host_id = ${myHostId} THEN 'host' ELSE 'guest' END AS my_role,
-                 CASE WHEN c.host_id = ${myHostId} THEN COALESCE(g.name, c.guest_email) ELSE h.name END AS counterpart_name,
+                 CASE WHEN c.host_id = ${myHostId} THEN COALESCE(NULLIF(btrim(g.name), ''), 'Guest') ELSE h.name END AS counterpart_name,
                  CASE WHEN c.host_id = ${myHostId} THEN g.profile_photo_url ELSE NULL END AS counterpart_photo_url,
                  -- Role-INDEPENDENT — always the actual booking guest's
                  -- name, regardless of who's viewing. Used for the
                  -- @guestname template placeholder: "the one who is
                  -- receiving the message should be the booker name,"
                  -- not whichever side happens to be looking at this row.
-                 COALESCE(g.name, c.guest_email) AS guest_display_name,
+                 COALESCE(NULLIF(btrim(g.name), ''), 'Guest') AS guest_display_name,
                  o.arrival, o.departure, o.status AS booking_status, to_jsonb(o)->>'confirmation_code' AS confirmation_code,
                  o.nights, o.guests, o.subtotal, o.gst, GREATEST(0, o.total - COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0)) AS guest_total,
                  -- the host's own part: after their co-hosts' shares, as in My Earnings
@@ -766,6 +766,8 @@ module.exports = async (req, res) => {
           if (c.my_role !== 'host' || actingCtx) delete c.payout_amount;
           // What the guest paid in all (service fee and deposit included): the guest's own view only.
           if (c.my_role === 'host' || c.guest_id !== guestId) delete c.guest_total;
+          // A guest's email address is never shown to the host (owner, 11 Nov 2026).
+          if (c.my_role === 'host') c.guest_email = null;
           // A gift's recipient or a group's friend: never the price.
           if (c.my_role !== 'host' && sharedIds.has(Number(c.order_id)) && c.guest_id !== guestId) { delete c.subtotal; delete c.gst; c.shared = true; c.guest_email = null; if (c.last_message) c.last_message = hideMoneyForShared(c.last_message, 'system'); }
           // Nor what the guest paid for the stay: the host's payout is that
@@ -998,6 +1000,7 @@ module.exports = async (req, res) => {
                COALESCE((to_jsonb(o)->>'free_cancel_fee')::int, 0) AS free_cancel_fee,
                COALESCE((to_jsonb(o)->>'free_cancel_gst')::int, 0) AS free_cancel_gst,
                COALESCE((to_jsonb(o)->>'free_cancel_refunded')::boolean, false) AS free_cancel_refunded,
+               ((to_jsonb(o)->>'free_cancel_fixed')::int = 0) IS TRUE AS free_cancel_included,
                l.property_name AS listing_name, l.city AS listing_city, to_jsonb(l)->>'area' AS listing_area,
                l.formatted_address AS listing_address, l.host_name AS host_name,
                to_jsonb(l)->>'check_in_time' AS check_in_time, to_jsonb(l)->>'check_out_time' AS check_out_time,
@@ -1091,11 +1094,11 @@ module.exports = async (req, res) => {
           const transferOpen = (b.listing_type || 'stay') === 'stay' && Date.now() < require('./_booking-transfers').transferWindowEndMs(arr, b.listing_timezone);
           b.can_change = !!paid && (!started || inWindow || transferOpen) && !b.transfer_change_id;
           b.transferred = !!b.transfer_change_id;
-          b.can_cancel_request = !!paid && !started && !b.transfer_change_id;   // a transferred booking: Aerva Support only
+          b.can_cancel_request = !!paid && !started && !b.transfer_change_id && !b.open_change;   // not while a change is waiting   // a transferred booking: Aerva Support only
           b.can_report = !!paid && started && (b.listing_type || 'stay') === 'stay' && (inWindow || declined.has(b.id));
           b.stay_window_closed = !!paid && started && !inWindow && !transferOpen;
           // The free cancellation add-on: until when a cancellation is a full refund.
-          if (Number(b.free_cancel_fee) > 0) {
+          if (Number(b.free_cancel_fee) > 0 || b.free_cancel_included === true) {
             const P = require('./_pricing');
             const ms = P.freeCancelUntilMs(arr, b.listing_timezone, b.check_in_time);
             b.free_cancel_until = Number.isFinite(ms) ? new Date(ms).toISOString() : null;

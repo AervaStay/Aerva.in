@@ -435,7 +435,7 @@ function planRows(ctx) {
       effectiveRate, commissionAmount, payoutAmount: subtotal + freeCancelFee - commissionAmount,
       freeCancelFee, freeCancelGst, freeCancelCommission,
       // the host's fixed amount it was sold with (re-clamped on added nights, _booking-changes.js)
-      freeCancelFixed: freeCancelFee && stay.freeCancelFixed != null && Number(stay.freeCancelFixed) >= 0 ? Math.round(Number(stay.freeCancelFixed)) : null,
+      freeCancelFixed: stay.freeCancelFixed != null && (freeCancelFee ? Number(stay.freeCancelFixed) >= 0 : Number(stay.freeCancelFixed) === 0) ? Math.round(Number(stay.freeCancelFixed)) : null,
       depositAmount, depositReleaseAt, feeCreditUsed: Math.round(Number(stay.feeCreditUsed) || 0), ...takeCoupon()
     });
   }
@@ -498,10 +498,12 @@ async function insertRow(sql, ctx, row, cancelledReason) {
     // orders.free_cancel_fixed (2026-11-10-07-free-cancel-fee.sql): only ever
     // set once that update has run (a listing has no price before it, so
     // nothing is offered); a separate statement that never fails the booking.
-    if (row.freeCancelFixed != null) {
-      try { await sql`UPDATE orders SET free_cancel_fixed = ${row.freeCancelFixed} WHERE id = ${id}`; }
-      catch (err) { console.error('free_cancel_fixed not saved on booking:', id, err.message); }
-    }
+  }
+  // Also for a ₹0 price (free cancellation included at no charge): 0 here is
+  // what marks the booking as having it.
+  if (row.freeCancelFixed != null) {
+    try { await sql`UPDATE orders SET free_cancel_fixed = ${row.freeCancelFixed} WHERE id = ${id}`; }
+    catch (err) { console.error('free_cancel_fixed not saved on booking:', id, err.message); }
   }
   // The name of the guest staying, for the host. Written only once
   // migration_guest_details.sql has added the columns; never fails the booking.

@@ -59,7 +59,7 @@ const MAX_AMENITIES_PER_STAY = 15;
 const FREE_CANCEL_PERCENT = 15;
 const FREE_CANCEL_MIN_PCT = 5;
 const FREE_CANCEL_MAX_PCT = 30;
-const FREE_CANCEL_FIXED_MIN = 0;   // owner, 11 Nov 2026 (was ₹100): any amount from ₹0; each booking still pays at least 5% of its stay price
+const FREE_CANCEL_FIXED_MIN = 0;   // owner, 11 Nov 2026 (was ₹100). ₹0 = free cancellation included in every booking at no charge; any other amount is kept between 5% and 30% of the stay price
 const FREE_CANCEL_FIXED_MAX = 100000;
 const FREE_CANCEL_HOURS = 48;
 // What one booking pays for the add-on: the host's fixed amount, kept
@@ -70,6 +70,7 @@ function freeCancelCharge(fixed, subtotal) {
   const f = Math.round(Number(fixed));
   const sub = Number(subtotal);
   if (!(f >= 0) || !(sub > 0)) return 0;
+  if (f === 0) return 0;   // ₹0 = free cancellation included at no charge (owner, 11 Nov 2026); no 5% floor
   const lo = Math.ceil(sub * FREE_CANCEL_MIN_PCT / 100);
   const hi = Math.floor(sub * FREE_CANCEL_MAX_PCT / 100);
   if (hi < lo) return Math.max(0, hi);   // only for a stay of a few rupees
@@ -114,11 +115,14 @@ function addOnOf(row) {
   // fixed: the host's amount it was sold with (null for bookings made before
   // the host-set price, or before 2026-11-10-07-free-cancel-fee.sql).
   const fx = row && row.free_cancel_fixed != null && row.free_cancel_fixed !== '' ? Math.round(Number(row.free_cancel_fixed)) : null;
-  return { fee: n('free_cancel_fee'), gst: n('free_cancel_gst'), commission: n('free_cancel_commission'), refunded, fixed: fx != null && fx >= 0 ? fx : null };
+  return { fee: n('free_cancel_fee'), gst: n('free_cancel_gst'), commission: n('free_cancel_commission'), refunded, fixed: fx != null && fx >= 0 ? fx : null,
+    // Sold with a ₹0 price: free cancellation is part of the booking, nothing was charged for it.
+    included: fx === 0 };
 }
 // Still inside the window (a transferred booking cannot be cancelled at all).
 function freeCancelActive(row, zone, checkInTime, nowMs = Date.now()) {
-  if (!row || addOnOf(row).fee <= 0 || row.transfer_change_id) return false;
+  const fc = row ? addOnOf(row) : null;
+  if (!row || !(fc.fee > 0 || fc.included) || row.transfer_change_id) return false;
   return nowMs < freeCancelUntilMs(row.arrival, zone, checkInTime);
 }
 // Has the database update that adds the order money columns
@@ -617,7 +621,9 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
       const fcFee = hostOffers ? freeCancelCharge(fcFixed, staySubtotal) : 0;
       const fcGst = Math.round(fcFee * stayTax.rate / 100);
       const fcCommission = Math.round(fcFee * (rates.host / 100));
-      const fcTaken = fcOffered && fcFee > 0 && s.freeCancel === true;
+      // A ₹0 price: every booking has it, with nothing to tick and nothing charged.
+      const fcFree = hostOffers && fcFixed === 0;
+      const fcTaken = fcOffered && (fcFree || (fcFee > 0 && s.freeCancel === true));
 
       return { detail: {
         listingId: listing.id,
@@ -648,7 +654,7 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
         withExperienceId: s.includedWithExperienceId || null,
         amenities: amenityDetails,
         // What the add-on would cost (shown at checkout), and what is charged.
-        freeCancelOffer: { offered: fcOffered && fcFee > 0, fixed: hostOffers ? fcFixed : null, clamped: hostOffers && fcFee !== fcFixed ? (fcFee > fcFixed ? 'min' : 'max') : null,
+        freeCancelOffer: { offered: fcOffered && (fcFee > 0 || fcFree), included: fcOffered && fcFree, fixed: hostOffers ? fcFixed : null, clamped: hostOffers && !fcFree && fcFee !== fcFixed ? (fcFee > fcFixed ? 'min' : 'max') : null,
                            minPercent: FREE_CANCEL_MIN_PCT, maxPercent: FREE_CANCEL_MAX_PCT, fee: fcFee, gst: fcGst,
                            until: Number.isFinite(fcUntil) ? new Date(fcUntil).toISOString() : null, untilLabel: freeCancelLabel(fcUntil, listing.timezone) },
         freeCancelFee: fcTaken ? fcFee : 0,

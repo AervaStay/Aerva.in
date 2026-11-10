@@ -293,8 +293,8 @@ module.exports = async (req, res) => {
           roomName: room.room_name,
           ranges: [
             ...bookedRows.map(r => ({
-              start: r.start_date, end: r.end_date, type: 'booked', label: r.guest_email || 'Booked',
-              orderId: r.id, guestEmail: r.guest_email, guests: r.guests, nights: r.nights, total: r.total
+              start: r.start_date, end: r.end_date, type: 'booked', label: 'Booked',
+              orderId: r.id, guestEmail: null, guests: r.guests, nights: r.nights, total: r.total
             })),
             ...blockedRows.map(r => ({ start: r.start_date, end: r.end_date, type: 'blocked', label: r.reason || 'Blocked' })),
           ]

@@ -178,7 +178,7 @@
       </div>
       <div class="field">
         <label for="newPassword">New password</label>
-        <input id="newPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" required>
+        <input id="newPassword" type="password" placeholder="At least 8 characters, with a letter and a number" autocomplete="new-password" required>
       </div>
       <button type="submit" class="btn" id="resetPasswordBtn">Set new password</button>
       <p class="error" id="resetPasswordError" style="display:none;"></p>
@@ -202,6 +202,7 @@
       <div class="field">
         <label for="signupEmail">Email</label>
         <input id="signupEmail" type="email" placeholder="you@example.com" autocomplete="email" required>
+        <p id="signupEmailHint" role="status" style="display:none; font-size:13px; margin:6px 0 0;"></p>
       </div>
       <div class="field">
         <label for="signupPhone">Phone</label>
@@ -216,7 +217,7 @@
       </div>
       <div class="field">
         <label for="signupPassword">Password</label>
-        <input id="signupPassword" type="password" placeholder="At least 8 characters" autocomplete="new-password" required>
+        <input id="signupPassword" type="password" placeholder="At least 8 characters, with a letter and a number" autocomplete="new-password" required>
       </div>
       <!-- Required: an account is only made with this tick (DPDP). -->
       <label class="consent" id="signupConsentRow">
@@ -299,6 +300,35 @@
     el.style.display = 'block';
   }
   const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+  // A mistyped email domain (icould.com, gmial.com…) means the confirmation
+  // email never arrives: suggest the likely one, never change it silently.
+  const EMAIL_DOMAIN_FIXES = { 'icould.com': 'icloud.com', 'iclould.com': 'icloud.com', 'icloud.co': 'icloud.com', 'icoud.com': 'icloud.com', 'iclod.com': 'icloud.com', 'icloud.con': 'icloud.com',
+    'gmial.com': 'gmail.com', 'gmai.com': 'gmail.com', 'gamil.com': 'gmail.com', 'gnail.com': 'gmail.com', 'gmail.co': 'gmail.com', 'gmail.con': 'gmail.com', 'gmail.cm': 'gmail.com', 'gmaill.com': 'gmail.com', 'gmal.com': 'gmail.com', 'gmail.comm': 'gmail.com', 'gmail.in': 'gmail.com',
+    'yaho.com': 'yahoo.com', 'yahooo.com': 'yahoo.com', 'yhoo.com': 'yahoo.com', 'yahoo.con': 'yahoo.com', 'yahoo.co': 'yahoo.com', 'yaho.co.in': 'yahoo.co.in',
+    'hotmial.com': 'hotmail.com', 'hotmai.com': 'hotmail.com', 'hotmal.com': 'hotmail.com', 'hotmail.con': 'hotmail.com', 'hotmail.co': 'hotmail.com',
+    'outlok.com': 'outlook.com', 'outloo.com': 'outlook.com', 'outlook.con': 'outlook.com', 'outlook.co': 'outlook.com', 'rediffmial.com': 'rediffmail.com', 'redifmail.com': 'rediffmail.com', 'rediffmail.con': 'rediffmail.com' };
+  function emailSuggestion(value){
+    const v = String(value || '').trim(); const at = v.lastIndexOf('@');
+    if(at < 1) return null;
+    const fix = EMAIL_DOMAIN_FIXES[v.slice(at + 1).toLowerCase()];
+    return fix ? v.slice(0, at + 1) + fix : null;
+  }
+  (function(){
+    const input = document.getElementById('signupEmail'), hint = document.getElementById('signupEmailHint');
+    if(!input || !hint) return;
+    const show = () => {
+      const s = emailSuggestion(input.value);
+      if(!s){ hint.style.display = 'none'; hint.textContent = ''; return; }
+      hint.textContent = 'Did you mean ';
+      const b = document.createElement('button'); b.type = 'button'; b.textContent = s;
+      b.style.cssText = 'background:none; border:none; padding:0; font:inherit; color:#7c6030; text-decoration:underline; cursor:pointer;';
+      b.addEventListener('click', () => { input.value = s; hint.style.display = 'none'; input.focus(); });
+      hint.appendChild(b); hint.appendChild(document.createTextNode('? Tap it to use it.'));
+      hint.style.display = 'block';
+    };
+    input.addEventListener('blur', show); input.addEventListener('change', show);
+  })();
   // The Terms of Service / Privacy Policy a new account agrees to — the
   // same string as TERMS_VERSION in api/guest-auth.js (kept in step by hand).
   const TERMS_VERSION = '1.0 (26 September 2026)';
@@ -700,8 +730,8 @@
       signupError.style.display = 'block';
       return;
     }
-    if(passwordValue.length < 8){
-      signupError.textContent = 'Password must be at least 8 characters.';
+    if(passwordValue.length < 8 || !/\p{L}/u.test(passwordValue) || !/\d/.test(passwordValue)){
+      signupError.textContent = 'Password must be at least 8 characters, with at least one letter and one number.';
       signupError.style.display = 'block';
       return;
     }
@@ -945,8 +975,8 @@
     resetError.style.display = 'none';
 
     const newPasswordValue = document.getElementById('newPassword').value;
-    if(newPasswordValue.length < 8){
-      resetError.textContent = 'Password must be at least 8 characters.';
+    if(newPasswordValue.length < 8 || !/\p{L}/u.test(newPasswordValue) || !/\d/.test(newPasswordValue)){
+      resetError.textContent = 'Password must be at least 8 characters, with at least one letter and one number.';
       resetError.style.display = 'block';
       return;
     }

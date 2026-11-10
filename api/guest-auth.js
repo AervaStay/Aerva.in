@@ -334,6 +334,26 @@ async function sendPasswordResetEmail(guest, resetTok) {
   }
 }
 
+// Choosing a password (sign-up, reset): 8 or more characters with at least
+// one letter and one number, and not the commonest ones.
+const PASSWORD_RULE = 'Password must be at least 8 characters, with at least one letter and one number.';
+const COMMON_PASSWORDS = new Set(['password1', 'password12', 'password123', 'qwerty123', 'abc12345', 'abcd1234', '1234abcd', 'a1234567', '12345678a', 'iloveyou1', 'welcome1', 'welcome123', 'india123', 'aerva123', 'admin123', 'test1234', 'pass1234', 'qwerty12', '1q2w3e4r', 'letmein1']);
+function passwordProblem(pw) {
+  if (!pw || typeof pw !== 'string' || pw.length < 8 || !/\p{L}/u.test(pw) || !/\d/.test(pw)) return PASSWORD_RULE;
+  if (pw.length > 200) return 'Please choose a shorter password.';
+  if (COMMON_PASSWORDS.has(pw.toLowerCase())) return 'That password is too easy to guess. Please choose another.';
+  return null;
+}
+// A name at sign-up is optional; when given, letters only (as on a government ID).
+function signupNameProblem(name) {
+  const v = String(name == null ? '' : name).replace(/\s+/g, ' ').trim();
+  if (!v) return null;
+  if ([...v].length > 80) return 'Your name can be at most 80 characters.';
+  if (/\d/.test(v)) return 'Your name cannot contain numbers. Please write it as on your government ID.';
+  if (!/^[\p{L}\p{M} .'’-]+$/u.test(v) || !/\p{L}/u.test(v)) return 'Your name can only have letters, spaces, dots, apostrophes and hyphens.';
+  return null;
+}
+
 module.exports = async (req, res) => {
   // Typed text can never become markup — see _plain-text.js.
   sanitizeBody(req);
@@ -828,8 +848,8 @@ module.exports = async (req, res) => {
     if (!resetToken) {
       return res.status(400).json({ error: 'This reset link is missing its token — please request a new one.' });
     }
-    if (!newPassword || typeof newPassword !== 'string' || newPassword.length < 8) {
-      return res.status(400).json({ error: 'Password must be at least 8 characters.' });
+    if (passwordProblem(newPassword)) {
+      return res.status(400).json({ error: passwordProblem(newPassword) });
     }
     const payload = verifyToken(resetToken);
     if (!payload || payload.action !== 'guest-password-reset') {
@@ -920,6 +940,10 @@ module.exports = async (req, res) => {
 
   // ---- Sign up ----
   if (mode === 'signup') {
+    // Stricter sign-up (owner, 11 Nov 2026): a password with a letter and a
+    // number, and a name written in letters. Existing accounts sign in as before.
+    { const bad = passwordProblem(password) || signupNameProblem(name);
+      if (bad) return res.status(400).json({ error: bad, field: passwordProblem(password) ? 'password' : 'name' }); }
     // The Terms of Service and Privacy Policy must be agreed to, by a tick
     // the person makes themselves (DPDP). Existing accounts are unaffected.
     if (!consentGiven(req.body)) {

@@ -438,7 +438,7 @@
         <div class="fc-price" id="freeCancelPriceWrap" hidden>
           <label for="freeCancelFee">Free cancellation price (₹ per booking) <span style="color:#a3402f;">*</span></label>
           <input id="freeCancelFee" type="number" step="1" inputmode="numeric" placeholder="e.g. 1500" aria-describedby="freeCancelFeeRule freeCancelExample">
-          <p class="fc-optin-help" id="freeCancelFeeRule">Guests pay this amount per booking. For very short or very long stays it is kept between 5% and 30% of the stay price.</p>
+          <p class="fc-optin-help" id="freeCancelFeeRule">Guests pay this amount per booking. For very short or very long stays it is kept between 5% and 30% of the stay price. Enter 0 to give guests free cancellation at no charge.</p>
           <p class="fc-optin-help fc-example" id="freeCancelExample" aria-live="polite"></p>
         </div>
         <p class="price-history-note">You can change this any time. It applies to new bookings only — a booking that already has free cancellation keeps what it paid.</p>
@@ -1755,7 +1755,7 @@
   function freeCancelChargeFor(fixed, subtotal){
     if(fixed == null || fixed === '') return 0;
     const f = Math.round(Number(fixed)), sub = Number(subtotal);
-    if(!(f >= 0) || !(sub > 0)) return 0;
+    if(!(f > 0) || !(sub > 0)) return 0;   // ₹0 = free, no charge
     const lo = Math.ceil(sub * 5 / 100), hi = Math.floor(sub * 30 / 100);
     return hi < lo ? Math.max(0, hi) : Math.min(hi, Math.max(lo, f));
   }
@@ -1777,6 +1777,7 @@
     const ex = document.getElementById('freeCancelExample');
     const nightly = toInr(document.getElementById('nightlyRate').value);
     const fixed = fee.value.trim() !== '' ? Math.round(Number(fee.value)) : NaN;
+    if(on && fixed === 0){ ex.textContent = 'Guests get free cancellation at no charge on every booking: a full refund of the booking price, its GST and any deposit until 48 hours before check-in.'; return; }
     if(!on || !(nightly > 0) || !(fixed >= 0) || fixed > 100000){ ex.textContent = ''; return; }
     const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
     const two = nightly * 2, week = nightly * 7;
@@ -2351,7 +2352,7 @@
     document.getElementById('bookingDetailContent').innerHTML = `
       <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">Booking Detail</p>
       <p style="font-size:16px; font-weight:600; margin:0 0 12px;">${escM(b.roomName || 'Room')}</p>
-      <p style="margin:4px 0;"><strong>Guest:</strong> ${escM(b.guestEmail || b.label || '—')}</p>
+      <p style="margin:4px 0;"><strong>Guest:</strong> ${escM(b.label || 'Booked')}</p>
       <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start)} – ${fmtDate(b.end)}${b.nights ? ` (${b.nights} night${b.nights === 1 ? '' : 's'})` : ''}</p>
       ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${escM(b.guests)}</p>` : ''}
       ${b.total ? `<p style="margin:4px 0;"><strong>Total paid:</strong> ₹${Number(b.total).toLocaleString('en-IN')}</p>` : ''}
