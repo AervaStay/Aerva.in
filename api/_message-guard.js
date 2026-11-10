@@ -194,6 +194,21 @@ async function photosAllowed(sql, conversationId) {
     return reviewWindowState(isoDay(r.departure), today) === 'open';
   } catch (e) { return false; }
 }
+// Messages on a booking close with its review window (owner, 10 Nov 2026):
+// REVIEW_WINDOW_DAYS after check-out, for the guest and the host alike.
+// After that, anything about the stay goes through the Resolution Center.
+// Chats outside a booking (enquiries) are never closed by this.
+const MESSAGING_CLOSED_TEXT = 'Messages for this booking closed 15 days after check-out. For anything about this stay, raise a request in the Resolution Center (Help → Raise a request).';
+async function messagingClosed(sql, conversationId) {
+  try {
+    const r = (await sql`SELECT o.departure, l.check_out_time, l.timezone
+                         FROM conversations c JOIN orders o ON o.id = c.order_id JOIN listings l ON l.id = o.listing_id
+                         WHERE c.id = ${conversationId}`)[0];
+    if (!r) return false;
+    const end = contactsEndAt(r);
+    return end > 0 && Date.now() >= end;
+  } catch (e) { return false; }
+}
 // Numbers stay; anything else that is a way to get in touch outside Aerva goes.
 async function guardLiveBooking(sql, { conversationId, senderType, text }) {
   const own = redactContactInfo(text, { keepNumbers: true, keepEmails: true });
@@ -305,4 +320,4 @@ async function checkLinkedPhotos(text) {
   return { text: out, removed, retry };
 }
 
-module.exports = { guardMessage, askClaude, phonesAllowed, photosAllowed, scrubEndedConversations, photoVerdict, stayEndsAt, contactsEndAt, WINDOW_MINUTES, HARD_LIMIT_DIGITS, ASK_FROM_DIGITS };
+module.exports = { messagingClosed, MESSAGING_CLOSED_TEXT, guardMessage, askClaude, phonesAllowed, photosAllowed, scrubEndedConversations, photoVerdict, stayEndsAt, contactsEndAt, WINDOW_MINUTES, HARD_LIMIT_DIGITS, ASK_FROM_DIGITS };

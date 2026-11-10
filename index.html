@@ -817,7 +817,7 @@
       </div>
       <p id="listPriceResortNote" style="font-size:11.5px; opacity:0.6; margin-top:-8px; margin-bottom:16px; display:none;">Not needed for a Resort — the price shown to guests is worked out automatically from your rooms' own prices below (the lowest one, as a "from" price), so there's nothing redundant to fill in here.</p>
       <div class="field">
-        <label for="listSecurityDeposit"><span id="listSecurityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, refundable, held 7 days after checkout</span></label>
+        <label for="listSecurityDeposit"><span id="listSecurityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, refundable, held for 24 hours after check-out</span></label>
         <input id="listSecurityDeposit" name="Security Deposit" type="number" min="0" placeholder="e.g. 2000">
       </div>
       <!-- The host's choice, off by default (api/submit-listing.js freeCancelOffered). -->
@@ -832,7 +832,7 @@
         <!-- Its price: a fixed ₹ amount per booking (api/submit-listing.js freeCancelFee). -->
         <div class="fc-price" id="listFreeCancelPriceWrap" hidden>
           <label for="listFreeCancelFee">Free cancellation price (₹ per booking) <span class="required-mark">*</span></label>
-          <input id="listFreeCancelFee" type="number" min="100" max="100000" step="1" inputmode="numeric" placeholder="e.g. 1500" aria-describedby="listFreeCancelFeeRule listFreeCancelExample">
+          <input id="listFreeCancelFee" type="number" step="1" inputmode="numeric" placeholder="e.g. 1500" aria-describedby="listFreeCancelFeeRule listFreeCancelExample">
           <p class="fc-optin-help" id="listFreeCancelFeeRule">Guests pay this amount per booking. For very short or very long stays it is kept between 5% and 30% of the stay price.</p>
           <p class="fc-optin-help fc-example" id="listFreeCancelExample" aria-live="polite"></p>
         </div>
@@ -1584,14 +1584,14 @@
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 <script src="aerva-photo-location.js?v=2026-11-07a" defer></script>
-<script src="aerva-policies.js?v=2026-11-11f" defer></script>
+<script src="aerva-policies.js?v=2026-11-11g" defer></script>
 <script src="aerva-help.js?v=2026-11-11f" defer></script>
 <script src="aerva-privacy.js?v=2026-10-10i" defer></script>
 <script src="aerva-id-verify.js?v=2026-11-05a" defer></script>
 <script src="aerva-bank-fields.js?v=2026-10-13a" defer></script>
 <script src="aerva-special.js?v=2026-11-10a" defer></script>
 <script src="aerva-guest-verify.js?v=2026-11-11d" defer></script>
-<script src="aerva.js?v=2026-11-11f" defer></script>
+<script src="aerva.js?v=2026-11-11i" defer></script>
 
 </body>
 </html>

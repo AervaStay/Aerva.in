@@ -741,7 +741,7 @@
 <script src="aerva-cohost.js?v=2026-11-11d"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
-<script src="aerva-policies.js?v=2026-11-11f"></script>
+<script src="aerva-policies.js?v=2026-11-11g"></script>
 <script src="aerva-guest-verify.js?v=2026-11-11d"></script>
 </head>
 <body>
@@ -1894,7 +1894,7 @@
           <div class="listing-meta">${escH(item.city || 'No city yet')} · ${inrText(item.nightly_rate)}/night ${statusBadgeHtml(item.status)}</div>
             ${item.status === 'approved' || item.status === 'deactivated' ? cancelRateHtml(item) : ''}
           ${rejectionNoteHtml}
-          ${!isResort && item.free_cancel_offered === true && !(Number(item.free_cancel_fee) >= 100) ? `<p class="calendar-hint" data-free-cancel-needs-price style="color:#7a3b12;">Set a price to keep offering free cancellation (Manage listing). Until then guests can’t add it.</p>` : ''}
+          ${!isResort && item.free_cancel_offered === true && !(item.free_cancel_fee != null && Number(item.free_cancel_fee) >= 0) ? `<p class="calendar-hint" data-free-cancel-needs-price style="color:#7a3b12;">Set a price to keep offering free cancellation (Manage listing). Until then guests can’t add it.</p>` : ''}
           ${calendarHintHtml}
         </div>
         <div class="card-actions" style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">

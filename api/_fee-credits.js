@@ -539,7 +539,7 @@ const EMAIL_DAY = 15, EMAIL_LAST_DAY = 21;
 const TAGLINES = [
   { subject: (a) => `Your next getaway is already ${a} closer`, line: (a) => `You have <strong>${a}</strong> of Aerva credit waiting. Pick a stay — it comes off the price automatically.` },
   { subject: (a) => `${a} of Aerva credit is waiting for you`, line: (a) => `Somewhere beautiful is waiting, and <strong>${a}</strong> of it is already paid for.` },
-  { subject: (a) => `A weekend away, partly on us: ${a} of credit`, line: (a) => `Your <strong>${a}</strong> Aerva credit is ready to use on any stay or experience in India.` },
+  { subject: (a) => `Plan a weekend away: your ${a} of Aerva credit is waiting`, line: (a) => `Your <strong>${a}</strong> Aerva credit is ready to use on any stay or experience in India.` },
   { subject: (a) => `Don’t let ${a} sit idle — plan your escape`, line: (a) => `Hills, beaches or a quiet villa: use your <strong>${a}</strong> credit on your next booking.` }
 ];
 async function remindOnSignIn(sql, guestId) {

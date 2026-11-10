@@ -636,7 +636,7 @@ async function loadCohostMoney(ctx, accountId, mode) {
 // What a co-host may see of one booking on the dashboard: the stay, the
 // guest, the deposit's state and the cancellation — none of the money.
 const COHOST_BOOKING_KEYS = ['id', 'suite_name', 'listing_id', 'arrival', 'departure', 'nights', 'guests',
-  'deposit_amount', 'deposit_status', 'deposit_release_at', 'deposit_window_open', 'dispute_reason', 'dispute_raised_at',
+  'deposit_amount', 'deposit_status', 'deposit_release_at', 'deposit_window_open', 'deposit_window_ends_at', 'dispute_reason', 'dispute_raised_at',
   'cancellation_reason', 'cancelled_at', 'status', 'created_at', 'pet_types', 'service_animal_types', 'young_litter_count',
   'charge_currency', 'guest_email', 'guest_name', 'refund_percent', 'refund_status', 'cancelled_by', 'can_cancel', 'order_type'];
 // One booking on the status calendar.
@@ -1913,7 +1913,7 @@ module.exports = async (req, res) => {
         RETURNING id
       `;
       // No damage: the host releases the deposit with the review — refunded
-      // two bank working days later instead of after 7 days (_deposits.js).
+      // on the next run instead of 24 hours after check-out (_deposits.js).
       let deposit = null;
       if (b.releaseDeposit === true) {
         deposit = await require('./_deposits').releaseEarly(sql, order.id, { hostId: me.host_id });
@@ -2886,9 +2886,8 @@ module.exports = async (req, res) => {
       // never trust orderId alone, since it's just a number a guest's
       // browser could also send.
       const rows = await sql`
-        SELECT o.id, o.deposit_status, o.deposit_release_at, o.deposit_amount,
-               (o.deposit_release_at IS NOT NULL
-                AND (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date > o.deposit_release_at) AS window_closed
+        SELECT o.id, o.deposit_status, o.deposit_release_at::text AS deposit_release_at, o.deposit_amount,
+               COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}) AS tz, to_jsonb(l)->>'check_out_time' AS check_out_time
         FROM orders o
         JOIN listings l ON o.listing_id = l.id
         WHERE o.id = ${orderId} AND l.host_id = ${guest.host_id}
@@ -2905,11 +2904,11 @@ module.exports = async (req, res) => {
         const rel = (await sql`SELECT to_jsonb(orders)->>'deposit_released_by_host_at' AS t FROM orders WHERE id = ${orderId}`)[0];
         if (rel && rel.t) return res.status(400).json({ error: 'You confirmed there was no damage when you reviewed this guest, so the deposit is being refunded.' });
       } catch (e) { /* column not added yet */ }
-      // "Within 7 days of check-out" (aerva-policies.js): deposit_release_at
-      // is check-out + 7 days, and that whole day still counts — on the
-      // listing's own calendar, not the server's UTC clock.
-      if (order.window_closed === true || order.window_closed === 't') {
-        return res.status(400).json({ error: 'The 7-day window to raise a concern on this deposit has passed.' });
+      // "Within 24 hours of check-out" (aerva-policies.js): deposit_release_at
+      // is the day after check-out, and the window ends that day at the
+      // listing's check-out time — on the listing's own clock.
+      if (order.deposit_release_at && !(require('./_booking-rules').depositWindowEndMs(order.deposit_release_at, order.tz, order.check_out_time) > Date.now())) {
+        return res.status(400).json({ error: 'The 24 hours to report damage on this deposit have passed.' });
       }
 
       // Guarded on 'held' in the UPDATE itself, not just the check above:
@@ -4235,7 +4234,7 @@ module.exports = async (req, res) => {
              discount_type, discount_value, discount_min_nights, discount_description,
              latitude, longitude, formatted_address, pincode,
              exterior_photo_urls, interior_photo_urls, cover_photo_url, created_at,
-             pending_room_photos,
+             pending_room_photos, to_jsonb(listings)->'draft_room_photos' AS draft_room_photos,
              listing_type, hosting_listing_id, experience_category, experience_price_unit,
              experience_duration_hours, experience_duration_days, experience_type, experience_arranges_travel,
              experience_travel_details, experience_meeting_point_type,
@@ -4310,8 +4309,7 @@ module.exports = async (req, res) => {
              COALESCE((to_jsonb(o)->>'free_cancel_commission')::int, 0) AS free_cancel_commission,
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
              -- the host may still raise a concern (same rule as raiseDispute)
-             (o.deposit_release_at IS NOT NULL
-              AND (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date <= o.deposit_release_at) AS deposit_window_open,
+             COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}) AS deposit_tz, to_jsonb(l)->>'check_out_time' AS deposit_check_out_time,
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.cancellation_reason, o.cancelled_at,
              o.status, o.created_at, o.pet_types, o.service_animal_types, o.young_litter_count,
@@ -4334,6 +4332,15 @@ module.exports = async (req, res) => {
     `;
     // A gift: the guest staying, marked "Gift — booked by …" (_gifts.js).
     await require('./_gifts').decorateHostRows(sql, bookings, { phoneKey: '__none' });
+    // The host may still report damage (same rule as raiseDispute): until
+    // 24 hours after check-out, on the listing's own clock.
+    bookings.forEach(b => {
+      const rel = b.deposit_release_at ? require('./_booking-rules').dateStr(b.deposit_release_at) : null;
+      const end = rel ? require('./_booking-rules').depositWindowEndMs(rel, b.deposit_tz, b.deposit_check_out_time) : NaN;
+      b.deposit_window_open = end > Date.now();
+      b.deposit_window_ends_at = end > 0 ? new Date(end).toISOString() : null;
+      delete b.deposit_tz; delete b.deposit_check_out_time;
+    });
     // Each booking's co-host shares, so the host sees what is theirs after
     // co-hosts. Separate and fail-safe: before migration_cohost_commission.sql
     // has run there is no shares table, and bookings must still load.
