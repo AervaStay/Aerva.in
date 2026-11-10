@@ -87,7 +87,14 @@ const dayText = (v) => {
 
 // Has the database update run? True is remembered; false is asked again.
 let isReady = false;
+// SWITCHED OFF (owner, 11 Nov 2026): for now a host and a co-host settle the
+// coupon between themselves, outside Aerva. Nothing new can be asked or
+// answered and the pages do not offer it, unless COHOST_COUPON_REQUESTS=1 is
+// set in the environment (nothing is processed while it is off; the feature
+// had not gone live before the switch, so no request is left half way).
+const switchedOn = () => String(process.env.COHOST_COUPON_REQUESTS || '').trim() === '1';
 async function ready(sql) {
+  if (!switchedOn()) return false;
   if (isReady) return true;
   try { await sql`SELECT id, cohost_payout_id FROM cohost_coupon_requests LIMIT 0`; await sql`SELECT cohost_coupon_request_id FROM host_penalties LIMIT 0`; isReady = true; }
   catch (e) { isReady = false; }
@@ -176,6 +183,7 @@ async function eligibility(sql, { orderId, cohostGuestId }) {
 
 // The co-host asks. from: 'cancel' (the tick box) | 'later'. Returns the request's view.
 async function ask(sql, { orderId, cohostGuestId, note, from = 'later' }) {
+  if (!switchedOn()) throw userError('A host and a co-host settle the coupon between themselves, outside Aerva.', 409);
   if (!(await ready(sql))) throw userError(`This is not available yet (database update ${MIGRATION}).`, 503);
   const e = await eligibility(sql, { orderId, cohostGuestId });
   if (!e.ok) throw userError(e.message, e.why === 'already_asked' ? 409 : e.why === 'not_found' ? 404 : e.why === 'not_cohost' ? 403 : 400, { why: e.why });
@@ -273,6 +281,7 @@ async function expireDue(sql) {
 // their access. Accepting records the deduction in the SAME statement that
 // claims the request, so two clicks (or two tabs) can never record two.
 async function answer(sql, { requestId, guestId, accept }) {
+  if (!switchedOn()) throw userError('A host and a co-host settle the coupon between themselves, outside Aerva.', 409);
   if (!(await ready(sql))) throw userError(`This is not available yet (database update ${MIGRATION}).`, 503);
   await expireDue(sql);
   const row = rowsOf(await load(sql, { id: requestId }))[0];
