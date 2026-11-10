@@ -4940,12 +4940,14 @@
         : '<a href="' + esc(i.href) + '" style="color:#8a6c39; text-decoration:none; border-bottom:1px solid #d9c7a4;">' + esc(i.label) + '</a>' + (i.optional ? ' <span style="opacity:0.6;">(optional)</span>' : '')) + '</li>').join('') + '</ol>';
     }
     function card(){
-      const wrap = document.querySelector('.wrap');
+      // Shown in the Profile window, at the top of Personal Details (owner,
+      // 11 Nov 2026) — no longer above the dashboard.
+      const wrap = document.getElementById('profilePanelPersonal') || document.querySelector('.wrap');
       if(!wrap) return;
       let box = document.getElementById('setupCard');
       const todo = items.filter(i => !i.done && !i.waiting);
       if(!todo.filter(i => !i.optional).length){ if(box) box.remove(); return; }
-      if(!box){ box = document.createElement('div'); box.id = 'setupCard'; box.className = 'notice-card'; box.style.cssText = 'margin:0 0 20px; padding:18px 20px;'; wrap.insertBefore(box, wrap.firstChild); }
+      if(!box){ box = document.createElement('div'); box.id = 'setupCard'; box.className = 'notice-card'; box.style.cssText = 'margin:0 0 18px; padding:16px 18px;'; wrap.insertBefore(box, wrap.firstChild); }
       const doneN = items.filter(i => i.done).length;
       box.innerHTML = '<strong style="font-size:16px;">Getting set up · ' + doneN + ' of ' + items.length + ' done</strong>'
         + '<div style="height:6px; background:#eee5d8; border-radius:4px; margin:10px 0 12px;"><div style="height:6px; width:' + Math.round(doneN / items.length * 100) + '%; background:#a9884f; border-radius:4px;"></div></div>'

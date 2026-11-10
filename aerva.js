@@ -69,6 +69,13 @@
   function visibleOnly(list){ return hiddenListingIds.size ? (list || []).filter(l => !hiddenListingIds.has(Number(l && l.id))) : (list || []); }
   const EXTRA_GUEST_RATE = 1500;
   const BASE_OCCUPANCY = 2;
+  // A listing's own extra-guest terms (set by its host); 2 guests and ₹1,500
+  // when it has none. Same rule as api/_pricing.js extraGuestTerms.
+  function extraGuestTermsOf(listing){
+    const inc = listing ? parseInt(listing.included_guests, 10) : NaN;
+    const fee = listing && listing.extra_guest_fee != null && listing.extra_guest_fee !== '' ? Number(listing.extra_guest_fee) : NaN;
+    return { included: inc >= 1 ? inc : BASE_OCCUPANCY, fee: fee >= 0 ? Math.round(fee) : EXTRA_GUEST_RATE };
+  }
   // GST — DISPLAY ONLY. What a guest is actually charged is decided by
   // api/_gst.js; keep these numbers identical to it. Added on top of the
   // price; charged on the stay (room + extra guests after discount),
@@ -810,6 +817,7 @@
     const symbol = SUPPORTED_CURRENCIES[hostPricingCurrency].symbol.trim();
     document.getElementById('listPriceLabel').textContent = `Expected Nightly Rate (${symbol})`;
     document.getElementById('listSecurityDepositLabel').textContent = `Security Deposit (${symbol})`;
+    { const egl = document.getElementById('listExtraGuestFeeLabel'); if(egl) egl.textContent = `Fee per extra guest, per night (${symbol})`; }
     document.getElementById('listPetFeeLabel').textContent = `Pet fee (${symbol} per pet, per stay)`;
   }
   updateHostPricingLabels();
@@ -1893,6 +1901,18 @@
   const OPTIONAL_ROOM_BUCKETS = ['washroomPhotos', 'livingRoomPhotos', 'balconyPhotos'];
   // A shared space (Kitchen, Washroom, …) has just the one "photos"
   // gallery — several angles of the same space are welcome.
+  // A home whose washroom (or sitting area) is attached to a bedroom: the
+  // photos sorted into that bedroom's Washroom / Living Room section also
+  // count for the shared Washroom / Living Room, so the host is not asked for
+  // a photo they have already added (owner's report, 11 Nov 2026).
+  const SHARED_FROM_BEDROOM = { washroom: 'washroomPhotos', living_room: 'livingRoomPhotos' };
+  function borrowedSpacePhotos(room){
+    if(!room || room.isBedroom || (room.photos || []).length) return [];
+    const bucket = SHARED_FROM_BEDROOM[room.key];
+    if(!bucket) return [];
+    return roomSpaceRows.filter(x => x.isBedroom).flatMap(x => x[bucket] || []);
+  }
+  const spaceHasPhoto = (room, uploadedOnly) => { const all = allRoomPhotos(room).concat(borrowedSpacePhotos(room)); return uploadedOnly ? all.some(p => p.url) : all.length > 0; };
   function allRoomPhotos(room){
     if(!room.isBedroom) return room.photos || [];
     return [...room.photos, ...room.washroomPhotos, ...room.livingRoomPhotos, ...room.balconyPhotos];
@@ -2001,7 +2021,11 @@
               <input type="number" min="1" placeholder="Max guests" data-room-occupancy-input value="${activeRoom.maxOccupancy || ''}" style="width:110px; padding:8px 10px; font-size:13px;">
               <input type="number" min="1" placeholder="₹ / night" data-room-price-input value="${activeRoom.price || ''}" style="width:110px; padding:8px 10px; font-size:13px;">
             </div>
-            <p style="font-size:11px; opacity:0.55; margin-top:4px;">You can update this price anytime later from the Rooms tab after approval.</p>
+            <div style="display:flex; gap:10px; margin-top:8px; flex-wrap:wrap;">
+              <input type="number" min="1" step="1" inputmode="numeric" placeholder="Guests included" aria-label="Guests included in this room’s price" data-room-included-input value="${activeRoom.includedGuests || ''}" style="width:150px; padding:8px 10px; font-size:13px;">
+              <input type="number" min="0" step="1" inputmode="numeric" placeholder="₹ per extra guest / night" aria-label="Fee per extra guest, per night" data-room-extrafee-input value="${activeRoom.extraGuestFee != null ? activeRoom.extraGuestFee : ''}" style="width:190px; padding:8px 10px; font-size:13px;">
+            </div>
+            <p style="font-size:11px; opacity:0.55; margin-top:4px;">Extra guests: how many guests this room’s price covers, and the fee for each guest above that, per night (0 for no charge). Leave both empty for 2 guests and ₹1,500. You can update the price and these anytime later from the Rooms tab after approval.</p>
           ` : ''}
           ${roomBucketHtml(activeRoom, activeIdx, 'photos', activeRoom.name, false)}
           ${roomBucketHtml(activeRoom, activeIdx, 'washroomPhotos', 'Washroom', true)}
@@ -2069,6 +2093,10 @@
       if(occupancyInput) occupancyInput.addEventListener('input', () => { activeRoom.maxOccupancy = occupancyInput.value; });
       const priceInput = container.querySelector('[data-room-price-input]');
       if(priceInput) priceInput.addEventListener('input', () => { activeRoom.price = priceInput.value; });
+      const includedInput = container.querySelector('[data-room-included-input]');
+      if(includedInput) includedInput.addEventListener('input', () => { activeRoom.includedGuests = includedInput.value; });
+      const extraFeeInput = container.querySelector('[data-room-extrafee-input]');
+      if(extraFeeInput) extraFeeInput.addEventListener('input', () => { activeRoom.extraGuestFee = extraFeeInput.value; });
 
       container.querySelectorAll('[data-gallery-add]').forEach(el => wireGalleryAdd(el, activeRoom, el.dataset.galleryAdd));
       container.querySelectorAll('[data-gallery-remove]').forEach(btn => {
@@ -2628,6 +2656,45 @@
     const lo = Math.ceil(sub * 5 / 100), hi = Math.floor(sub * 30 / 100);
     return hi < lo ? Math.max(0, hi) : Math.min(hi, Math.max(lo, f));
   }
+  // ---- Extra guests: guests included in the rate, fee per extra guest ----
+  function listMaxGuestsNumber(){ const n = parseInt((document.getElementById('listGuests') || {}).value, 10); return n >= 1 ? n : 0; }
+  function syncListExtraGuests(keep){
+    const wrap = document.getElementById('listExtraGuestField'), sel = document.getElementById('listIncludedGuests');
+    const feeWrap = document.getElementById('listExtraGuestFeeWrap'), fee = document.getElementById('listExtraGuestFee'), ex = document.getElementById('listExtraGuestExample');
+    if(!wrap || !sel || !fee || !ex) return;
+    const isResort = document.getElementById('listType').value === 'Resort';
+    wrap.style.display = isResort ? 'none' : '';
+    if(isResort) return;
+    const max = listMaxGuestsNumber();
+    const want = keep != null ? Number(keep) : (parseInt(sel.value, 10) || 0);
+    const top = max || 12;
+    sel.innerHTML = Array.from({ length: top }, (_, i) => `<option value="${i + 1}">${i + 1} guest${i === 0 ? '' : 's'}</option>`).join('');
+    sel.value = String(Math.min(top, want >= 1 ? want : Math.min(BASE_OCCUPANCY, top)));
+    const inc = parseInt(sel.value, 10);
+    const extras = max ? Math.max(0, max - inc) : null;
+    feeWrap.style.display = extras === 0 ? 'none' : '';
+    fee.disabled = extras === 0;
+    const f = fee.value.trim() === '' ? null : Math.round(Number(hostAmountToInr(fee.value)));
+    const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
+    ex.textContent = !max ? 'Choose the maximum number of guests above to see how this works.'
+      : extras === 0 ? `All ${max} guest${max === 1 ? ' is' : 's are'} covered by the nightly rate: no extra guest fee.`
+      : f == null ? `Up to ${extras} extra guest${extras === 1 ? '' : 's'} (guest${extras === 1 ? '' : 's'} ${inc + 1}${extras === 1 ? '' : '–' + max}). Enter the fee for each, per night; 0 for no charge.`
+      : f === 0 ? `Up to ${extras} extra guest${extras === 1 ? '' : 's'} at no extra charge.`
+      : `Up to ${extras} extra guest${extras === 1 ? '' : 's'}, ${inr(f)} each per night. With ${max} guests for 2 nights, that adds ${inr(f * extras * 2)}.`;
+  }
+  function listExtraGuestProblem(){
+    const sel = document.getElementById('listIncludedGuests'), fee = document.getElementById('listExtraGuestFee');
+    if(!sel || !fee || document.getElementById('listType').value === 'Resort' || fee.disabled) return '';
+    const raw = fee.value.trim(), n = Number(raw);
+    if(raw === '') return 'Please enter the fee per extra guest, per night (0 for no charge).';
+    if(!Number.isFinite(n) || n < 0 || Math.round(n) !== n) return 'Enter the fee per extra guest as a whole amount, 0 or more.';
+    return '';
+  }
+  ['listGuests', 'listIncludedGuests', 'listExtraGuestFee', 'listType', 'listPricingCurrency'].forEach(id => {
+    const el = document.getElementById(id); if(!el) return;
+    el.addEventListener('change', () => syncListExtraGuests()); el.addEventListener('input', () => syncListExtraGuests());
+  });
+  syncListExtraGuests();
   function listFreeCancelProblem(){
     const t = document.getElementById('listFreeCancelOffered'), fee = document.getElementById('listFreeCancelFee');
     if(!t || !fee || !t.checked || document.getElementById('listType').value === 'Resort') return '';
@@ -2768,6 +2835,7 @@
         ...(isResortSubmission ? [] : [{ value: document.getElementById('listPrice').value, field: 'listPrice', message: 'Please enter the expected nightly rate.' }]),
         { value: (document.getElementById('listCheckInTime') || { value: 'x' }).value, field: 'listCheckInTime', message: 'Please set the check-in time.' },
         { value: (document.getElementById('listCheckOutTime') || { value: 'x' }).value, field: 'listCheckOutTime', message: 'Please set the check-out time.' },
+        { value: !listExtraGuestProblem(), field: 'listExtraGuestFee', message: listExtraGuestProblem() || 'x' },
         { value: document.getElementById('listDescription').value.trim(), field: 'listDescription', message: 'Please tell us a bit about the property.' }
       ];
       for(const check of requiredChecks){
@@ -2802,7 +2870,7 @@
       // as having its photo requirement met once its gallery has at
       // least one photo — no specific label (washroom, balcony, etc.)
       // required within it.
-      const missingMandatorySpaces = roomSpaceRows.filter(r => r.mandatory && allRoomPhotos(r).length === 0);
+      const missingMandatorySpaces = roomSpaceRows.filter(r => r.mandatory && !spaceHasPhoto(r, false));
       if(missingMandatorySpaces.length){
         errorEl.textContent = `Please add a photo for: ${missingMandatorySpaces.map(r => r.name || 'an unnamed bedroom').join(', ')}.`;
         errorEl.style.display = 'block';
@@ -2911,7 +2979,7 @@
         exteriorPhotoUrls = exteriorPhotoUrls || [];
         exteriorPhotoHashes = exteriorPhotoHashes || [];
         const stillMissingMandatory = roomSpaceRows.some(r =>
-          r.mandatory && allRoomPhotos(r).every(p => !p.url)
+          r.mandatory && !spaceHasPhoto(r, true)
         );
         if(!isDraft && (exteriorPhotoUrls.length === 0 || stillMissingMandatory)){
           const detail = uploadErr && uploadErr.message ? ` (${uploadErr.message})` : '';
@@ -2947,9 +3015,7 @@
         activeBtn.textContent = 'Send listing for review';
         return;
       }
-      const roomsStillMissingPhotos = roomSpaceRows.filter(r =>
-        r.mandatory && allRoomPhotos(r).every(p => !p.url)
-      );
+      const roomsStillMissingPhotos = roomSpaceRows.filter(r => r.mandatory && !spaceHasPhoto(r, true));
       if(roomsStillMissingPhotos.length){
         errorEl.textContent = `Please add a photo for: ${roomsStillMissingPhotos.map(r => r.name || 'an unnamed bedroom').join(', ')} — one of the earlier uploads didn't go through, please try again.`;
         errorEl.style.display = 'block';
@@ -2980,7 +3046,7 @@
     // carries just its one "url", since those never become listing_rooms
     // records regardless (see submit-listing.js).
     const roomPhotos = roomSpaceRows
-      .filter(r => allRoomPhotos(r).some(p => p.url))
+      .filter(r => allRoomPhotos(r).some(p => p.url) || borrowedSpacePhotos(r).some(p => p.url))
       .map(r => r.isBedroom
         ? {
             roomName: r.name, isBedroom: true,
@@ -2990,9 +3056,15 @@
             // everything else, which submit-listing.js treats the same
             // as "not provided" (see its own room-photo sanitization).
             maxOccupancy: Number(r.maxOccupancy) || undefined,
-            price: Number(r.price) || undefined
+            price: Number(r.price) || undefined,
+            // A Resort room's own extra-guest terms (empty = 2 guests, ₹1,500).
+            includedGuests: String(r.includedGuests == null ? '' : r.includedGuests).trim() === '' ? undefined : Number(r.includedGuests),
+            extraGuestFee: String(r.extraGuestFee == null ? '' : r.extraGuestFee).trim() === '' ? undefined : Number(r.extraGuestFee)
           }
-        : (() => { const urls = allRoomPhotos(r).filter(p => p.url).map(p => p.url); return { roomName: r.name, isBedroom: false, urls, url: urls[0] }; })()
+        : (() => { const own = allRoomPhotos(r).filter(p => p.url).map(p => p.url);
+            // No photo of its own: the ones from a bedroom's attached washroom / sitting area stand for it.
+            const urls = own.length ? own : [...new Set(borrowedSpacePhotos(r).filter(p => p.url).map(p => p.url))];
+            return { roomName: r.name, isBedroom: false, urls, url: urls[0] }; })()
       );
     const roomPhotoHashes = [
       ...roomSpaceRows.filter(r => !r.isBedroom).flatMap(r => allRoomPhotos(r).filter(p => p.hash).map(p => p.hash)),
@@ -3033,6 +3105,9 @@
           allowedPetTypes: petFriendlyYes.checked ? collectCheckedValues('PetTypes') : [],
           petFee: petFriendlyYes.checked ? hostAmountToInr(document.getElementById('listPetFee').value) : '',
           securityDeposit: hostAmountToInr(document.getElementById('listSecurityDeposit').value),
+          // Extra guests: guests covered by the nightly rate, and the fee for each extra one (per night, INR).
+          includedGuests: document.getElementById('listType').value === 'Resort' ? undefined : ((document.getElementById('listIncludedGuests') || {}).value || ''),
+          extraGuestFee: (() => { const el = document.getElementById('listExtraGuestFee'); if(!el || document.getElementById('listType').value === 'Resort') return undefined; if(el.disabled) return 0; const v = el.value.trim(); return v === '' ? '' : hostAmountToInr(v); })(),
           // Check-in / check-out times (24-hour HH:MM), asked on the form.
           checkInTime: (document.getElementById('listCheckInTime') || {}).value || '',
           checkOutTime: (document.getElementById('listCheckOutTime') || {}).value || '',
@@ -3241,6 +3316,8 @@
           if(Array.isArray(saved.urls)) room.photos = saved.urls.map(url => ({ url, file: null }));
           if(saved.maxOccupancy) room.maxOccupancy = saved.maxOccupancy;
           if(saved.price) room.price = saved.price;
+          if(saved.includedGuests != null) room.includedGuests = saved.includedGuests;
+          if(saved.extraGuestFee != null) room.extraGuestFee = saved.extraGuestFee;
         });
         renderRoomSpaces();
       }
@@ -3274,6 +3351,8 @@
         if(box) box.checked = true;
       });
       document.getElementById('listSecurityDeposit').value = draft.security_deposit || '';
+      { const feeEl = document.getElementById('listExtraGuestFee'); if(feeEl) feeEl.value = draft.extra_guest_fee != null ? String(draft.extra_guest_fee) : '';
+        syncListExtraGuests(draft.included_guests != null ? draft.included_guests : null); }
       { const hhmm = (v) => { const m = String(v || '').trim().match(/^(\d{1,2}):(\d{2})/); return m ? m[1].padStart(2, '0') + ':' + m[2] : ''; };
         const ci = document.getElementById('listCheckInTime'), co = document.getElementById('listCheckOutTime');
         // The lists offer every half hour; a time saved in between is added so it shows.
@@ -5738,8 +5817,8 @@
             : '<span class="suite-price-unit">Price on request</span>'}
           ${ratingBit(listing)}
         </div>
-        ${listing.nightly_rate && (listing.listing_type || 'stay') !== 'experience' && listing.property_type !== 'Resort' && parseInt(listing.max_guests, 10) > BASE_OCCUPANCY
-          ? `<div class="suite-near" data-extra-guest-note>Price for ${BASE_OCCUPANCY} guests · extra guest charges apply</div>` : ''}
+        ${listing.nightly_rate && (listing.listing_type || 'stay') !== 'experience' && listing.property_type !== 'Resort' && parseInt(listing.max_guests, 10) > extraGuestTermsOf(listing).included && extraGuestTermsOf(listing).fee > 0
+          ? `<div class="suite-near" data-extra-guest-note>Price for ${extraGuestTermsOf(listing).included} guest${extraGuestTermsOf(listing).included === 1 ? '' : 's'} · extra guest charges apply</div>` : ''}
         ${distanceHtml ? `<div class="suite-near">${distanceHtml}</div>` : ''}
         ${cancelRateCardHtml(listing)}
       </div>
@@ -11651,8 +11730,9 @@
 
     const guests = counts.adults + counts.children;
     const roomTotal = rate * nights;
-    const extraGuests = Math.max(guests - BASE_OCCUPANCY, 0);
-    const extraTotal = extraGuests * EXTRA_GUEST_RATE * nights;
+    const egT = extraGuestTermsOf(listing);
+    const extraGuests = Math.max(guests - egT.included, 0);
+    const extraTotal = extraGuests * egT.fee * nights;
     const beforeDiscount = roomTotal + extraTotal;
     const discount = calculateDiscount(listing, nights, arrival, beforeDiscount);
     const discountAmount = discount.amount;
@@ -12146,7 +12226,9 @@
   // Guests for a room when it is first picked: 2, or fewer if it sleeps fewer.
   function resortDefaultGuests(room){
     const max = Math.max(1, Number(room.maxOccupancy) || 1);
-    return Math.min(BASE_OCCUPANCY, max);
+    // The guests the room's price covers (set by the host; 2 where not set).
+    const inc = parseInt(room.includedGuests, 10) >= 1 ? parseInt(room.includedGuests, 10) : BASE_OCCUPANCY;
+    return Math.min(inc, max);
   }
 
   async function renderResortRooms(listing, arrival, departure){
@@ -12198,7 +12280,8 @@
         <div class="resort-room-guests" data-guests-for="${room.id}" style="display:none; margin:8px 0 0 88px;">
           <label for="resortGuests${room.id}" style="font-size:12.5px; margin-right:8px;">Guests in this room</label>
           <select id="resortGuests${room.id}" data-room-guests="${room.id}" style="padding:6px 8px; font-size:14px; border:1px solid var(--line-dark);">${options}</select>
-          ${max > BASE_OCCUPANCY ? `<p style="font-size:11.5px; opacity:0.6; margin:4px 0 0;">Above ${BASE_OCCUPANCY} guests, ${fmtGuest(EXTRA_GUEST_RATE)} per extra guest per night.</p>` : ''}
+          ${(() => { const t = extraGuestTermsOf({ included_guests: room.includedGuests, extra_guest_fee: room.extraGuestFee });
+              return max > t.included && t.fee > 0 ? `<p style="font-size:11.5px; opacity:0.6; margin:4px 0 0;">Above ${t.included} guest${t.included === 1 ? '' : 's'}, ${fmtGuest(t.fee)} per extra guest per night.</p>` : ''; })()}
         </div>
       </div>`;
     }).join('');

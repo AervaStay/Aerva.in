@@ -2002,6 +2002,9 @@ module.exports = async (req, res) => {
         (COALESCE((to_jsonb(listings)->>'free_cancel_offered')::boolean, false)
          AND COALESCE((to_jsonb(listings)->>'free_cancel_fee')::int, -1) >= 0) AS free_cancel_offered,
         to_jsonb(listings)->>'price_changed_at' AS price_changed_at,
+        -- the host's extra-guest terms (2026-11-11-04); missing = 2 guests, ₹1,500 per extra guest per night
+        COALESCE((to_jsonb(listings)->>'included_guests')::int, 2) AS included_guests,
+        COALESCE((to_jsonb(listings)->>'extra_guest_fee')::int, 1500) AS extra_guest_fee,
         COALESCE((to_jsonb(listings)->>'same_day_until')::int, 24) AS same_day_until
       FROM listings
       WHERE status = 'approved' AND listing_type = 'stay'
@@ -2195,7 +2198,9 @@ module.exports = async (req, res) => {
       const resortIdsInResults = filtered.filter(l => l.property_type === 'Resort').map(l => l.id);
       if (resortIdsInResults.length) {
         const detailedRoomRows = await sql`
-          SELECT id, listing_id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, photo_urls
+          SELECT id, listing_id, room_name, max_occupancy, nightly_rate, description, cover_photo_url, photo_urls,
+                 COALESCE((to_jsonb(listing_rooms)->>'included_guests')::int, 2) AS included_guests,
+                 COALESCE((to_jsonb(listing_rooms)->>'extra_guest_fee')::int, 1500) AS extra_guest_fee
           FROM listing_rooms
           WHERE listing_id = ANY(${resortIdsInResults}) AND is_active = TRUE
           ORDER BY sort_order ASC, created_at ASC
@@ -2215,6 +2220,8 @@ module.exports = async (req, res) => {
             roomName: r.room_name,
             maxOccupancy: r.max_occupancy,
             price: r.nightly_rate,
+            // Extra guests in this room: how many the price covers, and the fee for each extra one per night.
+            includedGuests: r.included_guests, extraGuestFee: r.extra_guest_fee,
             description: r.description,
             coverPhotoUrl: r.cover_photo_url,
             photos,

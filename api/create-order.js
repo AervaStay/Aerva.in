@@ -169,8 +169,9 @@ function priceLines(stayDetails, experienceDetails, { gst, fee, deposit, coupon 
     const roomTotal = x.roomPortion + x.discountAmount - x.extraGuestCharge;
     lines.push({ kind: 'room', item: x.suite, label: `${x.suite} — ${plural(x.nights, 'night')}`, amount: roomTotal,
                  rate: x.nights ? Math.round(roomTotal / x.nights) : roomTotal, nights: x.nights, guests: x.guests, withExperience: !!x.withExperienceId });
-    const extra = Math.max(0, x.guests - BASE_OCCUPANCY);
-    if (x.extraGuestCharge) lines.push({ kind: 'extra', item: x.suite, label: `${plural(extra, 'extra guest')} (above ${BASE_OCCUPANCY})`, amount: x.extraGuestCharge });
+    const included = Number(x.includedGuests) || BASE_OCCUPANCY;
+    const extra = Math.max(0, x.guests - included);
+    if (x.extraGuestCharge) lines.push({ kind: 'extra', item: x.suite, label: `${plural(extra, 'extra guest')} (above ${included})`, amount: x.extraGuestCharge });
     if (x.discountAmount) lines.push({ kind: 'discount', item: x.suite, label: 'Offer applied', amount: -x.discountAmount });
     if (x.petFeeAmount) lines.push({ kind: 'pets', item: x.suite, label: `Pet fee (${plural((x.petTypes || []).length, 'pet')})`, amount: x.petFeeAmount });
     if (x.serviceAnimalFee) lines.push({ kind: 'service', item: x.suite, label: 'Additional service or support animals', amount: x.serviceAnimalFee });
