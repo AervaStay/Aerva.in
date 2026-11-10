@@ -22,6 +22,10 @@
 //
 //   POST { mode: 'support-signed-out', problem, accountEmail, phone, contactEmail?, description }
 //     "Can't sign in?" — a support request without an account (see below).
+//   POST { mode: 'support-signed-out-view', ref, key }
+//   POST { mode: 'support-signed-out-reply', ref, key, text }
+//   POST { mode: 'support-signed-out-new-link', ref, contactEmail }
+//     Following that request on its private link, without signing in.
 //
 //   POST { mode: 'forgot-password', email }
 //     Sends a password reset link if an account exists for this email,
@@ -652,11 +656,42 @@ module.exports = async (req, res) => {
     try {
       const out = await require('./_support').createSignedOutRequest(sql, { problem: b.problem, accountEmail: b.accountEmail, phone: b.phone,
         contactEmail: b.contactEmail, description: b.description, honeypot: b.website, ip: clientIp });
-      return res.status(200).json({ success: true, ref: out.ref, message: out.message });
+      // key: the private link's key, shown once on the success screen (also
+      // emailed). Present (random, unused) on the honeypot answer too, so a
+      // bot learns nothing from the shape of the answer.
+      return res.status(200).json({ success: true, ref: out.ref, key: out.key || null, message: out.message });
     } catch (err) {
       if (err.isUserFacing) return res.status(err.status || 400).json({ error: err.message });
-      console.error('guest-auth (support-signed-out) error:', err);
+      console.error('guest-auth (support-signed-out) error:', err.message);
       return res.status(500).json({ error: 'Your request could not be sent right now. Please try again in a few minutes.' });
+    }
+  }
+
+  // ---- The request's private link (no sign-in) ----
+  // index.html?view=help&request=SR-…&key=… (aerva-help.js). The key is the
+  // only proof and opens that one request only (_support.js keyTicket):
+  //   'support-signed-out-view'     { ref, key }        → { request }
+  //   'support-signed-out-reply'    { ref, key, text }  → { request } (≤ 2000 chars, 20/hour per request and per IP)
+  //   'support-signed-out-new-link' { ref, contactEmail } → always the same answer (3/hour per IP)
+  // POST only, so the key never sits in a logged URL; errors are logged
+  // without the request body.
+  if (mode === 'support-signed-out-view' || mode === 'support-signed-out-reply' || mode === 'support-signed-out-new-link') {
+    const b = req.body || {};
+    const S = require('./_support');
+    res.setHeader('Cache-Control', 'no-store');
+    res.setHeader('X-Robots-Tag', 'noindex, nofollow');
+    try {
+      if (mode === 'support-signed-out-new-link') {
+        return res.status(200).json(await S.signedOutNewLink(sql, { ref: b.ref, contactEmail: b.contactEmail, ip: clientIp }));
+      }
+      const request = mode === 'support-signed-out-view'
+        ? await S.signedOutView(sql, { ref: b.ref, key: b.key, ip: clientIp })
+        : await S.signedOutReplyTo(sql, { ref: b.ref, key: b.key, text: b.text, ip: clientIp });
+      return res.status(200).json({ request });
+    } catch (err) {
+      if (err.isUserFacing) return res.status(err.status || 400).json({ error: err.message });
+      console.error(`guest-auth (${mode}) error:`, err.message);
+      return res.status(500).json({ error: 'Your request could not be opened right now. Please try again in a few minutes.' });
     }
   }
 

@@ -3105,6 +3105,14 @@ footer .foot-bottom{ margin-top:0; }
 .hc-radios .hc-check input{ margin-top:0; }
 .hc-radios .hc-check:has(input:checked){ border-color:var(--ink); background:var(--surface-2); }
 .hc-hp{ position:absolute !important; left:-9999px !important; top:auto; width:1px; height:1px; overflow:hidden; }
+.hc-small{ font-size:13px; margin-top:14px; }
+.hc-small a{ color:var(--gold-text); text-decoration:underline; }
+/* A signed-out request's private link (renderSigninSent) */
+.hc-so-link{ margin:18px 0; padding:16px 18px; border:1px solid #dccfbd; border-radius:12px; background:var(--surface-2); }
+.hc-so-link p{ margin:0 0 10px; line-height:1.55; }
+.hc-so-linkrow{ display:flex; gap:8px; align-items:stretch; min-width:0; }
+.hc-so-linkrow input{ flex:1 1 auto; min-width:0; font-size:13px; padding:10px 12px; border:1px solid #d6cbbd; border-radius:8px; background:#fff; color:var(--ink); }
+.hc-so-linkrow .btn{ flex:0 0 auto; }
 .hc-ref{ font-size:18px; margin:14px 0; }
 .hc-ref strong{ font-family:'Jost', sans-serif; letter-spacing:0.06em; padding:4px 10px; background:var(--surface-2); border-radius:8px; margin-left:6px; }
 

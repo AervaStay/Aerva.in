@@ -14,6 +14,14 @@
 //                                       after an email change, no codes);
 //                                       api/guest-auth.js mode
 //                                       'support-signed-out'
+//   ?view=help&request=SR-…&key=<key>   that request's private page, no
+//                                       sign-in: the thread, status and a
+//                                       reply box (guest-auth.js modes
+//                                       'support-signed-out-view' / '-reply').
+//                                       The key is moved from the address bar
+//                                       into sessionStorage on load.
+//   ?view=help&newlink=1[&request=SR-…] "Get a new link" (mode
+//                                       'support-signed-out-new-link')
 //
 // The words (topics, badges, contact numbers, commitments) live in
 // aerva-policies.js under AERVA_POLICIES.support. The requests themselves
@@ -35,6 +43,7 @@
   var root = null;
   var options = null;          // supportOptions, once per page load
   var popWired = false;
+  var soTimer = null;          // the private page checks for replies while open
 
   // ------------------------------------------------------------------ helpers
   function token(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } }
@@ -97,6 +106,36 @@
     var d = String(v || '').replace(/\D/g, '');
     if(d.length === 10) d = '91' + d;    // an Indian mobile written without +91
     return 'https://wa.me/' + d;
+  }
+
+  // The private link's key: kept for this tab only, never in the address bar.
+  function soKeyGet(ref){ try{ return sessionStorage.getItem('aerva_sr_key:' + ref) || ''; }catch(e){ return ''; } }
+  function soKeySet(ref, key){ try{ sessionStorage.setItem('aerva_sr_key:' + ref, key); }catch(e){} }
+  function soKeyDrop(ref){ try{ sessionStorage.removeItem('aerva_sr_key:' + ref); }catch(e){} }
+  function soLink(ref, key){
+    var base = window.location.origin && /^https?:/.test(window.location.origin) ? window.location.origin + window.location.pathname.replace(/[^/]*$/, '') : 'https://aerva.in/';
+    return base + 'index.html?view=help&request=' + encodeURIComponent(ref) + '&key=' + encodeURIComponent(key);
+  }
+  // A private page: kept out of search engines, and no address sent onwards.
+  function privatePage(){
+    [['robots', 'noindex, nofollow'], ['referrer', 'no-referrer']].forEach(function(m){
+      var el = document.querySelector('meta[name="' + m[0] + '"]');
+      if(!el){ el = document.createElement('meta'); el.setAttribute('name', m[0]); document.head.appendChild(el); }
+      el.setAttribute('content', m[1]);
+    });
+  }
+  // guest-auth.js, without a session (the signed-out request modes).
+  async function soApi(mode, body){
+    var res = await fetch(API + '/api/guest-auth', { method: 'POST', headers: { 'Content-Type': 'application/json' },
+      referrerPolicy: 'no-referrer', body: JSON.stringify(Object.assign({ mode: mode }, body)) });
+    var data = {};
+    try{ data = await res.json(); }catch(e){ data = {}; }
+    if(!res.ok){
+      var err = new Error(data.error || 'Something went wrong. Please try again in a few minutes.');
+      err.status = res.status;
+      throw err;
+    }
+    return data;
   }
 
   async function api(method, query, body){
@@ -194,7 +233,8 @@
       cards.push('<div class="hc-contact hc-contact-signin">'
         + '<h3>Can’t sign in?</h3>'
         + '<p>Account suspended, your email changed without your permission, or sign-in codes not arriving? Tell us here — you do not need an account.</p>'
-        + hlink('signin=1', 'Can’t sign in?', 'btn') + '</div>');
+        + hlink('signin=1', 'Can’t sign in?', 'btn')
+        + '<p class="hc-muted hc-small">Already sent one? ' + hlink('newlink=1', 'Get a new link to it') + '.</p></div>');
     }
     if(c.tollFree){
       cards.push('<div class="hc-contact"><h3>Call us, toll-free</h3>'
@@ -548,7 +588,11 @@
   async function renderRequest(ref){
     var head = '<p class="policy-back">' + hlink('mine=1', '‹ My requests') + '</p>';
     document.title = ref + ' — Aerva Resolution Center';
-    if(!token()){ root.innerHTML = frame('mine', head + signInPanel('see this request')); wireLinks(root); return; }
+    if(!token()){
+      root.innerHTML = frame('mine', head + signInPanel('see this request')
+        + '<p class="hc-muted">Raised it with “Can’t sign in?”? Open it with the private link we gave you, or ' + hlink('newlink=1&request=' + encodeURIComponent(ref), 'get a new link') + '.</p>');
+      wireLinks(root); return;
+    }
     root.innerHTML = frame('mine', head + '<p class="hc-muted">Loading…</p>');
     wireLinks(root);
     var r;
@@ -729,7 +773,8 @@
 
   // --------------------------------------------------------- can't sign in
   // A request without an account. The answer is the same whether or not the
-  // email has an account; Aerva replies by phone or at the email given.
+  // email has an account. The person follows it on its private link
+  // (renderKeyed); Aerva may also call them.
   function signinProblems(){
     var p = S().signinProblems;
     return (p && p.length) ? p : [
@@ -745,7 +790,7 @@
     var head = '<p class="policy-back">' + hlink('', '‹ Resolution Center') + '</p>'
       + '<div class="privacy-eyebrow">Aerva Support</div>'
       + '<h1 class="policies-title">Can’t sign in?</h1>'
-      + '<p class="hc-intro">If your account is suspended, someone changed your email without your permission, or sign-in codes do not arrive, tell us here. You do not need to sign in. Aerva will contact you by phone or by email.</p>';
+      + '<p class="hc-intro">If your account is suspended, someone changed your email without your permission, or sign-in codes do not arrive, tell us here. You do not need to sign in. You will get a private link to follow your request and talk to Aerva Support, and we may call you.</p>';
     var form = '<form class="hc-form hc-signin-form" id="hcSoForm" novalidate>'
       + '<fieldset class="hc-field hc-radios"><legend>What is the problem?</legend>'
       + signinProblems().map(function(p){
@@ -797,31 +842,187 @@
         var data = {};
         try{ data = await res.json(); }catch(x){ data = {}; }
         if(!res.ok) return fail(data.error || 'Your request could not be sent right now. Please try again in a few minutes.');
-        renderSigninSent(data.ref, data.message);
+        renderSigninSent(data.ref, data.message, data.key);
       }catch(x){ fail('Your request could not be sent right now. Please check your connection and try again.'); }
     });
   }
 
-  function renderSigninSent(ref, message){
+  function renderSigninSent(ref, message, key){
+    var link = key ? soLink(ref, key) : '';
+    if(key) soKeySet(ref, key);
     var html = '<div class="hc-sent">'
       + '<div class="privacy-eyebrow">Request received</div>'
       + '<h1 class="policies-title">Thank you.</h1>'
       + '<p class="hc-ref">Your reference number <strong>' + esc(ref) + '</strong></p>'
       + '<p>' + esc(message || ('Thanks — reference ' + ref + '; Aerva will contact you by phone or at the email you gave.')) + '</p>'
+      + (link
+        ? '<div class="hc-so-link" id="hcSoLinkBox"><p><strong>Save this link — it’s how you follow your request.</strong> Read Aerva’s replies and answer them there, without signing in. We have emailed it to you too.</p>'
+          + '<div class="hc-so-linkrow"><input type="text" id="hcSoLink" readonly value="' + esc(link) + '" aria-label="Your private link">'
+          + '<button type="button" class="btn" id="hcSoCopy">Copy</button></div>'
+          + '<p class="hc-muted hc-small">Do not share it: anyone with the link can read and reply to this request.</p></div>'
+          + '<div class="hc-actions"><a class="btn solid" id="hcSoOpen" href="' + esc(helpUrl('request=' + encodeURIComponent(ref))) + '">Open your request</a>' + hlink('', 'Back to the Resolution Center', 'btn') + '</div>'
+        : '<div class="hc-actions">' + hlink('', 'Back to the Resolution Center', 'btn') + '</div>')
       + '<p class="hc-muted">Keep the reference number. Aerva will never ask for your password or a sign-in code.</p>'
-      + '<div class="hc-actions">' + hlink('', 'Back to the Resolution Center', 'btn') + '</div>'
       + '</div>';
     root.innerHTML = frame('signin', html);
     wireLinks(root);
+    var copy = document.getElementById('hcSoCopy');
+    if(copy) copy.addEventListener('click', function(){
+      var input = document.getElementById('hcSoLink');
+      var done = function(){ copy.textContent = 'Copied'; setTimeout(function(){ copy.textContent = 'Copy'; }, 2000); };
+      try{ navigator.clipboard.writeText(input.value).then(done, function(){ input.select(); document.execCommand('copy'); done(); }); }
+      catch(e){ input.select(); try{ document.execCommand('copy'); done(); }catch(x){} }
+    });
+    var open = document.getElementById('hcSoOpen');
+    if(open) open.addEventListener('click', function(e){ e.preventDefault(); go('request=' + encodeURIComponent(ref)); });
     window.scrollTo(0, 0);
+  }
+
+  // ------------------------------------------------ a signed-out request's private page
+  async function renderKeyed(ref){
+    privatePage();
+    var q = params();
+    var key = q.get('key') || '';
+    if(key){
+      soKeySet(ref, key);
+      // Out of the address bar (and so out of history, bookmarks and screenshots).
+      try{ history.replaceState({ aervaHelp: true }, '', helpUrl('request=' + encodeURIComponent(ref))); }catch(e){}
+    } else key = soKeyGet(ref);
+    document.title = ref + ' — Aerva Resolution Center';
+    root.innerHTML = frame('signin', '<p class="hc-muted">Loading…</p>');
+    var r;
+    try{ r = (await soApi('support-signed-out-view', { ref: ref, key: key })).request; }
+    catch(e){ return keyedError(ref, e); }
+    drawKeyed(r, key);
+  }
+
+  function keyedError(ref, e){
+    if(e.status === 404 || e.status === 410) soKeyDrop(ref);
+    var html = '<div class="hc-sent">'
+      + '<div class="privacy-eyebrow">' + esc(ref) + '</div>'
+      + '<h1 class="policies-title">' + (e.status === 410 ? 'This request is closed' : 'This link does not work') + '</h1>'
+      + '<p class="hc-error" role="alert">' + esc(e.message) + '</p>'
+      + (e.status === 410
+        ? '<div class="hc-actions">' + hlink('signin=1', 'Raise a new request', 'btn solid') + '</div>'
+        : '<div class="hc-actions">' + hlink('newlink=1&request=' + encodeURIComponent(ref), 'Get a new link', 'btn solid') + hlink('', 'Resolution Center', 'btn') + '</div>')
+      + '</div>';
+    root.innerHTML = frame('signin', html);
+    wireLinks(root);
+  }
+
+  function drawKeyed(r, key){
+    var thread = (r.messages || []).map(function(m){
+      var who = m.from === 'you' ? 'You' : m.from;
+      var cls = m.from === 'you' ? 'is-you' : m.from === 'Aerva Support' ? 'is-support' : 'is-system';
+      if(cls === 'is-system') return '<li class="hc-msg is-system"><span>' + esc(m.body) + ' · ' + esc(fmtDateTime(m.at)) + '</span></li>';
+      return '<li class="hc-msg ' + cls + '"><div class="hc-msg-head"><strong>' + esc(who) + '</strong><span>' + esc(fmtDateTime(m.at)) + '</span></div>'
+        + '<div class="hc-msg-body">' + esc(m.body) + '</div></li>';
+    }).join('');
+    var max = r.replyMax || SO_BODY_MAX;
+    var statusNote = {
+      open: 'We have your request. Aerva Support will reply here, usually within 48 hours, and may call you.',
+      in_progress: 'Aerva Support is looking into this.',
+      waiting_on_you: 'We need something from you. Please reply below.',
+      resolved: 'We have marked this resolved. If something is still not right, reply below and it opens again.' + (r.autoCloseAt ? ' Otherwise it closes by itself on ' + fmtDateTime(r.autoCloseAt) + '.' : ''),
+      closed: 'This request is closed.' + (r.linkEndsAt ? ' You can read it here until ' + fmtDate(r.linkEndsAt) + '.' : '') + ' Raise a new one if you still need help.'
+    }[r.status] || '';
+    var reply = r.canReply
+      ? '<form class="hc-form hc-reply" id="hcSoReplyForm" novalidate><div class="hc-field"><label for="hcSoReply">Reply</label>'
+        + '<textarea id="hcSoReply" rows="5" maxlength="' + max + '" placeholder="Answer our question, add details, or tell us it is sorted."></textarea>'
+        + '<p class="hc-hint"><span id="hcSoReplyCount">0</span> / ' + max + '</p></div>'
+        + '<p class="hc-error" id="hcSoReplyErr" role="alert" hidden></p>'
+        + '<div class="hc-actions"><button type="submit" class="btn solid" id="hcSoReplyBtn">Send reply</button>'
+        + '<button type="button" class="btn" id="hcSoRefresh">Check for replies</button></div></form>'
+      : '<div class="hc-actions">' + hlink('signin=1', 'Raise a new request', 'btn solid') + '</div>';
+    var html = '<p class="policy-back">' + hlink('', '‹ Resolution Center') + '</p>'
+      + '<div class="hc-req-head"><div><div class="privacy-eyebrow">' + esc(r.ref) + ' · ' + esc(r.categoryLabel) + '</div>'
+      + '<h1 class="policies-title hc-req-title">' + esc(r.subject) + '</h1>'
+      + '<p class="hc-muted">Raised ' + esc(fmtDate(r.createdAt)) + ' without signing in'
+      + (r.phoneEnding ? ' · We may call you on the number ending ' + esc(r.phoneEnding) : '') + '</p></div>'
+      + statusChip(r.status, r.statusLabel) + '</div>'
+      + (statusNote ? '<p class="hc-status-note hc-status-note-' + esc(r.status) + '">' + esc(statusNote) + '</p>' : '')
+      + '<h2 class="hc-timeline-title">Conversation</h2><ol class="hc-thread">' + thread + '</ol>'
+      + reply
+      + '<p class="hc-muted hc-small">This is your private page for this request — keep the link to yourself. Lost it, or think someone else has it? '
+      + hlink('newlink=1&request=' + encodeURIComponent(r.ref), 'Get a new link') + ' (earlier links stop working). Aerva will never ask for your password or a sign-in code.</p>';
+    root.innerHTML = frame('signin', html);
+    wireLinks(root);
+    if(!r.canReply) return;
+    var ta = document.getElementById('hcSoReply'), count = document.getElementById('hcSoReplyCount');
+    ta.addEventListener('input', function(){ count.textContent = ta.value.length; });
+    var refresh = async function(){
+      try{ drawKeyed((await soApi('support-signed-out-view', { ref: r.ref, key: key })).request, key); }
+      catch(e){ keyedError(r.ref, e); }
+    };
+    document.getElementById('hcSoRefresh').addEventListener('click', refresh);
+    // New replies show up by themselves while the page is open (not while typing).
+    if(soTimer) clearInterval(soTimer);
+    soTimer = setInterval(function(){
+      var still = document.getElementById('hcSoReply');
+      if(!still){ clearInterval(soTimer); soTimer = null; return; }
+      if(document.visibilityState === 'visible' && !still.value) refresh();
+    }, 60000);
+    document.getElementById('hcSoReplyForm').addEventListener('submit', async function(e){
+      e.preventDefault();
+      var err = document.getElementById('hcSoReplyErr'), btn = document.getElementById('hcSoReplyBtn');
+      var text = ta.value.trim();
+      var fail = function(msg){ err.textContent = msg; err.hidden = false; btn.disabled = false; btn.textContent = 'Send reply'; };
+      err.hidden = true;
+      if(!text) return fail('Write your reply first.');
+      if(text.length > max) return fail('Please keep your reply under ' + max + ' characters.');
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try{ drawKeyed((await soApi('support-signed-out-reply', { ref: r.ref, key: key, text: text })).request, key); }
+      catch(x){
+        if(x.status === 404 || x.status === 410) return keyedError(r.ref, x);
+        fail(x.message);
+      }
+    });
+  }
+
+  // "Get a new link": the reference and the email Aerva writes to. The answer
+  // is the same whether or not they match.
+  function renderNewLink(ref){
+    var html = '<p class="policy-back">' + hlink('', '‹ Resolution Center') + '</p>'
+      + '<div class="privacy-eyebrow">Aerva Support</div>'
+      + '<h1 class="policies-title">Get a new link to your request</h1>'
+      + '<p class="hc-intro">For a request raised with “Can’t sign in?”. Enter its reference number and the email address Aerva writes to about it (the one you gave to reach you, or your account email if you gave no other). We will email a new private link there. Earlier links stop working.</p>'
+      + '<form class="hc-form hc-signin-form" id="hcNlForm" novalidate>'
+      + '<div class="hc-field"><label for="hcNlRef">Reference number</label><input type="text" id="hcNlRef" maxlength="11" autocomplete="off" placeholder="SR-12345678" value="' + esc(ref) + '"></div>'
+      + '<div class="hc-field"><label for="hcNlEmail">Email address</label><input type="email" id="hcNlEmail" maxlength="254" autocomplete="email" inputmode="email" placeholder="you@example.com"></div>'
+      + '<p class="hc-error" id="hcNlErr" role="alert" hidden></p>'
+      + '<p class="hc-status-note" id="hcNlDone" role="status" hidden></p>'
+      + '<div class="hc-actions"><button type="submit" class="btn solid" id="hcNlBtn">Email me a new link</button></div></form>';
+    root.innerHTML = frame('signin', html);
+    wireLinks(root);
+    document.title = 'Get a new link — Aerva Resolution Center';
+    document.getElementById('hcNlForm').addEventListener('submit', async function(e){
+      e.preventDefault();
+      var err = document.getElementById('hcNlErr'), done = document.getElementById('hcNlDone'), btn = document.getElementById('hcNlBtn');
+      var r = document.getElementById('hcNlRef').value.trim().toUpperCase(), em = document.getElementById('hcNlEmail').value.trim();
+      err.hidden = true; done.hidden = true;
+      if(!/^SR-\d{8}$/.test(r)) { err.textContent = 'Enter the reference number, like SR-12345678.'; err.hidden = false; return; }
+      if(!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(em)) { err.textContent = 'Enter the email address Aerva writes to about this request.'; err.hidden = false; return; }
+      btn.disabled = true; btn.textContent = 'Sending…';
+      try{
+        var out = await soApi('support-signed-out-new-link', { ref: r, contactEmail: em });
+        done.textContent = out.message || 'If the details match, we’ve emailed a new link.'; done.hidden = false;
+      }catch(x){ err.textContent = x.message; err.hidden = false; }
+      btn.disabled = false; btn.textContent = 'Email me a new link';
+    });
   }
 
   // ----------------------------------------------------------------- router
   function render(){
     if(!root) return;
+    if(soTimer){ clearInterval(soTimer); soTimer = null; }
     var q = params();
     if(q.get('signin')) return renderSignin();
-    if(q.get('request')) return renderRequest(q.get('request'));
+    if(q.get('newlink')) return renderNewLink(q.get('request') || '');
+    if(q.get('request')){
+      var ref = String(q.get('request')).trim().toUpperCase();
+      if(q.get('key') || soKeyGet(ref)) return renderKeyed(ref);
+      return renderRequest(q.get('request'));
+    }
     if(q.get('new')) return renderNew();
     if(q.get('mine')) return renderMine();
     if(q.get('topic')) return renderTopic(q.get('topic'));
