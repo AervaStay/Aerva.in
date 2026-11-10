@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-10v"></script>
+<script src="aerva-policies.js?v=2026-11-10w"></script>
 </head>
 <body>
 
@@ -2971,10 +2971,10 @@
     const t = d.ticket, labels = supStatusLabels(d);
     const day = (v) => v ? String(v).slice(0, 10) : '';
     // Raised without signing in ("Can't sign in?"): who wrote is not proven to
-    // be the account holder; replies are emailed to the address they gave.
+    // be the account holder; they follow it on a private link, and notices go to the address they gave.
     const signedOut = t.channel === 'signed_out';
     return [
-      signedOut ? `<div><strong>Can’t sign in</strong> <span class="sup-flag sup-late">Account access</span><br>Account email given: ${escAdmin(t.account_email || '')}<br>Replies are emailed to: <strong>${escAdmin(t.contact_email || t.account_email || '')}</strong><br>Matching account: ${t.guest_id ? '#' + Number(t.guest_id) + ' ' + escAdmin(t.person_name || '') + ' (' + escAdmin(t.person_email || '') + ')' : 'none'}<br><span class="tds-sub">Not signed in — confirm who they are by phone before acting on the account.</span>${t.callback_phone ? `<br><strong style="color:#a3402f;">Call them: <a href="tel:${escAdmin(String(t.callback_phone).replace(/[^\d+]/g, ''))}">${escAdmin(t.callback_phone)}</a></strong>` : ''}</div>` : '',
+      signedOut ? `<div><strong>Can’t sign in</strong> <span class="sup-flag sup-late">Account access</span><br>Account email given: ${escAdmin(t.account_email || '')}<br>Notices go to: <strong>${escAdmin(t.contact_email || t.account_email || '')}</strong> <span class="tds-sub">(they read your replies and answer on their private request page)</span><br>Matching account: ${t.guest_id ? '#' + Number(t.guest_id) + ' ' + escAdmin(t.person_name || '') + ' (' + escAdmin(t.person_email || '') + ')' : 'none'}<br><span class="tds-sub">Not signed in — confirm who they are by phone before acting on the account.</span>${t.callback_phone ? `<br><strong style="color:#a3402f;">Call them: <a href="tel:${escAdmin(String(t.callback_phone).replace(/[^\d+]/g, ''))}">${escAdmin(t.callback_phone)}</a></strong>` : ''}</div>` : '',
       signedOut ? '' : `<div><strong>Person</strong><br>${escAdmin(t.person_name || 'Deleted account')}<br>${escAdmin(t.person_email || '')}${t.person_phone ? '<br>' + escAdmin(t.person_phone) : ''}${t.channel === 'chat' ? '<br><span class="sup-flag sup-wa">Chat</span> <span class="tds-sub">Your replies appear in their Aerva Support chat in Messages (and by email).</span>' : ''}${t.callback_phone ? `<br><strong style="color:#a3402f;">Call them back: <a href="tel:${escAdmin(String(t.callback_phone).replace(/[^\d+]/g, ''))}">${escAdmin(t.callback_phone)}</a></strong>` : ''}</div>`,
       t.timings ? `<div><strong>Timeline</strong><br>First reply: ${t.timings.firstResponseMinutes != null ? escAdmin(supDur(t.timings.firstResponseMinutes)) : `<span style="color:${new Date(t.timings.firstResponseDueAt) < new Date() ? '#a3402f' : 'inherit'};">due by ${escAdmin(supDate(t.timings.firstResponseDueAt))}</span>`}<br>Resolved: ${t.timings.resolvedMinutes != null ? 'after ' + escAdmin(supDur(t.timings.resolvedMinutes)) : '—'}</div>` : '',
       `<div><strong>Request</strong><br>${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}<br>Status: ${escAdmin(labels[t.status] || t.status)}<br>Raised ${escAdmin(supDate(t.created_at))}${t.first_response_at ? '<br>First reply ' + escAdmin(supDate(t.first_response_at)) : '<br><span style="color:#a3402f;">No reply yet</span>'}</div>`,
@@ -3064,7 +3064,7 @@
           <div id="supSuggestList"></div>
           <div class="sup-quick" id="supQuick"></div>
         </div>
-        <textarea id="supText" placeholder="${t.channel === 'signed_out' ? 'Reply to the person (emailed to ' + escAdmin(t.contact_email || t.account_email || '') + ' — they cannot sign in), or an internal note' : t.channel === 'chat' ? 'Reply to the person (appears in their Aerva Support chat, and is emailed), or an internal note. Enter sends, Shift+Enter for a new line.' : 'Reply to the person (emailed to them), or an internal note'}"></textarea>
+        <textarea id="supText" placeholder="${t.channel === 'signed_out' ? 'Reply to the person (they read it on their private request page; ' + escAdmin(t.contact_email || t.account_email || '') + ' gets a notice without the text), or an internal note' : t.channel === 'chat' ? 'Reply to the person (appears in their Aerva Support chat, and is emailed), or an internal note. Enter sends, Shift+Enter for a new line.' : 'Reply to the person (emailed to them), or an internal note'}"></textarea>
         <div class="tds-bar">
           <label>Status after this
             <select id="supNext"><option value="">${t.status === 'closed' ? 'Leave closed' : 'Automatic (a reply → waiting for the person)'}</option>

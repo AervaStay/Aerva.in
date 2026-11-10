@@ -12,7 +12,9 @@
 //   guest-auth.js     — the header bell: requests with a reply not yet seen
 //   _accounts.js      — deleting an account erases what the person wrote
 //   guest-auth.js     — "Can't sign in?": a request raised WITHOUT an account
-//                       (createSignedOutRequest; channel 'signed_out')
+//                       (createSignedOutRequest; channel 'signed_out'), and
+//                       following it with its private link (signedOutView,
+//                       signedOutReplyTo, signedOutNewLink)
 //
 // Tables: sql/migration_support.sql. Before it runs, raising a request
 // answers 503 "not open yet"; nothing else on the site is affected.
@@ -349,7 +351,7 @@ async function replyToRequest(sql, { guestId, ref, text, attachments }) {
 
 // The person adds to their request (web, or the Support chat with via = 'chat').
 // It opens again for the team if it was waiting on them or resolved.
-async function appendUserMessage(sql, t, { body, files = [], actor, via = null, notify = true }) {
+async function appendUserMessage(sql, t, { body, files = [], actor, via = null, notify = true, auditAction = 'support_request_reply', auditExtra = {} }) {
   const row = via
     ? (await sql`INSERT INTO support_messages (ticket_id, sender, body, attachments, via) VALUES (${t.id}, 'user', ${body || '(files attached)'}, ${JSON.stringify(files)}::jsonb, ${via}) RETURNING id`)[0]
     : (await sql`INSERT INTO support_messages (ticket_id, sender, body, attachments) VALUES (${t.id}, 'user', ${body || '(files attached)'}, ${JSON.stringify(files)}::jsonb) RETURNING id`)[0];
@@ -357,8 +359,8 @@ async function appendUserMessage(sql, t, { body, files = [], actor, via = null, 
               status = CASE WHEN status IN ('waiting_on_you', 'resolved') THEN 'open' ELSE status END,
               resolved_at = CASE WHEN status = 'resolved' THEN NULL ELSE resolved_at END
             WHERE id = ${t.id}`;
-  await logAudit(sql, { action: 'support_request_reply', success: true, actorType: 'guest', actorIdentifier: String(actor || ''),
-    targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, files: files.length, via: via || 'web' } });
+  await logAudit(sql, { action: auditAction, success: true, actorType: 'guest', actorIdentifier: String(actor || ''),
+    targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, files: files.length, via: via || (t.channel === 'signed_out' ? 'private_link' : 'web'), ...auditExtra } });
   if (notify) await sendEmail(SUPPORT_INBOX(), `Reply on ${t.ref}: ${t.subject}`,
     `<p>The person replied${via === 'chat' ? ' in the Support chat' : ''} on <strong>${esc(t.ref)}</strong> (${esc(t.subject)}):</p>
      <blockquote style="margin:12px 0; padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f; white-space:pre-wrap;">${esc(body)}</blockquote>
@@ -437,10 +439,7 @@ async function autoCloseResolved(sql, { limit = 100 } = {}) {
       targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref } });
     // Raised without signing in: only ever the address the person gave (never the account's).
     if (t.channel === 'signed_out') {
-      if (t.contact_email) await sendEmail(t.contact_email, `Your request ${t.ref} is closed`,
-        `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your request is closed</h2>
-         <p><strong>${esc(t.subject)}</strong> · ${esc(t.ref)}</p>
-         <p>We marked it resolved ${FEEDBACK_HOURS} hours ago and did not hear back, so it is now closed. If you still need help, reply to this email and mention ${esc(t.ref)}.</p>`, SUPPORT_INBOX());
+      await signedOutNotice(sql, t, { closed: true, auto: true });
       continue;
     }
     const g = t.guest_id ? (await sql`SELECT email FROM guests WHERE id = ${t.guest_id}`)[0] : null;
@@ -559,9 +558,10 @@ async function adminSaveCase(sql, { id, summary, outcome, requesterConduct, othe
 async function adminReply(sql, { id, text, status = null, internal = false, adminEmail = 'admin', audit = {} }) {
   const t = (await sql`SELECT t.*, g.email AS person_email, g.name AS person_name FROM support_tickets t LEFT JOIN guests g ON g.id = t.guest_id WHERE t.id = ${Number(id) || 0}`)[0];
   if (!t) throw userError('Request not found.', 404);
-  // Raised without signing in ("Can't sign in?"): the person cannot open the
-  // request page, so replies go by email to the address they gave — never to
-  // the email on the account, which may not be theirs any more.
+  // Raised without signing in ("Can't sign in?"): the person follows it on
+  // their private request page (signedOutView). A reply or a new status sends
+  // a short notice with a link to it — never the reply itself — to the
+  // address they gave, never to the email on the account.
   const signedOut = t.channel === 'signed_out';
   if (signedOut) t.person_email = t.contact_email || t.account_email || null;
   const body = clean(text, REPLY_MAX);
@@ -607,15 +607,10 @@ async function adminReply(sql, { id, text, status = null, internal = false, admi
   await logAudit(sql, { action: internal ? 'support_internal_note' : replied ? 'support_replied' : 'support_status_changed', success: true,
     actorType: 'admin', ...audit, targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, from: t.status, to: next } });
   // The person hears about a reply, or the request being resolved or closed.
-  if (signedOut && t.person_email && (replied || (next !== t.status && ['resolved', 'closed'].includes(next)))) {
-    const what = replied ? 'Aerva Support has replied' : `Your request is now: ${STATUS_LABELS[next]}`;
-    await sendEmail(t.person_email, `${what} — ${t.ref}`,
-      `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">${esc(what)}</h2>
-       <p><strong>${esc(t.subject)}</strong> · reference <strong>${esc(t.ref)}</strong></p>
-       ${replied ? `<blockquote style="margin:12px 0; padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f; white-space:pre-wrap;">${esc(body)}</blockquote>` : ''}
-       <p>${next === 'closed' ? 'This request is closed.' : 'To answer, reply to this email and keep the reference ' + esc(t.ref) + ' in the subject. We may also call you on the number you gave.'}</p>
-       <p style="font-size:13px; color:#6e675d;">You are receiving this because you asked Aerva for help signing in. Aerva will never ask for your password or a sign-in code.</p>`, SUPPORT_INBOX());
-    if (replied) await sql`INSERT INTO support_messages (ticket_id, sender, internal, body) VALUES (${t.id}, 'system', true, ${'Emailed to ' + t.person_email + ' (raised without signing in).'})`;
+  if (signedOut && t.person_email && (replied || next !== t.status)) {
+    const sent = await signedOutNotice(sql, { ...t, contact_email: t.person_email, status: next }, { replied, closed: next === 'closed' });
+    if (sent) await sql`INSERT INTO support_messages (ticket_id, sender, internal, body) VALUES (${t.id}, 'system', true,
+                ${'Notice emailed to ' + t.person_email + ' (' + (replied ? 'a reply' : 'status ' + STATUS_LABELS[next]) + '; without the reply text, with a private link to the request).'})`;
   } else if (!signedOut && t.person_email && (replied || (next !== t.status && ['resolved', 'closed', 'waiting_on_you'].includes(next)))) {
     const what = replied ? 'Aerva Support has replied' : `Your request is now: ${STATUS_LABELS[next]}`;
     await sendEmail(t.person_email, `${what} — ${t.ref}`,
@@ -708,7 +703,7 @@ const SIGNED_OUT_PER_IP_HOUR = 3;       // requests from one address per hour
 const SIGNED_OUT_PER_EMAIL_DAY = 3;     // requests for one account email per 24 hours
 const SIGNED_OUT_BODY_MIN = 20, SIGNED_OUT_BODY_MAX = 2000;
 const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
-const signedOutReply = (ref) => `Thanks — reference ${ref}; Aerva will contact you by phone or at the email you gave.`;
+const signedOutAnswer = (ref) => `Thanks — reference ${ref}; Aerva will contact you by phone or at the email you gave.`;
 
 // The account an email belongs to now, or belonged to before an email
 // change (guest-profile.js logs 'guest_email_changed' with the new address
@@ -735,7 +730,7 @@ async function createSignedOutRequest(sql, { problem, accountEmail, phone, conta
     await logAudit(sql, { action: 'support_signed_out_request', success: false, actorType: 'guest', actorIdentifier: acct || null,
       metadata: { reason: 'honeypot', ip: ip || null } });
     const ref = randomRef();
-    return { ref, message: signedOutReply(ref), ignored: true };
+    return { ref, key: crypto.randomBytes(32).toString('base64url'), message: signedOutAnswer(ref), ignored: true };
   }
   if (!SIGNIN_PROBLEMS[problem]) throw userError('Choose what the problem is.');
   if (!EMAIL_RE.test(acct)) throw userError('Enter the email address on your Aerva account.');
@@ -772,8 +767,12 @@ async function createSignedOutRequest(sql, { problem, accountEmail, phone, conta
         ON CONFLICT (ref) DO NOTHING RETURNING *`)[0];
     }
     if (!ticket) throw new Error('could not draw a free reference number');
+    // What the person sees on their request page: no contact details (anyone
+    // holding the link would see them). The details are for the team only.
     await sql`INSERT INTO support_messages (ticket_id, sender, body, created_at) VALUES (${ticket.id}, 'system',
-                ${`Request raised without signing in (Can’t sign in?): ${label}. Reference ${ticket.ref}. Account email given: ${acct}. Phone: ${e164}.${reach ? ' Reach them at: ' + reach + '.' : ''} Replies are emailed to ${sendTo}.`}, now() - interval '2 milliseconds')`;
+                ${`Request raised without signing in (Can’t sign in?): ${label}. Reference ${ticket.ref}.`}, now() - interval '3 milliseconds')`;
+    await sql`INSERT INTO support_messages (ticket_id, sender, internal, body, created_at) VALUES (${ticket.id}, 'system', true,
+                ${`Account email given: ${acct}. Phone: ${e164}.${reach ? ' Reach them at: ' + reach + '.' : ''} Notices (no reply text, a private link to the request) go to ${sendTo}.`}, now() - interval '2 milliseconds')`;
     await sql`INSERT INTO support_messages (ticket_id, sender, internal, body, created_at) VALUES (${ticket.id}, 'system', true,
                 ${match ? `Matches account #${match.id}${match.name ? ' (' + match.name + ')' : ''} by ${match.how}. The person was not told. Confirm who they are (phone call) before acting on the account.`
                         : 'No Aerva account has this email (now or before an email change). The person was not told.'}, now() - interval '1 millisecond')`;
@@ -782,6 +781,8 @@ async function createSignedOutRequest(sql, { problem, accountEmail, phone, conta
     if (notReady(err)) throw NOT_READY();
     throw err;
   }
+  // The private link: only its hash is stored; the key is never logged.
+  const key = await issueKey(sql, ticket.id, 'created');
   await logAudit(sql, { action: 'support_signed_out_request', success: true, actorType: 'guest', actorIdentifier: acct,
     targetType: 'support_ticket', targetId: ticket.id,
     metadata: { ref: ticket.ref, problem, linked: !!match, guestId: match ? match.id : undefined, ip: ip || null } });
@@ -792,16 +793,182 @@ async function createSignedOutRequest(sql, { problem, accountEmail, phone, conta
      <p>Account email given: <strong>${esc(acct)}</strong> — ${match ? `matches account #${match.id}${match.name ? ' (' + esc(match.name) + ')' : ''} by ${esc(match.how)}` : 'no account has this email'}<br>
         Phone: <strong>${esc(e164)}</strong>${reach ? `<br>Reach them at: <strong>${esc(reach)}</strong>` : ''}</p>
      <blockquote style="margin:12px 0; padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f; white-space:pre-wrap;">${esc(text)}</blockquote>
-     <p>Confirm who they are before changing anything on an account. Replies from Admin → Support are emailed to ${esc(sendTo)}.</p>`, sendTo);
+     <p>Confirm who they are before changing anything on an account. Answer in Admin → Support: the person reads your replies and answers on their private request page; ${esc(sendTo)} gets a short notice (without your reply) each time you reply or change the status.</p>`);
   // The acknowledgement: the same words whether or not an account exists,
   // and nothing the person typed (so it cannot carry someone else's message).
   await sendEmail(sendTo, `We have received your request ${ticket.ref}`,
     `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">We have received your request</h2>
      <p>Thank you for contacting Aerva. Your reference number is <strong>${esc(ticket.ref)}</strong>.</p>
      <p><strong>${esc(label)}</strong></p>
-     <p>Aerva will contact you by phone or at this email address. You do not need to sign in. To add anything, reply to this email and keep the reference in the subject.</p>
-     <p style="font-size:13px; color:#6e675d;">If you did not ask Aerva for help signing in, you can ignore this email. Aerva will never ask for your password or a sign-in code.</p>`, SUPPORT_INBOX());
-  return { ref: ticket.ref, message: signedOutReply(ticket.ref) };
+     ${key ? `<p>Follow your request and talk to Aerva Support on its private page. You do not need to sign in.</p>
+     ${button(privateLink(ticket.ref, key), 'Open your request')}
+     <p style="font-size:13px; color:#6e675d; word-break:break-all;">Save this link — it’s how you follow your request: ${esc(privateLink(ticket.ref, key))}<br>Do not share it: anyone with the link can read and reply to this request.</p>`
+     : '<p>Aerva will contact you by phone or at this email address. You do not need to sign in.</p>'}
+     <p style="font-size:13px; color:#6e675d;">If you did not ask Aerva for help signing in, you can ignore this email. Aerva will never ask for your password or a sign-in code.</p>`);
+  return { ref: ticket.ref, key, message: signedOutAnswer(ticket.ref) };
+}
+
+// ---------------------------------------------------------------- the private link
+// A signed-out request is followed on index.html?view=help&request=SR-…&key=…
+// The key (32 random bytes, url-safe) is the only proof: it opens that one
+// request (never the account, never another request), only while it is open
+// or for KEY_DAYS after it is resolved or closed. Only its SHA-256 is stored
+// (support_ticket_keys); it is compared timing-safe and never logged — audit
+// rows carry the reference only. Every guest-auth.js mode below is POST, so
+// the key is never in a URL the server logs.
+const KEY_DAYS = 30;
+const SO_REPLY_MAX = 2000;
+const SO_REPLIES_PER_HOUR = 20;          // per request, and per IP
+const SO_REFUSED_PER_IP_HOUR = 30;       // wrong keys from one address
+const SO_NEW_LINK_PER_IP_HOUR = 3;
+const KEY_RE = /^[A-Za-z0-9_-]{43}$/;
+const REF_RE = /^SR-\d{8}$/;
+const hashKey = (key) => crypto.createHash('sha256').update(String(key)).digest('hex');
+const privateLink = (ref, key) => `${SITE}/index.html?view=help&request=${encodeURIComponent(ref)}&key=${encodeURIComponent(key)}`;
+const LINK_INVALID = () => userError('This link does not open a request. Check that you copied all of it, or get a new link below.', 404);
+const LINK_EXPIRED = () => userError('This request is closed. Raise a new one if you still need help.', 410);
+const NEW_LINK_ANSWER = 'If the details match, we’ve emailed a new link.';
+
+// A new key for a ticket; returns the key (to show or email once) or null
+// before support_ticket_keys exists.
+async function issueKey(sql, ticketId, purpose) {
+  const key = crypto.randomBytes(32).toString('base64url');
+  try {
+    await sql`INSERT INTO support_ticket_keys (ticket_id, key_hash, issued_for) VALUES (${ticketId}, ${hashKey(key)}, ${purpose})`;
+    return key;
+  } catch (err) { if (notReady(err)) return null; throw err; }
+}
+
+// The day a closed or resolved request's links stop working (null: open).
+function linkEndsAt(t) {
+  const end = t.status === 'closed' ? (t.closed_at || t.resolved_at) : t.status === 'resolved' ? t.resolved_at : null;
+  return end ? new Date(new Date(end).getTime() + KEY_DAYS * 86400e3) : null;
+}
+
+// The ticket this ref + key opens, or a refusal. Wrong keys are logged
+// (reference and IP only) and limited per IP.
+async function keyTicket(sql, { ref, key, ip }) {
+  const r = String(ref || '').trim().toUpperCase().slice(0, 20);
+  const k = String(key || '');
+  if (ip && await countRecentAttempts(sql, { action: 'support_signed_out_key_refused', windowMinutes: 60, byIp: ip }) >= SO_REFUSED_PER_IP_HOUR)
+    throw userError('Too many attempts from here. Please try again later.', 429);
+  let t = null, keys = [];
+  if (REF_RE.test(r) && KEY_RE.test(k)) {
+    try {
+      t = (await sql`SELECT * FROM support_tickets t WHERE ref = ${r} AND COALESCE(to_jsonb(t)->>'channel', 'web') = 'signed_out'`)[0] || null;
+      if (t) keys = await sql`SELECT id, key_hash FROM support_ticket_keys WHERE ticket_id = ${t.id} AND revoked_at IS NULL`;
+    } catch (err) { if (notReady(err)) throw NOT_READY(); throw err; }
+  }
+  // Every live key of the request is compared, timing-safe, with no early exit.
+  const want = Buffer.from(hashKey(k), 'hex');
+  let hit = null;
+  for (const row of keys) {
+    const have = Buffer.from(String(row.key_hash), 'hex');
+    if (have.length === want.length && crypto.timingSafeEqual(have, want) && !hit) hit = row;
+  }
+  if (!t || !hit) {
+    await logAudit(sql, { action: 'support_signed_out_key_refused', success: false, actorType: 'guest', actorIdentifier: null,
+      metadata: { ref: REF_RE.test(r) ? r : null, ip: ip || null } });
+    throw LINK_INVALID();
+  }
+  const ends = linkEndsAt(t);
+  if (ends && ends < new Date()) throw LINK_EXPIRED();
+  await sql`UPDATE support_ticket_keys SET last_used_at = now() WHERE id = ${hit.id}`;
+  return t;
+}
+
+// The request as its private page shows it (never internal notes).
+// Opening it marks Aerva's replies as read.
+async function signedOutView(sql, { ref, key, ip }, t = null) {
+  t = t || await keyTicket(sql, { ref, key, ip });
+  const msgs = await sql`SELECT id, sender, body, created_at FROM support_messages
+                         WHERE ticket_id = ${t.id} AND internal = false ORDER BY created_at, id`;
+  await sql`UPDATE support_tickets SET user_last_seen_at = now() WHERE id = ${t.id}`;
+  const phone = String(t.callback_phone || '');
+  const ends = linkEndsAt(t);
+  return {
+    ref: t.ref, categoryLabel: (CATEGORIES[t.category] || {}).label || 'Request', subject: t.subject,
+    status: t.status, statusLabel: STATUS_LABELS[t.status] || t.status, createdAt: t.created_at, updatedAt: t.updated_at,
+    phoneEnding: phone.length >= 4 ? phone.slice(-4) : null,
+    signedOut: true, canReply: t.status !== 'closed', replyMax: SO_REPLY_MAX,
+    autoCloseAt: t.status === 'resolved' && t.resolved_at ? new Date(new Date(t.resolved_at).getTime() + FEEDBACK_HOURS * 3600e3).toISOString() : null,
+    linkEndsAt: ends ? ends.toISOString() : null,
+    messages: msgs.map(m => ({ id: m.id, from: m.sender === 'user' ? 'you' : m.sender === 'support' ? 'Aerva Support' : 'Aerva',
+                               body: m.body, files: [], at: m.created_at }))
+  };
+}
+
+// The person replies on the private page: up to 2000 characters, contact
+// details allowed (as on the form), no files. 20 an hour per request and per IP.
+async function signedOutReplyTo(sql, { ref, key, text, ip }) {
+  const t = await keyTicket(sql, { ref, key, ip });
+  if (t.status === 'closed') throw userError('This request is closed. Raise a new one if you still need help.', 409);
+  const body = clean(text, SO_REPLY_MAX + 1);
+  if (!body) throw userError('Write your reply first.');
+  if (body.length > SO_REPLY_MAX) throw userError(`Please keep your reply under ${SO_REPLY_MAX} characters.`);
+  const byReq = await countRecentAttempts(sql, { action: 'support_signed_out_reply', windowMinutes: 60, byActor: t.ref });
+  const byIp = ip ? await countRecentAttempts(sql, { action: 'support_signed_out_reply', windowMinutes: 60, byIp: ip }) : 0;
+  if (byReq >= SO_REPLIES_PER_HOUR || byIp >= SO_REPLIES_PER_HOUR) {
+    await logAudit(sql, { action: 'support_signed_out_limited', success: false, actorType: 'guest', actorIdentifier: t.ref,
+      targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, reason: byReq >= SO_REPLIES_PER_HOUR ? 'reply_request_hour' : 'reply_ip_hour', ip: ip || null } });
+    throw userError('Too many replies in a short time. Please wait a little and try again.', 429);
+  }
+  await appendUserMessage(sql, t, { body, actor: t.ref, auditAction: 'support_signed_out_reply', auditExtra: { ip: ip || null } });
+  return signedOutView(sql, { ref, key, ip }, (await sql`SELECT * FROM support_tickets WHERE id = ${t.id}`)[0]);
+}
+
+// "Get a new link": the reference and the contact email the person gave.
+// If both match (and the request can still be opened), every earlier link
+// stops working and a new one is emailed to that address. The answer is
+// always the same. 3 an hour per IP.
+async function signedOutNewLink(sql, { ref, contactEmail, ip }) {
+  const r = String(ref || '').trim().toUpperCase().slice(0, 20);
+  const email = String(contactEmail || '').trim().toLowerCase().slice(0, 254);
+  const n = ip ? await countRecentAttempts(sql, { action: 'support_signed_out_new_link', windowMinutes: 60, byIp: ip }) : 0;
+  const audit = (sent, reason) => logAudit(sql, { action: 'support_signed_out_new_link', success: sent, actorType: 'guest', actorIdentifier: null,
+    targetType: t ? 'support_ticket' : null, targetId: t ? t.id : null, metadata: { ref: REF_RE.test(r) ? r : null, ip: ip || null, reason } });
+  let t = null;
+  if (n >= SO_NEW_LINK_PER_IP_HOUR) { await audit(false, 'ip_hour'); return { message: NEW_LINK_ANSWER }; }
+  if (REF_RE.test(r) && EMAIL_RE.test(email)) {
+    try { t = (await sql`SELECT * FROM support_tickets t WHERE ref = ${r} AND COALESCE(to_jsonb(t)->>'channel', 'web') = 'signed_out'`)[0] || null; }
+    catch (err) { if (notReady(err)) throw NOT_READY(); throw err; }
+  }
+  const given = t ? String(t.contact_email || t.account_email || '').toLowerCase() : '';
+  const a = Buffer.from(hashKey(given)), b = Buffer.from(hashKey(email));
+  const match = !!t && given.length > 0 && crypto.timingSafeEqual(a, b);
+  const ends = t ? linkEndsAt(t) : null;
+  if (!match || (ends && ends < new Date())) { await audit(false, !match ? 'no_match' : 'closed'); return { message: NEW_LINK_ANSWER }; }
+  try { await sql`UPDATE support_ticket_keys SET revoked_at = now() WHERE ticket_id = ${t.id} AND revoked_at IS NULL`; }
+  catch (err) { if (notReady(err)) throw NOT_READY(); throw err; }
+  const key = await issueKey(sql, t.id, 'new_link');
+  await sql`INSERT INTO support_messages (ticket_id, sender, internal, body) VALUES (${t.id}, 'system', true, ${'New private link emailed to ' + given + ' (asked for on the request page); earlier links no longer work.'})`;
+  await audit(true, 'sent');
+  await sendEmail(given, `A new link to your request ${t.ref}`,
+    `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">A new link to your request</h2>
+     <p><strong>${esc(t.subject)}</strong> · reference <strong>${esc(t.ref)}</strong></p>
+     <p>Here is a new private link to your request. Earlier links to it no longer work.</p>
+     ${button(privateLink(t.ref, key), 'Open your request')}
+     <p style="font-size:13px; color:#6e675d; word-break:break-all;">Save this link — it’s how you follow your request: ${esc(privateLink(t.ref, key))}<br>Do not share it: anyone with the link can read and reply to this request.</p>
+     <p style="font-size:13px; color:#6e675d;">If you did not ask for a new link, someone may have your reference number and email address. Your request is safe: only this email has the new link. Aerva will never ask for your password or a sign-in code.</p>`);
+  return { message: NEW_LINK_ANSWER };
+}
+
+// The notice to the person (reply, status change, auto-close): a short
+// email with a fresh private link — never the reply itself. Returns true
+// when an email went out.
+async function signedOutNotice(sql, t, { replied = false, closed = false, auto = false } = {}) {
+  const to = t.contact_email || t.account_email;
+  if (!to) return false;
+  const key = await issueKey(sql, t.id, 'notice');
+  const link = key ? privateLink(t.ref, key) : null;
+  const headline = replied ? `Aerva Support replied to your request ${t.ref}` : `Your request ${t.ref} is now: ${STATUS_LABELS[t.status] || t.status}`;
+  return sendEmail(to, replied ? headline : closed ? `Your request ${t.ref} is closed` : headline,
+    `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">${esc(replied ? 'Aerva Support replied' : closed ? 'Your request is closed' : 'Your request has an update')}</h2>
+     <p>${esc(headline)}${link ? ' — open your request:' : '.'}</p>
+     ${link ? button(link, 'Open your request') + `<p style="font-size:13px; color:#6e675d; word-break:break-all;">${esc(link)}</p>` : ''}
+     ${auto ? `<p>We marked it resolved ${FEEDBACK_HOURS} hours ago and did not hear back, so it is now closed.</p>` : ''}
+     ${closed ? `<p>You can still read it for ${KEY_DAYS} days. If you still need help, raise a new request from Help → Can’t sign in? and mention ${esc(t.ref)}.</p>` : ''}
+     <p style="font-size:13px; color:#6e675d;">Do not share this link: anyone with it can read and reply to your request. Aerva will never ask for your password or a sign-in code.</p>`);
 }
 
 // The request types, for Admin → Lookup "Raise a request for this customer".
@@ -816,5 +983,5 @@ module.exports = {
   requestOptions, createRequest, listRequests, getRequest, replyToRequest, closeRequest, submitFeedback, autoCloseResolved, bellNotifications,
   createChatRequest, appendUserMessage, applyFeedback, ticketView, bookingRole,
   adminList, adminGet, adminReply, adminSaveCase, eraseForAccount, cleanFiles, openSystemRequest, systemUpdate,
-  createSignedOutRequest, SIGNIN_PROBLEMS, SIGNED_OUT_PER_IP_HOUR, SIGNED_OUT_PER_EMAIL_DAY, SIGNED_OUT_BODY_MIN, SIGNED_OUT_BODY_MAX
+  createSignedOutRequest, signedOutView, signedOutReplyTo, signedOutNewLink, KEY_DAYS, SO_REPLY_MAX, SO_REPLIES_PER_HOUR, SO_NEW_LINK_PER_IP_HOUR, NEW_LINK_ANSWER, SIGNIN_PROBLEMS, SIGNED_OUT_PER_IP_HOUR, SIGNED_OUT_PER_EMAIL_DAY, SIGNED_OUT_BODY_MIN, SIGNED_OUT_BODY_MAX
 };
