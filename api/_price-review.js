@@ -18,6 +18,7 @@
 // Before the database update 2026-10-09-01-price-reviews.sql is applied,
 // nothing is held (the table does not exist) and saves work as before.
 
+const { helpLine } = require('./_help-link');
 const { logAudit } = require('./_audit-log');
 
 const RULES = {
@@ -167,7 +168,7 @@ async function decide(sql, { id, approve, note, admin, audit }) {
       <p>${approve
         ? `Your change to <strong>${esc(listing.property_name)}</strong> is approved and live: ${esc(describe(r.kind, v))}.`
         : `Your change to <strong>${esc(listing.property_name)}</strong> (${esc(describe(r.kind, v))}) was not approved, so guests still see ${esc(describe(r.kind, r.old_value))}.`}</p>
-      ${!approve ? `<p>Reason: ${esc(why)}</p><p>Reply to this email if you have questions.</p>` : ''}
+      ${!approve ? `<p>Reason: ${esc(why)}</p><p>${helpLine({ category: 'listing_photos', listing: r.listing_id }, 'Questions?')}</p>` : ''}
     </div>`);
   return { status: approve ? 'approved' : 'rejected' };
 }

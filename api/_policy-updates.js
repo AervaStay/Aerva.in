@@ -16,6 +16,7 @@
 // (policy_update_sends, migrations/2026-11-09-01-policy-update-sends.sql).
 // The banners are drawn by the pages themselves from the same list.
 
+const { helpLine } = require('./_help-link');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -68,7 +69,7 @@ function emailHtml(u, name) {
     <ul>${u.summary.map(p => `<li style="margin:3px 0;">${esc(p)}</li>`).join('')}</ul>
     <p>There is nothing you need to do. Continuing to use Aerva after ${esc(day(u.effective))} means you accept the updated terms.${u.audience === 'hosts' ? ' If you do not accept them, you may deactivate your listings before then.' : ''}</p>
     <p><a href="${SITE}/index.html?view=policies" style="background:#1c1a17; color:#f4eadc; padding:11px 20px; text-decoration:none; display:inline-block;">Read the policies</a></p>
-    <p style="font-size:13px; color:#6e675d;">Questions: write to hello@aerva.in.</p></div>`;
+    <p style="font-size:13px; color:#6e675d;">${helpLine({}, 'Questions?')}</p></div>`;
 }
 
 // Job 'policy_update_notices': each update, from its publish date until it

@@ -90,6 +90,7 @@
 // real Razorpay test-mode payment before relying on it in production.
 
 require('./_env'); // production vs UAT safety rails — must load first
+const { helpLine } = require('./_help-link');
 const { neon } = require('@neondatabase/serverless');
 const { listRemovals, restoreRemoval, checkPhoto } = require('./_photo-guard');
 const { judgeLocation, flaggedPhotoLocations } = require('./_photo-location');
@@ -229,7 +230,7 @@ async function sendListingStatusEmail(listing, action, reason) {
       <h2 style="font-family:Georgia,serif;">${copy.heading}</h2>
       <p>${copy.body}</p>
       ${reasonBlock}
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions about this? Contact hello@aerva.in.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ category: 'listing_photos', listing: listing.id }, 'Questions about this?')}</p>
     </div>
   `;
   const emailRes = await fetch('https://api.resend.com/emails', {
@@ -789,7 +790,7 @@ module.exports = async (req, res) => {
   // ---- Stay disputes (guest reported a problem during the stay) ----
   // GET ?cancellationRequests=1 · POST { decideCancellationRequest: { requestId, accept, note } }
   // Natural-disaster requests (from the moment they are sent): Aerva checks
-  // the proof and approves (everything paid → Aerva credit for new dates, no
+  // the proof and approves (everything paid → ordinary Aerva credit, no
   // host payout) or rejects (booking stands). Also old emergency requests
   // and reviews still open from before 10 Nov 2026. Decided by
   // _cancellations.js decideByAerva. Closed by itself at check-in.
@@ -809,19 +810,12 @@ module.exports = async (req, res) => {
     }
   }
 
-  // POST { allowCreditRefund: { guestId, creditId?, allow, note? } } — ADMIN ONLY (owner, 00:54):
-  // let this guest have their credit for new dates only (a natural disaster)
-  // refunded to its original payment, or switch it off again (_fee-credits.js).
-  if (req.method === 'POST' && req.body && req.body.allowCreditRefund) {
-    if (ADMIN_ROLE !== 'admin') return res.status(403).json({ error: 'Only an admin can allow a refund of credit for new dates.' });
-    try {
-      const b = req.body.allowCreditRefund;
-      const out = await require('./_fee-credits').allowCashRefund(sql, { guestId: b.guestId, creditId: b.creditId == null ? null : b.creditId, allow: b.allow === true, note: b.note, adminLabel: ADMIN_ACTOR });
-      return res.status(200).json({ success: true, ...out });
-    } catch (err) {
-      if (!err.isUserFacing) console.error('allowCreditRefund failed:', err);
-      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
-    }
+  // GET ?groupBookings=1 — Admin → Group bookings: every group (split
+  // payment) with its status and money, and organisers' unpaid commitments
+  // (the rest they agreed to pay at 2 hours and did not; _group-bookings.js).
+  if (req.method === 'GET' && req.query.groupBookings === '1') {
+    try { return res.status(200).json(await require('./_group-bookings').adminList(sql, { limit: Number(req.query.limit) || 100 })); }
+    catch (err) { console.error('groupBookings failed:', err); return res.status(500).json({ error: 'Could not load group bookings.' }); }
   }
 
   // POST { remindHostCancellation: { requestId } } → the next reminder to the host now.
@@ -944,8 +938,8 @@ module.exports = async (req, res) => {
       }
       if (req.query.lookupGuest) {
         const out = await lookup.guestDetail(sql, req.query.lookupGuest);
-        // Credit for new dates only, and whether a refund is allowed (Admin switch).
-        out.newDatesCredits = await require('./_fee-credits').nonCashForAdmin(sql, out.guest.id);
+        // Group bookings this guest organised and did not pay the rest of (their commitment).
+        out.groupCommitments = await require('./_group-bookings').commitmentsOf(sql, out.guest.id);
         out.records = await actions.recordsFor(sql, { guestId: out.guest.id });
         out.role = ADMIN_ROLE;
         await logAudit(sql, { action: 'admin_lookup_viewed', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'guest', targetId: out.guest.id });

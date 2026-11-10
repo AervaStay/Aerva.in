@@ -32,6 +32,7 @@
 // rather than failing the approval/rejection itself.
 
 require('./_env'); // production vs UAT safety rails — must load first
+const { helpLine, helpLink } = require('./_help-link');
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken, createToken, secretMatches } = require('./_approval-token');
 const { logAudit, adminContext, requestContext } = require('./_audit-log');
@@ -219,7 +220,7 @@ async function sendHostApprovalEmail(listing, { needsRoomSetup = false } = {}) {
       ${resortRoomsReminder}
       <p>${listing.property_type === 'Resort' ? 'Use this link to update room pricing, add more rooms, or set up an offer' : "Whenever you'd like to change your nightly rate or set up an offer, use this link"} — it's yours to keep and reuse anytime:</p>
       <p><a href="${manageLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">${needsRoomSetup ? 'Add Your Rooms' : (listing.property_type === 'Resort' ? 'Manage Your Rooms' : 'Manage listing')}</a></p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Keep this email — this link doesn't expire for two years. If you ever lose it, contact hello@aerva.in for a new one.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Keep this email — this link doesn't expire for two years. If you ever lose it, open Manage from My Collection in your host dashboard, or ${helpLink({ category: 'listing_photos', listing: listing.id }, 'raise a request in Aerva Support')}.</p>
     </div>
   `;
 
@@ -253,7 +254,7 @@ async function sendHostRejectionEmail(listing) {
       </div>
       <p>Once you've made those changes and submitted them, we'll review your listing again and send you an update.</p>
       <p><a href="${SITE_BASE}/host-dashboard.html" style="color:#8a6c39;">Go to your dashboard</a> to edit and resubmit this listing.</p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions about this decision? Just reply — a real person reads every message.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ category: 'listing_photos', listing: listing.id }, 'Questions about this decision?')} A real person reads every request.</p>
     </div>
   `;
 

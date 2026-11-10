@@ -410,7 +410,7 @@ module.exports = async (req, res) => {
     {
       const st = await sessionStatus(sql, payload);
       if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.', deleted: true });
-      if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. Please contact hello@aerva.in.', suspended: true });
+      if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. To ask about it, raise a request in Aerva Support (Help → Raise a request) from any account you can sign in to.', suspended: true });
       if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
       if (st !== 'ok') return res.status(503).json({ error: 'Could not check your session right now.' });
     }

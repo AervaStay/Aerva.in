@@ -115,7 +115,7 @@ async function sessionRefusal(payload) {
   if (!payload) return null;
   const st = await sessionStatus(sql, payload);
   if (st === 'ok') return null;
-  return st === 'deleted' ? 'This account has been deleted.' : st === 'suspended' ? 'This account has been suspended. Please contact hello@aerva.in.' : 'Please log in again.';
+  return st === 'deleted' ? 'This account has been deleted.' : st === 'suspended' ? 'This account has been suspended. To ask about it, raise a request in Aerva Support (Help → Raise a request) from any account you can sign in to.' : 'Please log in again.';
 }
 
 // Price quotes need no account, so they are limited per address instead:
@@ -262,17 +262,18 @@ module.exports = async (req, res) => {
     const asked = String(req.body.reason || 'closed');
     const reason = asked === 'failed' ? 'closed' : (RELEASE_REASONS.includes(asked) && asked !== 'paid' ? asked : 'closed');
     const oid = String(req.body.releaseHold).slice(0, 64);
-    // A group booking payment (_group-bookings.js): its places are given back;
-    // the group's dates stay held unless this was the organiser's first payment.
+    // A group booking payment (_group-bookings.js): its places are given back
+    // (and its own window's dates, if it held any — a group holds nothing else).
     const grp = await require('./_group-bookings').releaseByOrder(sql, oid, asked).catch(() => null);
     if (!grp || !grp.keepHold) await releaseHolds(sql, { razorpayOrderId: oid, reason });
     return res.status(200).json({ released: true });
   }
   // ---- Group bookings: a friend pays for places, or the organiser pays the
-  // difference of a smaller booking (_group-bookings.js). The same 3-minute
-  // window as any checkout; the booking agreement must be accepted.
-  // POST { groupPay: <token>, places, firstName, lastName, phone, agreementVersion }
-  // POST { groupGap: <token>, agreementVersion }
+  // rest at the 2-hour mark (_group-bookings.js). The same 3-minute window as
+  // any checkout; the booking agreement must be accepted, and every payer
+  // ticks that a confirmed group booking is non-refundable (nonRefundable: true).
+  // POST { groupPay: <token>, places, firstName, lastName, phone, agreementVersion, nonRefundable }
+  // POST { groupGap: <token>, agreementVersion, nonRefundable } — the organiser pays the rest
   // POST { groupTopup: <token>, agreementVersion } — the balance the paid places
   //      owe after a guest was added (the organiser or any member)
   // groupPay on a confirmed group pays for guests added since (same booking).
@@ -285,6 +286,9 @@ module.exports = async (req, res) => {
       return res.status(400).json({ error: 'Please read and accept the booking agreement to continue.', agreementVersion: AGREEMENT_VERSION });
     }
     const G = require('./_group-bookings');
+    if (req.body.nonRefundable !== true) {
+      return res.status(400).json({ error: 'Please tick that you understand: once the booking is confirmed it is non-refundable.', needs: ['groupNonRefundable'], nonRefundableText: G.NONREF_TICK });
+    }
     try {
       if (req.body.groupGap) {
         const out = await G.startGapPayment(sql, razorpay, { token: String(req.body.groupGap).slice(0, 64), guestId: gid, assertNotesFit });
@@ -318,7 +322,7 @@ module.exports = async (req, res) => {
       const out = await G.startPayment(sql, razorpay, { token: g.token, guestId: gid, places: req.body.places, firstName: first, lastName: last,
         email: me.email, phone: normalizeToE164(String(req.body.phone || me.phone || '')) || me.phone || null, assertNotesFit });
       return res.status(200).json({ orderId: out.order.id, keyId: process.env.RAZORPAY_KEY_ID, amount: out.order.amount, currency: 'INR', total: out.amount,
-        seats: out.seats, holdSeconds: out.holdSeconds, group: true });
+        seats: out.seats, holdSeconds: out.holdSeconds, group: true, last: !!out.last });
     } catch (err) {
       if (!err.isUserFacing) console.error('group payment start failed:', err);
       return res.status(err.isUserFacing ? err.status : 500).json(err.isUserFacing ? { error: err.message, placesLeft: err.placesLeft, closed: err.closed || undefined } : { error: 'Could not start the payment. Nothing has been charged. Please try again.' });
@@ -461,7 +465,11 @@ module.exports = async (req, res) => {
         if (String(email || '').trim().toLowerCase() === giftRecipient.email) return res.status(400).json({ error: 'That is your own email. A gift goes to someone else.', needs: ['giftEmail'] });
       }
       if (req.body.group) {
-        if (!(await require('./_group-bookings').ready(sql))) return res.status(503).json({ error: require('./_group-bookings').NOT_ON, notSwitchedOn: true });
+        const G = require('./_group-bookings');
+        if (!(await G.ready(sql))) return res.status(503).json({ error: G.NOT_ON, notSwitchedOn: true });
+        // The organiser's commitment and the non-refundable notice (owner, 10 Nov 2026).
+        if (!req.body.group || req.body.group.commit !== true) return res.status(400).json({ error: `Please tick “${G.COMMIT_TICK}” to split the payment.`, needs: ['groupCommitment'] });
+        if (req.body.group.nonRefundable !== true) return res.status(400).json({ error: 'Please tick that you understand: once the booking is confirmed it is non-refundable.', needs: ['groupNonRefundable'] });
         if (couponCode && String(couponCode).trim()) return res.status(400).json({ error: 'A coupon cannot be used on a split payment. Remove the coupon, or pay for the whole stay.' });
         if (preferredCurrency && preferredCurrency !== 'INR') return res.status(400).json({ error: 'Split payments are in rupees only.' });
       }
@@ -550,7 +558,7 @@ module.exports = async (req, res) => {
       const e = exRows[0];
       if (!e || e.experience_type !== 'with_stay') continue;
       if (!e.hosting_listing_id) {
-        return res.status(400).json({ error: `${e.property_name} includes a stay, but no home is linked to it yet. Please contact us.` });
+        return res.status(400).json({ error: `${e.property_name} includes a stay, but no home is linked to it yet. Please raise a request in Aerva Support (Help → Raise a request).` });
       }
       const hostRows = await sql`SELECT id, status FROM listings WHERE id = ${e.hosting_listing_id}`;
       if (!hostRows[0] || hostRows[0].status !== 'approved') {
@@ -860,7 +868,8 @@ module.exports = async (req, res) => {
       const G = require('./_group-bookings');
       const me = guestId ? ((await sql`SELECT phone FROM guests WHERE id = ${guestId}`)[0] || {}) : {};
       const started = await G.startGroup(sql, razorpay, { guestId, email: String(email).trim(), firstName: guestFirst, lastName: guestLast, phone: me.phone || null,
-        input: safeStays[0], detail: stayDetails[0], total: totalRupees, payNow: (req.body.group || {}).payNow, agreement: agreementNote, prices: current || null, holdIds, assertNotesFit });
+        input: safeStays[0], detail: stayDetails[0], total: totalRupees, payNow: (req.body.group || {}).payNow, agreement: agreementNote, prices: current || null, holdIds, assertNotesFit,
+        commitment: req.body.group.commit === true, nonRefundable: req.body.group.nonRefundable === true });
       await attachHolds(sql, holdIds, started.order.id);
       return res.status(200).json({
         orderId: started.order.id, keyId: process.env.RAZORPAY_KEY_ID, chargeCurrency: 'INR', chargeAmount: null,

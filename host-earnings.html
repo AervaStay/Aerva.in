@@ -317,6 +317,7 @@
     // An older server, or a co-host with no share in this booking.
     if(!st) return statusBadgeHtml(b.status);
     const label = st === 'sent' ? 'Payout sent' + (b.payout_sent_on ? ' ' + payoutDay(b.payout_sent_on) : '')
+      : st === 'due' && b.payout_overdue ? 'Payout pending (due ' + payoutDay(b.payout_due_on) + ')'
       : st === 'due' ? 'Payout due' + (b.payout_due_on ? ' ' + payoutDay(b.payout_due_on) : '')
       : st === 'on_hold' ? 'On hold'
       : st === 'failed' ? 'Failed'
@@ -326,6 +327,11 @@
     if(st === 'sent' && b.payout_reference) notes.push('Ref ' + b.payout_reference);
     if(st === 'on_hold') notes.push('Until the guest’s request is settled');
     if(st === 'failed') notes.push('The bank returned it; Aerva will retry');
+    if(st === 'due' && b.payout_overdue){
+      notes.push(b.payout_waiting === 'bank' ? 'Waiting for your bank account to be verified (Payout details)'
+        : b.payout_waiting === 'sending' ? 'Being sent to your bank'
+        : 'Aerva is sending it by bank transfer');
+    }
     return `<span class="payout-badge payout-${esc(st)}">${esc(label)}</span>`
       + notes.map(n => `<small class="payout-note">${esc(n)}</small>`).join('');
   }
@@ -698,7 +704,7 @@
           </div>
         `;
       } else if(b.status === 'paid'){
-        cancellationHtml = `<div class="deposit-row"><p style="font-size:12px; opacity:0.55;">This stay checks in within 48 hours — no longer cancellable from here. Contact hello@aerva.in if urgent.</p></div>`;
+        cancellationHtml = `<div class="deposit-row"><p style="font-size:12px; opacity:0.55;">This stay checks in within 48 hours — no longer cancellable from here. If it is urgent, <a href="index.html?view=help&amp;new=1&amp;category=cancellation_refund&amp;order=${encodeURIComponent(b.id)}">raise a request in Aerva Support</a>.</p></div>`;
       }
 
       const swapHtml = ''; // replaced: every host cancellation now gives the guest a refund plus a 10% coupon
@@ -832,7 +838,7 @@
       ? ' · matching the filters on the chart above' : '';
     const note = cancelled
       ? `Showing <b>${bookings.length} cancelled or refunded booking${bookings.length===1?'':'s'}</b> from <b>${anEsc(earnScopeLabel())}</b>${filterNote}.`
-        + (anyRefundProblem ? ' <b class="earn-cost">A refund failed — please write to hello@aerva.in.</b>' : '')
+        + (anyRefundProblem ? ' <b class="earn-cost">A refund failed — please <a href="index.html?view=help&amp;new=1&amp;category=cancellation_refund">raise a request in Aerva Support</a>.</b>' : '')
       : `Showing <b>${bookings.length} booking${bookings.length===1?'':'s'}</b> paid for in <b>${anEsc(earnScopeLabel())}</b>${filterNote}.`
         + (bookings.some(b => b.payout_status)
           ? (() => { const sp = payoutSplit(bookings, b => IS_COHOST ? (Number(b.cohost_share) || 0) : Math.max(0, (Number(b.payout_amount) || 0) - (Number(b.cohost_share) || 0)));
@@ -1044,7 +1050,7 @@
           name: 'Aerva', description: 'Guest cancellation coupon',
           handler: async (resp) => {
             const v = await post({ verifyCouponPayment: { couponId: buy.data.couponId, ...resp } });
-            if(!v.ok){ show(v.data.error || 'Could not confirm the coupon payment. Please contact hello@aerva.in.'); return; }
+            if(!v.ok){ show(v.data.error || 'Could not confirm the coupon payment. Please raise a request in Aerva Support (Help → Raise a request).'); return; }
             if(await cancelNow()) box.remove();
           }
         }).open();
@@ -1574,7 +1580,7 @@ async function loadCancellationRequests(){
           <strong>${esc(r.guestName)}</strong> · ${esc(r.listing)} · ${esc(day(r.arrival))} – ${esc(day(r.departure))}${r.daysBefore != null ? ' · ' + (r.daysBefore === 0 ? 'check-in today' : r.daysBefore === 1 ? 'check-in tomorrow' : r.daysBefore + ' days before check-in') : ''}<br>
           <span>${esc(r.reason)}</span>${r.details ? `<br><span style="opacity:0.75;">${esc(r.details)}</span>` : ''}
           ${r.option && r.option.type === 'disaster'
-            ? `<p style="font-size:13.5px; line-height:1.55; margin:10px 0 0;"><strong>Aerva decides this request</strong> — there is nothing for you to accept or decline. If Aerva approves, everything the guest paid${r.disaster && r.disaster.credit ? ' (₹' + Math.round(Number(r.disaster.credit) || 0).toLocaleString('en-IN') + ')' : ''} becomes Aerva credit for new dates and there is no payout for this booking; it does not count as your cancellation. If not, the booking stands. Add anything Aerva should know in the booking’s Messages.</p>`
+            ? `<p style="font-size:13.5px; line-height:1.55; margin:10px 0 0;"><strong>Aerva decides this request</strong> — there is nothing for you to accept or decline. If Aerva approves, everything the guest paid${r.disaster && r.disaster.credit ? ' (₹' + Math.round(Number(r.disaster.credit) || 0).toLocaleString('en-IN') + ')' : ''} becomes Aerva credit for the guest and there is no payout for this booking; it does not count as your cancellation. If not, the booking stands. Add anything Aerva should know in the booking’s Messages.</p>`
             : r.option && r.option.type === 'choose'
             ? `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin-top:10px;">
                  <label style="font-size:13px;">Refund <input type="number" min="0" max="100" step="1" value="0" data-pct="${Number(r.id)}" style="width:70px; padding:6px; border:1px solid #d9cfc2; border-radius:6px; font-size:16px;"> %</label>

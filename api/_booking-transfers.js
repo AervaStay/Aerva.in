@@ -124,7 +124,7 @@ async function assertTransferable(sql, o, guestId, at = null) {
   if (o.transfer_change_id) throw userError(LOCKED);
   if (!(await transfersReady(sql))) throw userError('Moving a booking to another property is not switched on yet. Please try again later.', 503);
   if (o.status !== 'paid') throw userError('Only a confirmed booking can be moved.');
-  if ((o.charge_currency || 'INR') !== 'INR') throw userError('This booking cannot be moved online. Please write to hello@aerva.in.');
+  if ((o.charge_currency || 'INR') !== 'INR') throw userError('This booking cannot be moved online. Please raise a request in Aerva Support (Help → Raise a request).');
   if (o.kind !== 'stay') throw userError('Only a stay can be moved to another property.');
   if (!transferOpen(o, at)) throw userError(WINDOW_CLOSED);
   if (await payoutSent(sql, o.id)) throw userError(PAID_OUT);
@@ -453,10 +453,25 @@ async function applyTransfer(sql, razorpay, change, { paymentId = null } = {}) {
   // guest asks from My Bookings; refunded automatically when it ends. A part
   // paid with earlier credit goes back onto that credit. Every movement is in
   // the credit ledger (fee_credit_entries) for the accounts.
-  let heldAsCredit = 0, backOnCredit = 0, creditFailed = false, creditEnds = null;
-  if (refundOwed > 0) {
+  let heldAsCredit = 0, backOnCredit = 0, creditFailed = false, creditEnds = null, depositBack = 0;
+  // A smaller deposit after the move: that part of the difference is the
+  // guest's deposit, refunded to the payment — a deposit is never Aerva
+  // credit (owner, 10 Nov 2026 01:29).
+  if (refundOwed > 0 && ['held', 'disputed'].includes(String(o.deposit_status || '')) && o.razorpay_payment_id && razorpay) {
+    const newDep = parts.reduce((t, p) => t + Math.round(Number(p.detail.depositAmount) || 0), 0);
+    depositBack = Math.min(refundOwed, Math.max(0, Math.round(Number(o.deposit_amount) || 0) - newDep));
+    if (depositBack > 0) {
+      try { await require('./_refunds').safeRefund(sql, razorpay, { orderId: o.id, paymentId: o.razorpay_payment_id, amountSubunit: depositBack * 100, kind: `deposit:transfer-${change.id}` }); }
+      catch (err) {
+        console.error('transfer deposit refund failed (needs follow-up):', change.id, err.message);
+        await logAudit(sql, { action: 'booking_transfer_deposit_refund_failed', success: false, actorType: 'system', targetType: 'order', targetId: o.id,
+          metadata: { changeId: change.id, depositBack, error: String(err.message || err).slice(0, 300) } });
+      }
+    }
+  }
+  if (refundOwed - depositBack > 0) {
     try {
-      const r = await require('./_fee-credits').creditForTransfer(sql, o.id, refundOwed, {
+      const r = await require('./_fee-credits').creditForTransfer(sql, o.id, refundOwed - depositBack, {
         changeId: change.id, transferFee: q.transferFee, summary: change.summary });
       heldAsCredit = r.credit; backOnCredit = r.back; creditEnds = r.expiresAt;
     } catch (err) {
@@ -467,7 +482,7 @@ async function applyTransfer(sql, razorpay, change, { paymentId = null } = {}) {
     }
   }
   await logAudit(sql, { action: 'booking_transfer_applied', success: true, actorType: 'system', targetType: 'order', targetId: o.id,
-    metadata: { changeId: change.id, parts: rowIds, difference: change.difference, transferFee: q.transferFee, heldAsCredit, backOnCredit, couponNotReturned: couponLost, creditFailed, paymentId } });
+    metadata: { changeId: change.id, parts: rowIds, difference: change.difference, transferFee: q.transferFee, heldAsCredit, backOnCredit, depositBack, couponNotReturned: couponLost, creditFailed, paymentId } });
 
   // Messages and emails.
   const codes = await sql`SELECT id, confirmation_code FROM orders WHERE id = ANY(${rowIds})`;
@@ -476,7 +491,7 @@ async function applyTransfer(sql, razorpay, change, { paymentId = null } = {}) {
   const creditTotal = heldAsCredit + backOnCredit;
   const money = change.difference > 0 ? `Paid: ${inr(change.difference)} (includes Aerva's transfer fee of ${inr(q.transferFee)}).`
     : change.difference < 0 ? (creditFailed ? `${inr(refundOwed)} is being added to your Aerva credit; Aerva will follow up.`
-      : `${inr(creditTotal)} is held for you as Aerva credit${creditEnds ? ` until ${new Date(creditEnds).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })}` : ''}, after Aerva's transfer fee of ${inr(q.transferFee)}${couponLost > 0 ? ` (the ${inr(couponLost)} paid by coupon is not returned)` : ''}. Use it on another booking, or have it refunded to your original payment method at any time from My Bookings.`)
+      : `${inr(creditTotal)} is held for you as Aerva credit${creditEnds ? ` until ${new Date(creditEnds).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })}` : ''}, after Aerva's transfer fee of ${inr(q.transferFee)}${couponLost > 0 ? ` (the ${inr(couponLost)} paid by coupon is not returned)` : ''}. Use it on another booking, or have it refunded to your original payment method at any time from My Bookings.${depositBack > 0 ? ` ${inr(depositBack)} of your deposit (the new place's deposit is smaller) is refunded to your original payment method.` : ''}`)
     : `Aerva's transfer fee of ${inr(q.transferFee)} is covered by the price difference.`;
   for (const id of rowIds) await postThreadMessage(sql, id, 'host', `Booking transferred. ${change.summary}. ${money}`);
   await email(o.guest_email, `Your booking has been moved to ${q.toName}`,

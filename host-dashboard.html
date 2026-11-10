@@ -741,7 +741,7 @@
 <script src="aerva-cohost.js?v=2026-11-09a"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
-<script src="aerva-policies.js?v=2026-11-10b"></script>
+<script src="aerva-policies.js?v=2026-11-10t"></script>
 </head>
 <body>
 
@@ -847,7 +847,7 @@
       <ul class="feedback-next">
         <li>A person at Aerva reads every message.</li>
         <li>We come back to you on the email and number you gave us.</li>
-        <li>Urgent? Write to <a href="mailto:hello@aerva.in">hello@aerva.in</a> and mention your reference.</li>
+        <li>Urgent? <a href="index.html?view=help&amp;new=1">Raise a request in Aerva Support</a> and mention your reference.</li>
       </ul>
       <p class="feedback-ref" id="feedbackRef"></p>
       <button type="button" class="settings-save-btn" id="feedbackAgainBtn">Send another</button>
@@ -2247,7 +2247,7 @@
         </div>
         ${v.panStatus === 'rejected' && v.panRejectionReason ? `<p class="verify-rejection-note">${escH(v.panRejectionReason)}</p>` : ''}
         ${v.panSubmitted
-          ? `<p class="verify-locked-note">${v.panNumberMasked ? 'PAN on file: ' + escH(v.panNumberMasked) + '. ' : ''}${v.panName ? 'Name on PAN: ' + escH(v.panName) + '. ' : ''}Submitted — this can't be changed here. Contact hello@aerva.in if it needs to be updated.</p>
+          ? `<p class="verify-locked-note">${v.panNumberMasked ? 'PAN on file: ' + escH(v.panNumberMasked) + '. ' : ''}${v.panName ? 'Name on PAN: ' + escH(v.panName) + '. ' : ''}Submitted — this can't be changed here. If it needs to be updated, <a href="index.html?view=help&amp;new=1&amp;category=verification">raise a request in Aerva Support</a>.</p>
              ${v.panName ? '' : `
                <p class="verify-locked-note" style="color:#8a6c39;">Add your name exactly as it is printed on your PAN card. Your bank account is checked against it before payouts.</p>
                <input type="text" id="panNameLaterInput" placeholder="Name as printed on your PAN card" autocomplete="name">
@@ -4822,7 +4822,7 @@
       box.innerHTML = '<strong>Thank you — you have accepted the ' + esc(A.title) + ' (version ' + esc(VERSION) + ').</strong>'
         + '<p style="font-size:14px; margin:6px 0 0;">' + (j.emailed ? 'A copy has been emailed to you. ' : '') + 'You can see it any time under Account → Host Agreement.'
         + (j.restored ? ' ' + j.restored + ' listing' + (j.restored === 1 ? ' is' : 's are') + ' live again.' : '')
-        + (j.keptOff && j.keptOff.length ? ' ' + esc(j.keptOff.join(', ')) + ' stayed paused because another property now uses that name nearby — write to hello@aerva.in and we will help.' : '') + '</p>';
+        + (j.keptOff && j.keptOff.length ? ' ' + esc(j.keptOff.join(', ')) + ' stayed paused because another property now uses that name nearby — <a href="index.html?view=help&amp;new=1&amp;category=listing_photos">raise a request in Aerva Support</a> and we will help.' : '') + '</p>';
       loadHistory();
     });
     if(document.getElementById('hostDeclineBtn')) document.getElementById('hostDeclineBtn').addEventListener('click', async () => {
@@ -4970,7 +4970,7 @@
       const where = '<p style="font-size:14.5px; line-height:1.6; margin:8px 0;">' + esc(a.listing) + ' · ' + esc(a.arrival) + ' → ' + esc(a.departure) + ' · booking ' + esc(a.code) + ' · ' + esc(a.reason) + '</p>';
       if(a.info){
         box.innerHTML = '<strong style="font-size:16px;">For your information: Aerva is deciding a cancellation</strong>' + where
-          + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">Your guest asked to cancel with proof of a natural disaster or a government order. Aerva checks the proof and decides; there is nothing for you to accept or decline. If Aerva approves, the guest’s payment becomes Aerva credit for new dates and there is no payout for this booking (it does not count as your cancellation). If not, the booking stands.</p>'
+          + '<p style="font-size:14px; line-height:1.6; margin:6px 0;">Your guest asked to cancel with proof of a natural disaster or a government order. Aerva checks the proof and decides; there is nothing for you to accept or decline. If Aerva approves, the guest’s payment becomes Aerva credit for the guest and there is no payout for this booking (it does not count as your cancellation). If not, the booking stands.</p>'
           + '<div style="margin-top:10px;"><a class="ch-btn" href="index.html?view=messages" style="text-decoration:none;">Add information in Messages</a></div>';
         wrap.insertBefore(box, wrap.firstChild);
         return;

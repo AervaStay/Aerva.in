@@ -15,6 +15,7 @@
 //   requestCode(sql, email, { ip })  → sends a code, or a user-facing error
 //   checkCode(sql, email, code)      → { ok } or { ok: false, error }
 
+const { helpLink } = require('./_help-link');
 const crypto = require('crypto');
 
 const CODE_LIFETIME_MINUTES = 10;
@@ -57,7 +58,7 @@ async function requestCode(sql, rawEmail, { purpose = 'login' } = {}) {
   if (!looksLikeEmail(email) || email.length > 254) throw userError('Please enter a valid email address.');
   if (!process.env.RESEND_API_KEY) {
     console.error('RESEND_API_KEY is not set — no email code can be sent.');
-    throw userError('We cannot send codes by email right now. Please write to hello@aerva.in.', 503);
+    throw userError('We cannot send codes by email right now. Please try again later, or raise a request in Aerva Support (Help → Raise a request).', 503);
   }
   const existing = (await sql`SELECT last_sent_at, sent_count, created_at FROM email_otps WHERE email = ${email}`)[0];
   if (existing) {
@@ -139,7 +140,7 @@ async function sendEmailChangedNotice(oldEmail, newEmail) {
   const html = `<div style="font-family:sans-serif; max-width:440px;">
     <h2 style="font-family:Georgia,serif; margin:0 0 6px;">Your Aerva email was changed</h2>
     <p style="color:#4a453e; margin:0 0 12px;">The email address on your Aerva account is now <strong>${maskEmail(newEmail)}</strong>. Messages and sign-in will use the new address from now on.</p>
-    <p style="font-size:13.5px; color:#6e675d; margin:0;">If you did not do this, write to hello@aerva.in straight away and we will lock the account.</p>
+    <p style="font-size:13.5px; color:#6e675d; margin:0;">If you did not do this, ${helpLink({ category: 'account_signin' }, 'raise a request in Aerva Support')} straight away and we will lock the account.</p>
   </div>`;
   try {
     const res = await fetch('https://api.resend.com/emails', {

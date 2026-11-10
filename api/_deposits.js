@@ -7,6 +7,7 @@
 // FAILED is skipped here: it waits in Admin → Refunds for a person to
 // retry, so a failing refund is never retried automatically.
 
+const { helpLine } = require('./_help-link');
 const { safeRefund } = require('./_refunds');
 const { refundSubunitForInr } = require('./_currency');
 
@@ -53,7 +54,7 @@ async function releaseEarly(sql, orderId, { hostId } = {}) {
           body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: o.guest_email, subject: `Your security deposit for ${o.suite_name} is being released`,
             html: `<div style="font-family:sans-serif; max-width:480px; line-height:1.6;"><p>Your host has confirmed there is no damage from your stay at <strong>${esc(o.suite_name)}</strong>.</p>
               <p>Your security deposit of <strong>₹${Math.round(Number(o.deposit_amount)).toLocaleString('en-IN')}</strong> will be refunded to your original payment method on <strong>${esc(nice)}</strong>, instead of at the end of the 7-day period. Your bank may take a few working days to show it.</p>
-              <p style="font-size:12px; opacity:0.6;">Questions: hello@aerva.in</p></div>` }) });
+              <p style="font-size:12px; opacity:0.6;">${helpLine({ order: o.id }, 'Questions?')}</p></div>` }) });
       } catch (e) { /* the refund goes ahead either way */ }
     }
     return { refundOn: on };

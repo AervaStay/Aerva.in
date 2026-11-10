@@ -21,6 +21,7 @@
 // double booking impossible even for two payments confirmed in the same
 // instant; this file treats that constraint's refusal as a conflict too.
 
+const { helpLine } = require('./_help-link');
 const PDFDocument = require('pdfkit');
 const { logAudit } = require('./_audit-log');
 const { sendBookingConfirmedTemplates } = require('./_template-scheduling');
@@ -197,7 +198,7 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
     }
 
     doc.moveDown(3);
-    doc.fontSize(9).font('Helvetica').fillColor('#888').text('Thank you for booking with Aerva. For any questions, contact hello@aerva.in.', { align: 'center' });
+    doc.fontSize(9).font('Helvetica').fillColor('#888').text('Thank you for booking with Aerva. For any questions, raise a request in Aerva Support: aerva.in/index.html?view=help', { align: 'center' });
 
     doc.end();
   });
@@ -283,7 +284,7 @@ async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer
       ${pdfBuffer ? `<p>Your full booking details — dates, amounts, and everything else — are attached as a PDF to this email.</p>`
         : `<p>You can see your full booking details any time under <a href="https://aerva.in/index.html?view=my-bookings">My Bookings</a> on aerva.in.</p>`}
       ${agreementVersion ? `<p style="font-size:13px; opacity:0.8;">You accepted Aerva’s booking agreement (version ${agreementVersion}) before paying. Read it and Aerva’s Policies at <a href="https://aerva.in/index.html?view=policies">aerva.in/policies</a>.</p>` : ''}
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Reply to this email or write to hello@aerva.in.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({}, 'Questions?')}</p>
     </div>
   `;
 
@@ -563,7 +564,7 @@ async function sendConflictEmail(ctx, reasonText, refundedInr, refundFailed) {
         ? `We are refunding your payment of <strong>₹${Number(refundedInr).toLocaleString('en-IN')}</strong> in full. Our team is completing it and will confirm by email.`
         : `Your payment of <strong>₹${Number(refundedInr).toLocaleString('en-IN')}</strong> is being refunded in full to your original payment method. Refunds usually arrive in 5–7 working days.`}</p>
       <p>Reference: ${esc(ctx.razorpayOrderId)}</p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">We are sorry for the trouble. Questions? Write to hello@aerva.in.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">We are sorry for the trouble. ${helpLine({ category: 'booking_payment' }, 'Questions?')}</p>
     </div>`;
   try {
     await fetch('https://api.resend.com/emails', {
@@ -656,7 +657,7 @@ async function cancelAndScheduleRefund(sql, razorpay, ctx, rows, reason) {
         body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: ctx.email, subject: 'Your Aerva booking was cancelled — full refund tomorrow',
           html: `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your booking was cancelled</h2>
             <p>${esc(reason)}</p><p>Your payment of <strong>₹${amountInr.toLocaleString('en-IN')}</strong> will be refunded in full tomorrow, to your original payment method.</p>
-            <p>Reference: ${esc(ctx.razorpayOrderId)}</p><p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Write to hello@aerva.in.</p></div>` }) });
+            <p>Reference: ${esc(ctx.razorpayOrderId)}</p><p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ category: 'booking_payment' }, 'Questions?')}</p></div>` }) });
     } catch (err) { console.error('mismatch email failed:', err.message); }
   }
   return { status: 'conflict', message: `${reason} Your booking has been cancelled and ₹${amountInr.toLocaleString('en-IN')} will be refunded in full tomorrow.` };
@@ -1018,6 +1019,11 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
 
   // The booking now holds the dates itself; the temporary hold goes.
   await releaseHolds(sql, { razorpayOrderId, reason: 'paid' });
+  // A group (split payment) still collecting money for these dates does not
+  // hold them: it ends now, everyone in it refunded in full ("This place got
+  // booked by someone else", _group-bookings.js). Never fails the booking.
+  await require('./_group-bookings').onOutsideBooking(sql, razorpay, written.filter(w => w.row.type === 'stay')
+    .map(w => ({ listingId: w.row.listingId, roomId: w.row.roomId, arrival: w.row.arrival, departure: w.row.departure })));
   // Paid without a valid ID on the account (removed or rejected while
   // paying): the guest gets a short deadline to add one (_guest-id.js).
   await markIdDeadlineIfMissing(sql, written.map(w => w.id), ctx.guestId);

@@ -264,7 +264,7 @@ module.exports = async (req, res) => {
         const payload = auth.startsWith('Bearer ') ? verifyToken(auth.slice(7)) : null;
         const st = await sessionStatus(sql, payload);
         if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.' });
-        if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. Please contact hello@aerva.in.' });
+        if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. To ask about it, raise a request in Aerva Support (Help → Raise a request) from any account you can sign in to.' });
         if (st === 'error') return res.status(503).json({ error: 'Could not check your sign-in right now. Please try again.' });
         const meId = st === 'ok' ? Number(payload.listingId) : 0;
         if (!meId) return res.status(401).json({ error: 'Please log in again.' });

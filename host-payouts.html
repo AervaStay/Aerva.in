@@ -151,7 +151,7 @@
         </div>
         <div id="bankForm">
           <div class="warn">Changing these details puts payouts on hold until the new account is verified, and for at least 48 hours. You will get an email about the change.</div>
-          ${panOnFile && !lockedName ? `<p class="note bad" style="margin:0 0 12px;">First add the name exactly as printed on your PAN card, under <a href="host-dashboard.html?openProfile=1&profileTab=verification">Verification</a>. The bank account is checked against it.</p>` : ''}${panOnFile ? `<p class="note" style="margin:0 0 12px;">Payouts go to <strong>${esc(lockedName || 'the PAN holder')}</strong>, the name on the PAN on file. A new account must be held in that name. To pay a different person, write to hello@aerva.in.</p>` : `
+          ${panOnFile && !lockedName ? `<p class="note bad" style="margin:0 0 12px;">First add the name exactly as printed on your PAN card, under <a href="host-dashboard.html?openProfile=1&profileTab=verification">Verification</a>. The bank account is checked against it.</p>` : ''}${panOnFile ? `<p class="note" style="margin:0 0 12px;">Payouts go to <strong>${esc(lockedName || 'the PAN holder')}</strong>, the name on the PAN on file. A new account must be held in that name. To pay a different person, <a href="index.html?view=help&amp;new=1&amp;category=payout_tds">raise a request in Aerva Support</a>.</p>` : `
           <div class="field" role="radiogroup" aria-label="Paid to">
             <label style="margin-bottom:8px;">Paid to</label>
             <div class="seg">

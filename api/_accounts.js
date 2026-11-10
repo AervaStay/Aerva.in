@@ -67,7 +67,7 @@ async function sessionStatus(sql, payload) {
 }
 
 // Signing in to a suspended account is refused with this message.
-const SUSPENDED_MESSAGE = 'This account has been suspended. Please contact hello@aerva.in.';
+const SUSPENDED_MESSAGE = 'This account has been suspended. To ask about it, raise a request in Aerva Support (Help → Raise a request) from any account you can sign in to.';
 async function assertNotSuspended(sql, guestId) {
   let st = null;
   try { st = ((await sql`SELECT to_jsonb(g)->>'account_status' AS s FROM guests g WHERE g.id = ${guestId}`)[0] || {}).s; }

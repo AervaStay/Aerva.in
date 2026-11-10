@@ -6,6 +6,7 @@
 // Nothing is sent to a host with nothing on. Also posted to the SMS /
 // WhatsApp alert hook when that is switched on (_alerts.js).
 
+const { helpLine } = require('./_help-link');
 const AHEAD_DAYS = 7;
 const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const day = (d) => new Date(String(d).slice(0, 10) + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', timeZone: 'UTC' });
@@ -36,7 +37,7 @@ async function sendBriefs(sql, { deadlineMs = 8000 } = {}) {
       <p><strong>Checking out today:</strong> ${departures.length ? '' : 'nobody'}</p>${departures.length ? `<ul>${departures.map(r => li(r, `by ${esc(r.check_out_time || '11:00 am')}`)).join('')}</ul>` : ''}
       <p><strong>Coming up in the next ${AHEAD_DAYS} days:</strong> ${ahead.length ? '' : 'no arrivals'}</p>${ahead.length ? `<ul>${ahead.map(r => li(r, `arrives ${esc(day(r.arrival))}, ${Number(r.nights)} night${Number(r.nights) === 1 ? '' : 's'}`)).join('')}</ul>` : ''}
       <p><a href="https://aerva.in/index.html?view=today" style="color:#8a6c39;">Open Today on Aerva</a></p>
-      <p style="font-size:12px; opacity:0.6;">You get this each morning when something is booked. Questions: hello@aerva.in</p></div>`;
+      <p style="font-size:12px; opacity:0.6;">You get this each morning when something is booked. ${helpLine({}, 'Questions?')}</p></div>`;
     try {
       const r = await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
         body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: host.email, subject: `Today: ${arrivals.length} in, ${departures.length} out · ${ahead.length} coming up`, html }) });

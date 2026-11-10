@@ -18,6 +18,7 @@
 // 15 days from being flagged. Past that the listing is deactivated
 // automatically by the daily job (see enforceComplianceDeadlines below),
 // not by anybody remembering to press something.
+const { helpLine } = require('./_help-link');
 const COMPLIANCE_DEADLINE_DAYS = 15;
 
 const COMPLIANCE_CHECKS = {
@@ -161,7 +162,7 @@ async function emailHostAboutFlag(listing, check, deadline) {
         <p>${esc(check.message)}</p>
         <p><strong>Please do this by ${esc(due)}.</strong> If it is still outstanding after that, the listing is taken off Aerva automatically until it is fixed. Bookings already confirmed are not affected.</p>
         <p><a href="https://aerva.in/host-dashboard.html" style="color:#8a6c39;">Open your dashboard</a></p>
-        <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Reply to this email or write to hello@aerva.in.</p>
+        <p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ category: 'listing_photos', listing: listing.id }, 'Questions?')}</p>
       </div>`;
     const res = await fetch('https://api.resend.com/emails', {
       method: 'POST',

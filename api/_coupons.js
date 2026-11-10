@@ -15,6 +15,7 @@
 // The release is a single UPDATE … RETURNING, so two requests at once can
 // never release (or email) the same coupon twice.
 
+const { helpLine } = require('./_help-link');
 const COUPON_RELEASE_DELAY_MINUTES = 15;
 
 async function sendCouponEmail(coupon, code, expiresAt){
@@ -30,7 +31,7 @@ async function sendCouponEmail(coupon, code, expiresAt){
       <p>Your host for <strong>${coupon.suite_name}</strong> has issued you a coupon worth <strong>${fmt(coupon.amount)}</strong>.</p>
       <p style="background:#f4eadc; padding:16px; text-align:center; font-size:20px; letter-spacing:0.05em; font-weight:600;">${code}</p>
       <p>Apply this code at checkout on any Aerva stay or experience. Valid until <strong>${expiresLabel}</strong> (1 month from today).</p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions about this coupon? Contact hello@aerva.in.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ category: 'coupon' }, 'Questions about this coupon?')}</p>
     </div>
   `;
   const res = await fetch('https://api.resend.com/emails', {

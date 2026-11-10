@@ -404,6 +404,11 @@ async function sendOffers(sql, { reportId, options, adminLabel = 'admin' }) {
   await assertReady(sql);
   const r = await loadReport(sql, reportId);
   if (!r || r.status !== 'confirmed') throw userError('Places can be offered only while the report is confirmed and the guest has not been moved or refunded.', 409);
+  // A group booking (paid by several people): the check-in promise refunds
+  // each payer in full to their own payment (owner, 10 Nov 2026) — no rebooking.
+  if ((await sql`SELECT 1 FROM orders WHERE id = ${r.order_id} AND (to_jsonb(orders)->>'group_booking_id') IS NOT NULL`).length) {
+    throw userError('This is a group booking: under the check-in promise each payer is refunded in full to their own payment. Use “Refund in full”.', 409);
+  }
   const list = (Array.isArray(options) ? options : []).slice(0, MAX_OFFERS + 1);
   if (!list.length) throw userError('Choose at least one place.');
   if (list.length > MAX_OFFERS) throw userError(`Send at most ${MAX_OFFERS} places.`);
@@ -585,15 +590,27 @@ async function applyRebook(sql, razorpay, change, { paymentId = null } = {}) {
   // by coupon that the new booking does not take comes back as a coupon;
   // the part paid with earlier Aerva credit goes back onto that credit.
   const diff = Math.round(Number(change.difference));
-  let credit = 0, couponBack = 0, creditBack = 0, expiresAt = null;
+  let credit = 0, couponBack = 0, creditBack = 0, expiresAt = null, depositBack = 0;
   if (diff < 0) {
+    // A smaller deposit at the new place: that part of the difference is the
+    // guest's deposit, refunded to the payment — a deposit is never Aerva
+    // credit (owner, 10 Nov 2026 01:29).
+    const oldDep = ['held', 'disputed'].includes(String(o.deposit_status || '')) ? Math.round(Number(o.deposit_amount) || 0) : 0;
+    depositBack = Math.min(-diff, Math.max(0, oldDep - Math.round(Number(d.depositAmount) || 0)));
+    if (depositBack > 0 && razorpay && o.razorpay_payment_id) {
+      try { await require('./_refunds').safeRefund(sql, razorpay, { orderId: o.id, paymentId: o.razorpay_payment_id, amountSubunit: depositBack * 100, kind: 'deposit' }); }   // the old row keeps no deposit after the move
+      catch (err) {
+        console.error('check-in promise deposit refund failed (needs follow-up):', o.id, err.message);
+        await email(process.env.ADMIN_ALERT_EMAIL || 'hello@aerva.in', `Check-in promise deposit refund failed: booking #${o.id}`, `<p>The guest was moved; ${inr(depositBack)} of their deposit could not be refunded automatically. Refund it from Admin → Refunds.</p>`);
+      }
+    } else depositBack = 0;
     const orig = r.original || {};
     const used = Math.round(Number(orig.creditUsed) || 0);
     creditBack = Math.max(0, used - Math.min(used, Math.round(Number(change.new_total))));
     if (creditBack) creditBack = await require('./_fee-credits').giveBack(sql, newId, creditBack);
     couponBack = Math.max(0, Math.round(Number(orig.coupon) || 0) - Math.min(Math.round(Number(orig.coupon) || 0), Math.round(Number(d.subtotal))));
     if (couponBack) await C.returnCouponValue(sql, { razorpayOrderId: o.razorpay_order_id, amount: couponBack, sourceOrderId: o.id, guestEmail: o.guest_email, suiteName: o.suite_name });
-    const money = Math.max(0, -diff - couponBack - creditBack);
+    const money = Math.max(0, -diff - couponBack - creditBack - depositBack);
     if (money > 0) {
       try {
         const c = await require('./_fee-credits').creditForCheckinRebook(sql, o.id, money, { newOrderId: newId, toName: q.name });
@@ -608,7 +625,7 @@ async function applyRebook(sql, razorpay, change, { paymentId = null } = {}) {
               recovered_from_host = ${settled.hostRecovered || 0}, closed_at = now() WHERE id = ${r.id} AND status = 'rebooking'`;
   const S = require('./_support');
   const { postThreadMessage } = C;
-  const money = diff > 0 ? `You paid the difference of ${inr(diff)}.` : diff < 0 ? `${inr(-diff)} comes back to you${credit ? ` (${inr(credit)} as Aerva credit${expiresAt ? ` until ${new Date(expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })}` : ''})` : ''}${couponBack ? `, ${inr(couponBack)} as a coupon` : ''}${creditBack ? `, ${inr(creditBack)} back on your earlier Aerva credit` : ''}.` : 'There is no difference to pay.';
+  const money = diff > 0 ? `You paid the difference of ${inr(diff)}.` : diff < 0 ? `${inr(-diff)} comes back to you${credit ? ` (${inr(credit)} as Aerva credit${expiresAt ? ` until ${new Date(expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })}` : ''})` : ''}${couponBack ? `, ${inr(couponBack)} as a coupon` : ''}${creditBack ? `, ${inr(creditBack)} back on your earlier Aerva credit` : ''}${depositBack ? `, ${inr(depositBack)} of your deposit refunded to your original payment` : ''}.` : 'There is no difference to pay.';
   await S.systemUpdate(sql, r.guest_ticket_id, `You are now booked at ${q.name}, ${niceDate(q.from)} – ${niceDate(q.to)}${code ? ` (booking ${code})` : ''}. ${money}`, { resolve: true });
   await postThreadMessage(sql, o.id, 'system', `The guest has been moved to another place under Aerva’s check-in promise. The host is not paid for this booking.`);
   await postThreadMessage(sql, newId, 'system', `Booking made by Aerva under its check-in promise: ${q.name}, ${niceDate(q.from)} – ${niceDate(q.to)}, ${plural(Number(d.guests), 'guest')}.`);
@@ -629,7 +646,7 @@ async function applyRebook(sql, razorpay, change, { paymentId = null } = {}) {
   await email(oh && oh.email, `Booking closed: ${o.property_name}`,
     `<p>Your guest for ${esc(stayLine(o))} was moved to another place under Aerva’s check-in promise. You are not paid for this booking.${settled.hostRecovered > 0 ? ` Your payout for it had already been sent, so ${inr(settled.hostRecovered)} will be deducted from your later payouts.` : ''}</p>`);
   await logAudit(sql, { action: 'checkin_rebook_applied', success: true, actorType: 'system', targetType: 'order', targetId: o.id,
-    metadata: { reportId: r.id, changeId: change.id, newOrderId: newId, oldTotal: change.old_total, newTotal: change.new_total, difference: diff, credit, couponBack, creditBack, recovered: settled.hostRecovered || 0, paymentId } });
+    metadata: { reportId: r.id, changeId: change.id, newOrderId: newId, oldTotal: change.old_total, newTotal: change.new_total, difference: diff, credit, couponBack, creditBack, depositBack, recovered: settled.hostRecovered || 0, paymentId } });
   return { ok: true, newOrderId: newId, difference: diff, credit: credit + creditBack, couponBack };
 }
 

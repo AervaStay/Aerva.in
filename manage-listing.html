@@ -619,7 +619,7 @@
 
   <div id="notFoundState" style="display:none;">
     <h1 id="notFoundHeading">Link not valid</h1>
-    <p class="subtitle" id="notFoundMessage">This link may have expired or is incorrect. Open Manage from My Collection to get a fresh one, or contact hello@aerva.in.</p>
+    <p class="subtitle" id="notFoundMessage">This link may have expired or is incorrect. Open Manage from My Collection to get a fresh one, or <a href="index.html?view=help&amp;new=1&amp;category=listing_photos">raise a request in Aerva Support</a>.</p>
     <button type="button" id="notFoundRetry" style="display:none; margin-top:12px; padding:10px 18px; border:1px solid #ddd0bc; background:#fff; border-radius:999px; cursor:pointer; font-family:inherit;">Try again</button>
   </div>
 
@@ -1824,7 +1824,7 @@
         loadingState.style.display = 'none';
         document.getElementById('pendingHeading').textContent = l.status === 'rejected' ? 'Listing not approved' : 'Still under review';
         document.getElementById('pendingMessage').textContent = l.status === 'rejected'
-          ? 'This listing was not approved and needs to be resubmitted before it can be managed here. Please contact hello@aerva.in if you have questions about the rejection.'
+          ? 'This listing was not approved and needs to be resubmitted before it can be managed here. If you have questions about the rejection, raise a request in Aerva Support (Help → Raise a request).'
           : `${l.property_name || 'Your listing'} is still awaiting review — you'll be able to manage your rooms and pricing here once it's approved. We'll email you when that happens.`;
         document.getElementById('pendingState').style.display = 'block';
         return;

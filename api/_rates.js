@@ -24,6 +24,7 @@
 // (Until 9 Nov 2026 hosts had to confirm or decline, and an unanswered or
 // declined revision ended the agreement — no longer.)
 
+const { helpLine } = require('./_help-link');
 const DEFAULTS = { host: 5, guest: 5 };
 const NOTICE_DAYS = 31, TZ_DAYS = 2, MIN_HOST_DAYS = NOTICE_DAYS + TZ_DAYS;   // 33
 const PROPERTY_TYPES = ['Entire Home / Villa', 'Studio Apartment', 'Suite within a larger property', 'Cabin / Cottage',
@@ -215,7 +216,7 @@ async function runRateNotices(sql, { deadlineMs = 5000 } = {}) {
         <p><strong>The revised commission applies to bookings made on or after ${esc(dateLabel(r.effective_from))} (12:00 AM, India time).</strong> This notice is given in advance. Bookings made before that date keep the commission in force when they were made.</p>
         <p>There is nothing you need to do. If you prefer not to host at the revised commission, you may deactivate your listings in your dashboard before ${esc(dateLabel(r.effective_from))}; continuing to host after that date means you accept it.</p>
         <p><a href="${SITE}/host-dashboard.html" style="background:#1c1a17; color:#f4eadc; padding:11px 20px; text-decoration:none; display:inline-block;">Open your dashboard</a></p>
-        <p style="font-size:13px; color:#6e675d;">Questions: raise a request in the Resolution Center or write to hello@aerva.in.</p></div>`;
+        <p style="font-size:13px; color:#6e675d;">${helpLine({ category: 'payout_tds' }, 'Questions?')}</p></div>`;
       const ok = await sendEmail(h.email, `Notice: revision of Aerva’s commission from ${dateLabel(r.effective_from)}`, html);
       await sql`UPDATE fee_rate_notices SET emailed = ${ok} WHERE id = ${claimed[0].id}`;
       out.noticed++;
