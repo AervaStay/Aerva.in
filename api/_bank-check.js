@@ -25,6 +25,7 @@
 // Works for both payees: hosts (table hosts) and co-hosts
 // (table cohost_payout_profiles). Columns: migration_bank_check.sql.
 
+const { helpLink } = require('./_help-link');
 const { decryptField } = require('./_secure-fields');
 const { logAudit } = require('./_audit-log');
 
@@ -360,7 +361,7 @@ async function payoutDetailsChanged(sql, kind, key, what = 'bank') {
        </ul>
        <p>Nothing is lost: payouts that fall due meanwhile are sent once the checks are done. You will get an email when they are, or if anything is needed from you.</p>
        <p style="margin:20px 0;"><a href="${where}" style="background:#1c1a17; color:#f4eadc; padding:12px 22px; text-decoration:none; display:inline-block;">See your payout details</a></p>
-       <p><strong>Did not make this change?</strong> Reply to this email or write to hello@aerva.in straight away.</p>`);
+       <p><strong>Did not make this change?</strong> ${helpLink({ category: 'verification' })} straight away.</p>`);
     if (!p.account || !p.ifsc) return { status: 'missing' };
     return await startCheck(sql, kind, key);
   } catch (err) {
@@ -381,7 +382,7 @@ function payoutItems(row, { who = 'host' } = {}) {
     ? new Date(new Date(row.bank_changed_at).getTime() + HOLD_HOURS_AFTER_CHANGE * 3600e3) : null;
   const add = (state, kind, title, body) => items.push({ id: `payout-details:${who}:${state}:${row.bank_checked_at || row.bank_changed_at || ''}`, kind, title, body, href });
   if (who === 'host') {
-    if (row.pan_status === 'rejected') add('pan-rejected', 'action', 'Action needed: your PAN was not approved', row.pan_rejection_reason || 'Write to hello@aerva.in to submit it again.');
+    if (row.pan_status === 'rejected') add('pan-rejected', 'action', 'Action needed: your PAN was not approved', row.pan_rejection_reason || 'Please raise a request in Aerva Support (Help → Raise a request) to submit it again.');
     else if (!row.pan_status || row.pan_status === 'not_submitted') add('pan-missing', 'action', 'Add your PAN to pay less TDS', 'Payouts carry 5% TDS without a PAN, 0.1% with one. Add it in your payout details.');
     else if (row.pan_number && !row.pan_name) add('pan-name', 'action', 'Action needed: add the name on your PAN', 'Add it under Verification. It must be the same as your payout name.');
     if (row.bank_status === 'rejected') add('bank-rejected', 'action', 'Action needed: update your bank account', (row.bank_rejection_reason || 'Your bank account could not be verified.') + ' Payouts are on hold until a bank account is verified.');

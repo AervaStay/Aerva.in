@@ -26,6 +26,7 @@
 //                  (deactivated_by = 'agreement'), confirmed bookings go
 //                  ahead and payouts are paid. Accepting later restores them.
 
+const { helpLine } = require('./_help-link');
 const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
@@ -69,7 +70,7 @@ function agreementHtml(a, { name = '', listings = [], acceptedAt = null } = {}) 
     <p style="font-family:sans-serif; font-size:14px;">${esc(a.intro)}</p>
     ${a.clauses.map(c => `<h3 style="font-family:sans-serif; font-size:14.5px; margin:18px 0 4px;">${esc(c.title)}</h3>
       <ul style="font-family:sans-serif; font-size:14px; margin:0; padding-left:20px;">${c.points.map(p => `<li style="margin:3px 0;">${esc(p)}</li>`).join('')}</ul>`).join('')}
-    <p style="font-family:sans-serif; font-size:13px; color:#6e675d; margin-top:22px;">Keep this email for your records. Every agreement you have accepted is also in your dashboard under Account → Host Agreement. Questions: hello@aerva.in</p>
+    <p style="font-family:sans-serif; font-size:13px; color:#6e675d; margin-top:22px;">Keep this email for your records. Every agreement you have accepted is also in your dashboard under Account → Host Agreement. ${helpLine({}, 'Questions?')}</p>
   </div>`;
 }
 

@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-10b"></script>
+<script src="aerva-policies.js?v=2026-11-10t"></script>
 </head>
 <body>
 
@@ -520,8 +520,11 @@
     <p class="lk-sub" style="margin:0 0 10px;">A guest reported on arrival that the property does not exist, or is not as listed or not available. <strong>Urgent.</strong> Confirm (the host failed) or clear (not upheld). A fake-listing report hides that listing at once; confirmed, the listing stays blocked (only Aerva unblocks it) and its future bookings appear below to move or refund. Once confirmed, find places (same city, free, fitting the party; nearest first, then closest in price) and send up to 3 — the guest pays only the difference, or gets the difference as Aerva credit — or refund in full (price, GST, deposit and service fee). The host is not paid for that booking; anything already paid out comes off their later payouts. Admin only.</p>
     <div id="apCheckinBody"><p class="lk-empty">Loading…</p></div>
     <h3 style="margin:18px 0 6px;">Natural disaster cancellations</h3>
-    <p class="lk-sub" style="margin:0 0 10px;">A guest asked to cancel for a natural disaster or a government order / travel restriction, with proof. It comes here at once: the host cannot decline it. Check the proof. Approve: the booking is cancelled and everything the guest paid (price, GST, deposit, service fee, any free cancellation add-on) becomes Aerva credit for new dates — it never expires and can’t be refunded; a coupon part comes back as a coupon; the host gets no payout. Reject (with a reason the guest is told): nothing changes, the booking stands. Older emergency requests sent before 10 Nov 2026 also appear here once the host has not answered. Anything still open at check-in closes by itself and the booking stands.</p>
+    <p class="lk-sub" style="margin:0 0 10px;">A guest asked to cancel for a natural disaster or a government order / travel restriction, with proof. It comes here at once: the host cannot decline it. Check the proof. Approve: the booking is cancelled and what the guest paid (price, GST, service fee, any free cancellation add-on) becomes ordinary Aerva credit and the deposit is refunded to the payment — the guest uses it for new dates or has it refunded to the original payment at any time; a coupon part comes back as a coupon; the host gets no payout. Reject (with a reason the guest is told): nothing changes, the booking stands. Older emergency requests sent before 10 Nov 2026 also appear here once the host has not answered. Anything still open at check-in closes by itself and the booking stands.</p>
     <div id="apCancelBody"><p class="lk-empty">Loading…</p></div>
+    <h3 style="margin:18px 0 6px;">Group bookings</h3>
+    <p class="lk-sub" style="margin:0 0 10px;">Split payments (owner’s final rules, 10 Nov 2026). The organiser commits to pay for any places not paid within 2 hours. The place is not held until the last payment: if it gets booked by someone else, everyone is refunded in full automatically. At 2 hours the organiser has 30 minutes to pay the rest; if not, nothing is booked, everyone is refunded and the unpaid commitment is recorded on the organiser’s account (below, and in Lookup). Confirmed group bookings are non-refundable.</p>
+    <div id="apGroupBody"><p class="lk-empty">Loading…</p></div>
     <h3 style="margin:18px 0 6px;">Price changes</h3>
     <p class="lk-sub" style="margin:0 0 10px;" id="apPriceRules">A host's unusual change on a live listing waits here; guests keep seeing the current price until it is approved.</p>
     <div id="apPriceBody"><p class="lk-empty">Loading…</p></div>
@@ -2908,7 +2911,7 @@
   // Content Policy: no phone numbers (or other contact details) in listing
   // photos. One click blocks the listing at once, with this reason emailed
   // to the host. They replace the photo and ask Aerva to unblock.
-  const PHONE_IN_PHOTO_REASON = 'A photo in this listing shows a phone number. Phone numbers and other contact details are not allowed in listing photos, so the listing has been blocked. Replace the photo from Manage listing, then write to hello@aerva.in to have it reviewed.';
+  const PHONE_IN_PHOTO_REASON = 'A photo in this listing shows a phone number. Phone numbers and other contact details are not allowed in listing photos, so the listing has been blocked. Replace the photo from Manage listing, then raise a request in Aerva Support (Help → Raise a request) to have it reviewed.';
   function blockForPhoneInPhoto(listingId){
     if(!confirm('Block this listing now because a photo shows a phone number? The host is emailed the reason.')) return;
     setListingStatus(listingId, 'block', PHONE_IN_PHOTO_REASON);
@@ -3962,39 +3965,39 @@ function lkGuestHtml(d){
         <label class="lk-check"><input type="checkbox" id="lkRaiseCall"> They want a call back</label>
         <button type="button" class="lk-btn" onclick="lkRaise(${Number(g.id)})">Raise request</button>
       </div><p class="lk-msg" id="lkRaiseMsg"></p></div></div>`}
-    ${lkNewDatesCreditsHtml(g, d.newDatesCredits || [])}
+    ${lkGroupCommitmentsHtml(d.groupCommitments || [])}
     <div id="lkPropose"></div>
     <div id="lkRecords"></div>
     <div class="lk-sec"><h3>Bookings <small>${bookings.length}</small></h3>${bookings.length ? `<div class="lk-list">${bookings.map(lkBookingRow).join('')}</div>` : '<p class="lk-empty">No bookings.</p>'}</div>
     ${lkHistoryHtml(d.history)}`;
 }
-// Credit for new dates only (a natural disaster or government order
-// approved by Aerva, owner 10 Nov 2026): never refunded — unless an admin
-// allows THIS guest's credit to go back to its original payment (owner,
-// 00:54). Admin only; audited with the note. The guest then sees "Refund to
-// original payment" on it (unused part only, once).
-function lkNewDatesCreditsHtml(g, list){
+// Group bookings this guest organised and did not pay the rest of: their
+// commitment (“I’ll pay for any places my friends don’t pay within 2 hours”),
+// recorded when the 30 minutes ran out (owner, 10 Nov 2026).
+function lkGroupCommitmentsHtml(list){
   if(!list.length) return '';
-  const admin = (window.ADMIN_ROLE || 'admin') === 'admin';
-  const open = list.filter(c => c.status === 'active' && c.remaining > 0);
-  const anyAllowed = open.some(c => c.refundAllowed);
-  return `<div class="lk-actions"><h3>Aerva credit for new dates only</h3>
-    <p>Everything the guest paid on a booking cancelled for a natural disaster or a government order. It does not expire and can’t be refunded.</p>
-    ${list.map(c => lkKv('C-' + Number(c.id) + (c.from ? ' · ' + lkEsc(c.from) : ''), `₹${Number(c.remaining).toLocaleString('en-IN')} left of ₹${Number(c.amount).toLocaleString('en-IN')} · ${lkEsc(c.status)}${c.refunded ? ` · ₹${Number(c.refunded).toLocaleString('en-IN')} refunded` : ''}${c.refundAllowed ? ` · <strong>refund allowed</strong> by ${lkEsc(c.allowedBy || '')} ${lkDay(c.allowedAt)}${c.note ? ' (“' + lkEsc(c.note) + '”)' : ''}` : ''}`)).join('')}
-    ${admin && open.length ? `<div class="lk-act"><div class="lk-form">
-      <label class="lk-check"><input type="checkbox" id="lkCreditAllow" ${anyAllowed ? 'checked' : ''} onchange="lkAllowCreditRefund(${Number(g.id)}, this.checked)"> Allow refund of credit to the original payment</label>
-      <label class="lk-wide">Note (optional, recorded)<input id="lkCreditNote" maxlength="300" placeholder="e.g. Owner approved: guest moving abroad"></label>
-    </div><p class="lk-msg" id="lkCreditMsg">Only the unused part, only to the original payment of that booking, once. Switch it off again until the guest uses it.</p></div>` : (!admin ? '<p class="lk-sub">Only an admin can allow a refund.</p>' : '')}
+  const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+  return `<div class="lk-actions" id="lkGroupCommitments"><h3>Unpaid group commitments <small>${list.length}</small></h3>
+    <p>As organiser of a group booking, this guest agreed to pay for any places not paid within 2 hours, and did not pay the rest within 30 minutes. Nothing was booked and everyone was refunded.</p>
+    ${list.map(c => lkKv('Group G-' + Number(c.groupId) + (c.listing ? ' · ' + lkEsc(c.listing) : ''), `<strong>${inr(c.unpaid)}</strong> unpaid · ${lkEsc(c.arrival)} → ${lkEsc(c.departure)} · ${Number(c.places)} places of ${inr(c.total)} · ${lkDay(c.at)}`)).join('')}
   </div>`;
 }
-async function lkAllowCreditRefund(guestId, allow){
-  const msg = document.getElementById('lkCreditMsg'); msg.className = 'lk-msg'; msg.textContent = '';
-  if(!confirm(allow ? 'Allow this guest to have their credit for new dates refunded to the original payment?' : 'Switch the refund off again?')){ document.getElementById('lkCreditAllow').checked = !allow; return; }
+// Admin → Approvals → Group bookings: every group (split payment) and
+// organisers' unpaid commitments.
+async function loadGroupBookings(){
+  const body = document.getElementById('apGroupBody');
+  if(!body) return;
   try{
-    await lkPost({ allowCreditRefund: { guestId, allow, note: document.getElementById('lkCreditNote').value.trim() } });
-    msg.className = 'lk-msg is-ok'; msg.textContent = allow ? 'Allowed. The guest now sees “Refund to original payment” on it.' : 'Switched off. The guest no longer sees the option.';
-    lkOpen('guest', guestId, false);
-  }catch(err){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; document.getElementById('lkCreditAllow').checked = !allow; }
+    const d = await lkGet('groupBookings=1');
+    const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+    const ST = { starting: 'Starting', open: 'Collecting', awaiting_gap: 'Organiser paying the rest', awaiting_confirm: 'Organiser paying the rest', confirming: 'Confirming', confirmed: 'Confirmed', cancelled: 'Did not go ahead', failed: 'Not opened' };
+    const commit = (d.commitments || []).length ? `<h4 style="margin:6px 0;">Unpaid commitments</h4><div class="lk-list">${d.commitments.map(c => `<div class="lk-row" data-group-commitment="${Number(c.id)}"><strong>${inr(c.commitmentUnpaid)}</strong> unpaid by ${lkEsc(c.organiser.name || c.organiser.email)} (${lkEsc(c.organiser.email)}) · G-${Number(c.id)} ${lkEsc(c.listing)} · ${lkEsc(c.arrival)} → ${lkEsc(c.departure)} · ${lkDay(c.commitmentUnpaidAt)} <button type="button" class="lk-btn lk-btn-sm" onclick="lkOpen('guest', ${Number(c.organiser.guestId)})">Open guest</button></div>`).join('')}</div>` : '<p class="lk-empty">No unpaid commitments.</p>';
+    const rows = (d.groups || []).map(x => `<tr data-group="${Number(x.id)}"><td>G-${Number(x.id)}</td><td>${lkEsc(x.listing)}<br><small>${lkEsc(x.arrival)} → ${lkEsc(x.departure)}</small></td>
+      <td>${lkEsc(x.organiser.name || '')}<br><small>${lkEsc(x.organiser.email)}</small></td><td>${lkEsc(ST[x.status] || x.status)}${x.rest != null ? `<br><small>rest ${inr(x.rest)}</small>` : ''}</td>
+      <td>${Number(x.paidPlaces)} / ${Number(x.places)}<br><small>${Number(x.payers)} payer${x.payers === 1 ? '' : 's'}</small></td><td>${inr(x.paid)} of ${inr(x.total)}${x.refunded ? `<br><small>${inr(x.refunded)} refunded</small>` : ''}</td>
+      <td>${x.bookingId ? '#' + Number(x.bookingId) : ''}${x.outcome ? `<br><small>${lkEsc(x.outcome)}</small>` : ''}${x.commitmentUnpaid != null ? `<br><small style="color:#a3402f;">commitment unpaid ${inr(x.commitmentUnpaid)}</small>` : ''}</td></tr>`).join('');
+    body.innerHTML = commit + (rows ? `<div style="overflow-x:auto;"><table class="tds-table"><thead><tr><th>Group</th><th>Stay</th><th>Organiser</th><th>Status</th><th>Places paid</th><th>Money</th><th>Outcome</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="lk-empty">No group bookings yet.</p>');
+  }catch(err){ body.innerHTML = `<p class="lk-empty">${lkEsc(err.message)}</p>`; }
 }
 // Raise a support request on the customer's behalf (server: raiseForCustomer).
 let LK_CATS = null;
@@ -4360,9 +4363,9 @@ async function loadCancelRequests(){
       const decide = !canDecide ? '<p class="lk-sub">A reviewer or admin decides.</p>'
         : !x.canDecide ? `<p class="lk-sub" style="color:#8a6c39;">${lkEsc(x.decideRule || 'Aerva contacts the host first.')}</p>`
         : `<input id="crNote-${id}" placeholder="Reason (required to reject; the guest is told)" style="width:100%; margin-top:10px; padding:8px; border:1px solid #ddd; border-radius:6px;">
-          <p class="lk-sub" style="margin:8px 0 0;">Aerva’s decision is final and binds the guest and the host.${x.kind === 'disaster' ? ` If approved: ${inrA(x.credit)} as Aerva credit for new dates (not refundable)${x.coupon ? `, ${inrA(x.coupon)} back as a coupon` : ''}${x.cash ? `, ${inrA(x.cash)} refunded to the payers (a group booking)` : ''}; no host payout.` : ' Aerva’s service fee stays charged (an old emergency request).'}</p>
+          <p class="lk-sub" style="margin:8px 0 0;">Aerva’s decision is final and binds the guest and the host.${x.kind === 'disaster' ? ` If approved: ${inrA(x.credit)} as Aerva credit (usable for new dates, refundable by the guest at any time)${x.coupon ? `, ${inrA(x.coupon)} back as a coupon` : ''}${x.cash ? `, the deposit (${inrA(x.cash)}) refunded to the payment${x.cash && x.group ? 's' : ''}` : ''}; no host payout.` : ' Aerva’s service fee stays charged (an old emergency request).'}</p>
           <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
-          ${x.kind === 'disaster' ? `<button type="button" class="lk-btn" onclick="decideCancelRequest(${id}, true, 'disaster')">Approve — full amount as credit for new dates</button>`
+          ${x.kind === 'disaster' ? `<button type="button" class="lk-btn" onclick="decideCancelRequest(${id}, true, 'disaster')">Approve — full amount as Aerva credit</button>`
             : `<button type="button" class="lk-btn" onclick="decideCancelRequest(${id}, true, 100)">Approve — cancel with full refund</button>`}
           <button type="button" class="lk-btn is-danger" onclick="decideCancelRequest(${id}, false)">Reject — booking stands</button>
         </div>`;
@@ -4392,7 +4395,7 @@ async function decideCancelRequest(id, accept, refundPercent){
   const err = document.getElementById('crErr-' + id);
   if(!accept && note.trim().length < 5){ if(err) err.textContent = 'Write the reason — the guest is told it.'; return; }
   const disaster = refundPercent === 'disaster';
-  if(!confirm((accept ? (disaster ? 'Cancel this booking and hold everything the guest paid as Aerva credit for new dates (not refundable, no host payout)?' : 'Cancel this booking and refund the price, GST and deposit in full?') : 'Reject the request? The booking stands.') + ' This decision is final for the guest and the host.')) return;
+  if(!confirm((accept ? (disaster ? 'Cancel this booking and hold everything the guest paid as Aerva credit (refundable by the guest at any time; no host payout)?' : 'Cancel this booking and refund the price, GST and deposit in full?') : 'Reject the request? The booking stands.') + ' This decision is final for the guest and the host.')) return;
   try{
     await lkPost({ decideCancellationRequest: { requestId: id, accept, note } });
     loadCancelRequests();
@@ -4510,6 +4513,7 @@ async function loadApprovals(){
   loadCheckinPromise();
   loadPriceReviews();
   loadCancelRequests();
+  loadGroupBookings();
   const body = document.getElementById('apBody');
   body.innerHTML = '<p class="lk-empty">Loading…</p>';
   try{

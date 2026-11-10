@@ -2339,7 +2339,8 @@ body.is-cohosting{ padding-bottom:70px; }
 
 /* ---------- FOOTER, SECOND RESTYLE (Sept 2026) ----------
    Brand block left, three short columns right, a thin gold rule, then the
-   copyright line. Reach Us is the email only, with Instagram and Facebook
+   copyright line. Reach Us links to Aerva Support (no email: every issue
+   goes through the Resolution Center, owner 10 Nov 2026), with Instagram and Facebook
    as quiet round icons beneath it. */
 footer{ padding:80px 0 34px; }
 footer .foot-top{ display:grid; grid-template-columns:minmax(260px, 1.3fr) 2fr; gap:64px; align-items:start; }
@@ -3752,6 +3753,10 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 .ag-error{color:#a3402f; font-size:13.5px; margin-top:8px;}
 .ag-note{border-radius:10px; padding:12px 14px; margin-bottom:14px; font-size:14.5px;}
 .ag-note.is-ok{background:#e6f2e8; color:#2f6b3a;} .ag-note.is-bad{background:#f2e6e3; color:#8a3a2b;}
+/* Group bookings, final rules (10 Nov 2026): not held until the last payment; the ticks. */
+.ag-warn{background:#fff4e5; border:1px solid #e8c48a; color:#5b4419; border-radius:8px; padding:10px 12px; opacity:1;}
+.ag-tick{margin-top:8px;}
+.ag-outcome .ag-h3{color:#8a3a2b;}
 .ag-quote{border-left:3px solid var(--gold); margin:0 0 14px; padding:6px 0 6px 14px; font-style:italic; font-size:15.5px;}
 .ag-quote cite{display:block; font-style:normal; font-size:13px; opacity:0.7; margin-top:4px;}
 .ag-quote-sm{font-size:13.5px; margin:6px 0;}

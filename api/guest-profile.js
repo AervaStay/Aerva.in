@@ -93,7 +93,10 @@ function changeView(qc) {
   if (q.gst || q.freeCancelGst) lines.push({ label: 'GST', amount: (q.gst || 0) + (q.freeCancelGst || 0) });
   lines.push({ label: 'Guest service fee', amount: q.guestServiceFee });
   if (q.depositAmount) lines.push({ label: 'Refundable deposit', amount: q.depositAmount });
-  return { summary: qc.summary, lines, oldTotal: qc.oldTotal, newTotal: qc.newTotal, difference: qc.difference, couponNotReturned: qc.couponNotReturned || 0 };
+  // Leaving early (owner, 10 Nov 2026 01:28): the nights not stayed stay paid.
+  if (qc.leavingEarly) lines.push({ label: 'Nights you don’t stay (not refunded)', amount: qc.leavingEarly.notRefunded });
+  return { summary: qc.summary, lines, oldTotal: qc.oldTotal, newTotal: qc.newTotal, difference: qc.difference, couponNotReturned: qc.couponNotReturned || 0,
+           leavingEarly: qc.leavingEarly || null };
 }
 // The change card at the top of a booking's thread.
 async function changeCard(sql, conversationId, role) {
@@ -252,7 +255,7 @@ module.exports = async (req, res) => {
   {
     const st = await sessionStatus(sql, session);
     if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.' });
-    if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. Please contact hello@aerva.in.', suspended: true });
+    if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. To ask about it, raise a request in Aerva Support (Help → Raise a request) from any account you can sign in to.', suspended: true });
       if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
     if (st !== 'ok') return res.status(503).json({ error: 'Could not check your sign-in right now. Please try again.' });
   }
@@ -1264,7 +1267,7 @@ module.exports = async (req, res) => {
           return res.status(200).json({ request: await support.closeRequest(sql, { guestId, ref: b.ref, rating: b.rating, comment: b.comment }) });
         } catch (err) {
           if (!err.isUserFacing) console.error(mode + ' failed:', err);
-          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send this right now. Please try again, or email hello@aerva.in.' });
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send this right now. Please try again in a few minutes.' });
         }
       }
 
@@ -1278,7 +1281,7 @@ module.exports = async (req, res) => {
           return res.status(200).json(await supportChat.handoff(sql, guestId, { note: b.note, how: b.how === 'callback' ? 'callback' : 'chat', phone: typeof b.phone === 'string' ? b.phone : '' }));
         } catch (err) {
           if (!err.isUserFacing) console.error(mode + ' failed:', err);
-          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send this right now. Please try again, or email hello@aerva.in.' });
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not send this right now. Please try again in a few minutes.' });
         }
       }
 
@@ -1304,9 +1307,10 @@ module.exports = async (req, res) => {
       // POST { mode: 'withdrawGift', orderId }
       // POST { mode: 'acceptGift', token | giftId, firstName, lastName, phone }
       // ---- Group bookings (_group-bookings.js) ----
-      // POST { mode: 'groupDecide', token, accept } — the organiser confirms a smaller booking, or cancels
       // POST { mode: 'groupAddGuest', token, places } — add places (never remove): while open, at the
-      //      2-hour decision, or after confirmation (the same booking, re-priced)
+      //      2-hour mark (organiser, once), or after confirmation (the same booking, re-priced)
+      // ('groupDecide' — confirming a smaller booking — is gone: owner, 10 Nov 2026. At 2 hours
+      //  the organiser pays the rest instead: create-order.js { groupGap }.)
       if (mode === 'sendGift' || mode === 'withdrawGift' || mode === 'acceptGift' || mode === 'groupDecide' || mode === 'groupAddGuest') {
         const b = req.body || {};
         try {
@@ -1315,7 +1319,7 @@ module.exports = async (req, res) => {
           if (mode === 'withdrawGift') return res.status(200).json(await G.withdrawGift(sql, { orderId: Number(b.orderId) || 0, guestId }));
           if (mode === 'acceptGift') return res.status(200).json(await G.acceptGift(sql, { guestId, token: b.token || null, giftId: b.giftId || null, firstName: b.firstName, lastName: b.lastName, phone: b.phone, ip: getClientIp(req) }));
           if (mode === 'groupAddGuest') return res.status(200).json(await require('./_group-bookings').addGuests(sql, razorpayClient(), { token: String(b.token || '').slice(0, 64), guestId, places: b.places }));
-          return res.status(200).json(await require('./_group-bookings').decide(sql, razorpayClient(), { token: String(b.token || ''), guestId, accept: b.accept === true }));
+          return res.status(410).json({ error: 'A group booking can no longer be confirmed for fewer guests. At 2 hours the organiser pays the rest to confirm it, or it does not go ahead and everyone is refunded in full.' });
         } catch (err) {
           if (!err.isUserFacing) console.error(mode + ' failed:', err);
           return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now. Please try again.', needs: err.needs || undefined, maxGuests: err.maxGuests || undefined });

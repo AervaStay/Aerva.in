@@ -60,6 +60,7 @@
 // correctly against old and new data alike.
 
 const { IS_PROD: IS_PROD_ENV } = require('./_env'); // production vs UAT safety rails — must load first
+const { helpLine } = require('./_help-link');
 const { neon } = require('@neondatabase/serverless');
 const { hostTier, reviewScore, REVIEW_FACTORS, propertyTier, propertyFlag,
         propertyCutoffs, PROPERTY_TIERS, experienceTier, EXPERIENCE_FACTORS,
@@ -250,7 +251,7 @@ async function sendReviewPromptEmail(order) {
       <p>Your review helps the next guest choose well, and tells your host what went right or wrong.</p>
       <p>It takes a minute. You have ${REVIEW_WINDOW_DAYS} days from checkout.</p>
       <p><a href="https://aerva.in/index.html?view=my-bookings" style="display:inline-block; background:#1c1a17; color:#f4ebe3; padding:11px 20px; text-decoration:none; border-radius:4px;">Write your review</a></p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Write to hello@aerva.in.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ order: order.id })}</p>
     </div>`;
   try {
     const res = await fetch('https://api.resend.com/emails', {
@@ -600,7 +601,7 @@ const JOBS = [
   // Group bookings (_group-bookings.js): close groups at 2 hours (confirm, or
   // ask the organiser about a smaller booking), cancel unanswered ones after
   // 30 minutes with full refunds, remind organisers 30 minutes before the end.
-  { name: 'group_bookings', label: 'Group bookings: close at 2 hours, confirm or ask the organiser, refund when they do not go ahead, reminders', everyMinutes: 5,
+  { name: 'group_bookings', label: 'Group bookings: booked by someone else → refund everyone; at 2 hours ask the organiser to pay the rest; not paid in 30 minutes → refund everyone and record the commitment; reminders', everyMinutes: 5,
     run: (c) => require('./_group-bookings').runJob(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
   // Gift bookings (_gifts.js): remind recipients who have not accepted (3 days
   // and 1 day before check-in, the buyer told too); tell recipients of a cancellation.

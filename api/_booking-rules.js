@@ -219,7 +219,7 @@ async function takeHolds(sql, stays, { guestKey, ip }) {
     const n = (await sql`SELECT count(*)::int AS n FROM booking_holds
                          WHERE guest_key = ${guestKey} AND listing_id = ${lid} AND created_at > now() - interval '24 hours'`)[0].n;
     if (n >= ATTEMPTS_PER_DAY) {
-      throw userError(`You have used all ${ATTEMPTS_PER_DAY} payment attempts for this listing today. Please try again tomorrow, or write to hello@aerva.in.`, 429);
+      throw userError(`You have used all ${ATTEMPTS_PER_DAY} payment attempts for this listing today. Please try again tomorrow, or raise a request in Aerva Support (Help → Raise a request).`, 429);
     }
   }
   if (ip) {

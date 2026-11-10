@@ -102,7 +102,7 @@
     var data = {};
     try{ data = await res.json(); }catch(e){ data = {}; }
     if(!res.ok){
-      var err = new Error(data.error || 'Something went wrong. Please try again, or email ' + (S().contacts || {}).email + '.');
+      var err = new Error(data.error || 'Something went wrong. Please try again in a few minutes.');
       err.status = res.status;
       throw err;
     }
@@ -192,11 +192,6 @@
       cards.push('<div class="hc-contact"><h3>WhatsApp</h3>'
         + '<p>Message our support team on WhatsApp. We never ask for payment there.</p>'
         + '<a class="btn" href="' + esc(whatsappLink(c.whatsapp)) + '" target="_blank" rel="noopener">Chat on WhatsApp</a></div>');
-    }
-    if(c.email){
-      cards.push('<div class="hc-contact"><h3>Email</h3>'
-        + '<p>Write to us any time. Include your booking ID or request reference.</p>'
-        + '<a class="btn" href="mailto:' + esc(c.email) + '">' + esc(c.email) + '</a></div>');
     }
     return '<div class="hc-contacts">' + cards.join('') + '</div>'
       + (c.hours ? '<p class="hc-hours">Phone and WhatsApp: ' + esc(c.hours) + '</p>' : '');
@@ -292,11 +287,10 @@
 
   // ------------------------------------------------------- raise a request
   function signInPanel(what){
-    var c = S().contacts || {};
     return '<div class="hc-signin"><h2>Log in to ' + esc(what) + '</h2>'
       + '<p>Requests are tied to your Aerva account, so we can see your bookings and keep you updated. It also keeps your details private.</p>'
       + '<a class="btn solid" href="' + esc(loginUrl()) + '">Log in or create an account</a>'
-      + (c.email ? '<p class="hc-muted">Cannot sign in? Write to <a href="mailto:' + esc(c.email) + '">' + esc(c.email) + '</a> from the email address on your account.</p>' : '')
+      + '<p class="hc-muted">Cannot sign in? ' + hlink('topic=account', 'See help with your account') + '.</p>'
       + '</div>';
   }
 
@@ -391,8 +385,8 @@
             + (theirs.length ? (mine.length ? '<optgroup label="Bookings at my listings">' : '') + theirs.map(bOpt).join('') + (mine.length ? '</optgroup>' : '') : '')
             + '</select></div>';
         } else if(r.booking === 'required'){
-          linkProblem = r.bookingAs === 'host' ? 'There are no bookings at your listings to choose. Choose another topic, or write to us.'
-                                               : 'You have no bookings to choose for this. Choose another topic, or write to us.';
+          linkProblem = r.bookingAs === 'host' ? 'There are no bookings at your listings to choose. Choose another topic, such as “Something else”.'
+                                               : 'You have no bookings to choose for this. Choose another topic, such as “Something else”.';
           html += '<p class="hc-hint hc-link-note">' + esc(linkProblem) + '</p>';
         }
       }
@@ -404,7 +398,7 @@
             + listings.map(function(l){ return '<option value="' + esc(l.id) + '"' + (String(l.id) === chosen.listing ? ' selected' : '') + '>' + esc(l.name || ('Listing #' + l.id)) + '</option>'; }).join('')
             + '</select></div>';
         } else if(r.listing === 'required'){
-          linkProblem = 'This is about a listing, and your account has none. Choose another topic, or write to us.';
+          linkProblem = 'This is about a listing, and your account has none. Choose another topic, such as “Something else”.';
           html += '<p class="hc-hint hc-link-note">' + esc(linkProblem) + '</p>';
         }
       }
@@ -555,7 +549,7 @@
 
   function drawRequest(r){
     var head = '<p class="policy-back">' + hlink('mine=1', '‹ My requests') + '</p>';
-    var about = r.bookingName ? 'Booking: ' + esc(r.bookingName) + (r.orderId ? ' (#' + esc(r.orderId) + ')' : '')
+    var about = r.bookingName ? 'Booking: ' + esc(r.bookingName) + (r.bookingCode ? ' · confirmation code ' + esc(r.bookingCode) : r.orderId ? ' (#' + esc(r.orderId) + ')' : '')
               : r.listingName ? 'Listing: ' + esc(r.listingName) : '';
     var thread = (r.messages || []).map(function(m){
       var who = m.from === 'you' ? 'You' : m.from;

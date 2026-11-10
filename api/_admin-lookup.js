@@ -11,6 +11,7 @@
 //   listing → block / unblock / remove / restore (setListingStatus, as before).
 // Every action needs a written reason and is recorded in the Audit Log.
 
+const { helpLine, helpLink } = require('./_help-link');
 const { safeRefund, refundAcrossPayments, hasChangePayments } = require('./_refunds');
 const { refundSubunitForInr } = require('./_currency');
 const { logAudit } = require('./_audit-log');
@@ -114,7 +115,7 @@ async function moneyState(sql, orderId) {
   let creditFrom = '';
   if (credit) {
     creditFrom = ((await soft(sql`SELECT string_agg(DISTINCT COALESCE(to_jsonb(src)->>'confirmation_code', src.razorpay_order_id, '#' || src.id) || ' (' || COALESCE(f.razorpay_payment_id, '') || ')', '; ') AS v
-                                   FROM fee_credit_uses u JOIN fee_credits f ON f.id = u.credit_id LEFT JOIN orders src ON src.id = f.source_order_id WHERE u.order_id = ${orderId}`, [{ v: '' }]))[0] || {}).v || '';
+                                   FROM fee_credit_uses u JOIN fee_credits f ON f.id = u.credit_id LEFT JOIN orders src ON src.id = COALESCE(f.source_order_id, (to_jsonb(f)->>'group_order_id')::int) WHERE u.order_id = ${orderId}`, [{ v: '' }]))[0] || {}).v || '';
   }
   const charged = Math.max(0, Math.round(Number(o.total) || 0) - Math.round(Number(o.coupon) || 0) - credit) + (Number(changePaid) || 0);
   const refundedInr = Math.round(Number(refunded) / 100);
@@ -267,7 +268,7 @@ async function partialRefund(sql, razorpay, { orderId, amount, reason, hostPays,
             <p>For your booking at <strong>${escH(o.suite_name)}</strong>${o.confirmation_code ? ` (confirmation code ${escH(o.confirmation_code)})` : ''}.</p>
             <p>${escH(String(reason).trim())}</p>
             <p>The refund goes to your original payment method and usually arrives in 5–7 working days.${o.status === 'paid' ? ' Your booking is unchanged.' : ''}</p>
-            <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Contact hello@aerva.in.</p></div>` }) });
+            <p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ order: o.id })}</p></div>` }) });
     } catch (e) { console.error('partial refund email failed:', e.message); }
   }
   return { refunded: amt, refundId, money: await moneyState(sql, o.id) };
@@ -304,7 +305,7 @@ async function accountAction(sql, { guestId, action, reason, adminLabel }) {
   if (process.env.RESEND_API_KEY && g.email && action !== 'signOut') {
     const subject = action === 'suspend' ? 'Your Aerva account has been suspended' : 'Your Aerva account is active again';
     const body = action === 'suspend'
-      ? `<p>Your Aerva account has been suspended, so you cannot sign in or book for now.</p><p>${escH(why)}</p><p>If you think this is a mistake, reply to this email or write to hello@aerva.in.</p>`
+      ? `<p>Your Aerva account has been suspended, so you cannot sign in or book for now.</p><p>${escH(why)}</p><p>If you think this is a mistake, ${helpLink({ category: 'account_signin' }, 'raise a request in Aerva Support')} from any account you can sign in to.</p>`
       : `<p>Your Aerva account is active again — you can sign in as usual.</p>`;
     try {
       await fetch('https://api.resend.com/emails', { method: 'POST',

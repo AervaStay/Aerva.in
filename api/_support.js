@@ -84,7 +84,7 @@ const day = (v) => { if (!v) return ''; const d = new Date(String(v instanceof D
 const clean = (t, max) => (typeof t === 'string' ? t.replace(/\r/g, '').trim() : '').slice(0, max);
 // Missing tables or columns (before migration_support.sql).
 const notReady = (err) => !!err && (err.code === '42P01' || err.code === '42703');
-const NOT_READY = () => userError('Raising a request online is not open yet. Please email hello@aerva.in, and we will reply there.', 503);
+const NOT_READY = () => userError('Raising a request online is not open yet. Please try again shortly.', 503);
 
 // Files: Aerva's own storage only, at most MAX_FILES.
 function cleanFiles(list) {
@@ -199,7 +199,7 @@ async function createRequest(sql, { guestId, category, subject, description, ord
   }
 
   const recent = raisedBy ? 0 : await countRecentAttempts(sql, { action: 'support_request_created', windowMinutes: 24 * 60, byActor: String(guestId) });
-  if (recent >= MAX_NEW_PER_DAY) throw userError('You have raised several requests today. Please add to an open one, or email hello@aerva.in.', 429);
+  if (recent >= MAX_NEW_PER_DAY) throw userError('You have raised several requests today. Please add to an open one under My requests.', 429);
 
   let ticket;
   try {

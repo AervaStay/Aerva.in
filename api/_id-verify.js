@@ -409,7 +409,7 @@ async function logAttempt(sql, logAudit, guestId, success, metadata) {
 async function verifyDocument(sql, logAudit, guestId, body) {
   const account = await loadAccount(sql, guestId);
   if (!account) throw userError('Please log in again.', 401);
-  if (await attemptsToday(sql, guestId) >= ATTEMPTS_PER_DAY) throw userError('Too many tries today. Please try again tomorrow, or write to hello@aerva.in.', 429);
+  if (await attemptsToday(sql, guestId) >= ATTEMPTS_PER_DAY) throw userError('Too many tries today. Please try again tomorrow, or raise a request in Aerva Support (Help → Raise a request).', 429);
   const input = cleanInput(body || {});
   const files = decodeFiles(body && body.files);
   let read;
@@ -441,7 +441,7 @@ async function verifyAadhaarZip(sql, logAudit, guestId, body) {
   if (!aadhaarZipAvailable()) throw userError('This option is not available right now. Add a photo of your ID instead.', 503);
   const account = await loadAccount(sql, guestId);
   if (!account) throw userError('Please log in again.', 401);
-  if (await attemptsToday(sql, guestId) >= ATTEMPTS_PER_DAY) throw userError('Too many tries today. Please try again tomorrow, or write to hello@aerva.in.', 429);
+  if (await attemptsToday(sql, guestId) >= ATTEMPTS_PER_DAY) throw userError('Too many tries today. Please try again tomorrow, or raise a request in Aerva Support (Help → Raise a request).', 429);
   const shareCode = String((body && body.zipPassword) || '').trim();
   if (!shareCode || shareCode.length > 20) throw userError('Enter the share code you chose when downloading the file.');
   let zip;

@@ -65,6 +65,7 @@
 //          check-in cutoff as cancelBooking.
 
 require('./_env'); // production vs UAT safety rails — must load first
+const { helpLine } = require('./_help-link');
 const { isValidPan, PAN_ERROR } = require('./_tds');
 const bankCheck = require('./_bank-check');
 const idVerify = require('./_id-verify');
@@ -169,7 +170,7 @@ async function sendCancellationEmail(order, opts = {}){
       <p>${lead}</p>
       ${opts.reasonLabel ? `<p><strong>Reason:</strong> ${esc(opts.reasonLabel)}${opts.details ? ' — ' + esc(opts.details) : ''}</p>` : ''}
       <p>${opts.allCredit ? `Everything you paid for this booking — ₹${Number(opts.allCredit).toLocaleString('en-IN')}, including GST and Aerva’s service fee — is held for you as Aerva credit: use it on another stay or experience, or have it refunded to your original payment method at any time from My Bookings (see the separate email). Any security deposit has been refunded to your original payment method.` : opts.feeCredit ? `Your payment has been refunded to your original payment method, apart from Aerva’s service fee of ₹${Number(opts.feeCredit).toLocaleString('en-IN')}, which is held for you as Aerva credit: it is taken off your next Aerva booking, or refunded to you in full if you decide not to book again (see the separate email).` : opts.creditBack ? 'What you paid at checkout has been refunded to your original payment method.' : (String(order.charge_currency || 'INR') !== 'INR' ? 'Your payment has been refunded to your original payment method, including Aerva’s service fee.' : 'Your payment has been refunded to your original payment method, except Aerva’s service fee.')}${opts.creditBack ? ` The ₹${Number(opts.creditBack).toLocaleString('en-IN')} you paid with Aerva credit is back on your credit (My Bookings).` : ''} It should appear within 5–7 business days, depending on your bank.</p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you have questions about this cancellation, please contact hello@aerva.in.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ order: order.id }, 'Questions about this cancellation?')}</p>
     </div>
   `;
   const res = await fetch('https://api.resend.com/emails', {
@@ -893,7 +894,7 @@ async function handleCohostModes(req, res, accountId) {
         const panProblem = (lastName && pan.charAt(3) === 'P' && pan.charAt(4) !== lastName.charAt(0).toUpperCase())
           ? 'The PAN and the name do not match. Check both against your PAN card.' : bankCheck.panNameProblem(pan, panName);
         if (panProblem) { res.status(400).json({ error: panProblem }); return true; }
-        if (await bankCheck.panInUseElsewhere(sql, pan, { guestId: me.id, hostId: me.host_id || null })) { res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' }); return true; }
+        if (await bankCheck.panInUseElsewhere(sql, pan, { guestId: me.id, hostId: me.host_id || null })) { res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, raise a request in Aerva Support (Help → Raise a request).' }); return true; }
         const coCompany = bankCheck.companyPanProblem(pan, holder);
         if (coCompany) { res.status(400).json({ error: coCompany }); return true; }
         // A trade-name account on a personal PAN: only with the business's GSTIN under that PAN.
@@ -1268,7 +1269,7 @@ async function handleCohostModes(req, res, accountId) {
 function isAervaBlobUrl(url) {
   return typeof url === 'string' && /^https:\/\/[a-z0-9]+\.public\.blob\.vercel-storage\.com\/[^\s]+$/i.test(url);
 }
-const ENCRYPTION_UNAVAILABLE = 'Bank and PAN details cannot be saved right now. Please try again later, or write to hello@aerva.in.';
+const ENCRYPTION_UNAVAILABLE = 'Bank and PAN details cannot be saved right now. Please try again later, or raise a request in Aerva Support (Help → Raise a request).';
 
 module.exports = async (req, res) => {
   // Typed text can never become markup — see _plain-text.js.
@@ -1529,7 +1530,7 @@ module.exports = async (req, res) => {
         tot.deductions += Number(r.deductions) || 0; tot.tds += Number(r.tds) || 0; tot.net += Number(r.net) || 0;
       }
       lines.push(['Total', '', '', '', '', '', '', n(tot.gross), n(tot.commission), n(tot.cohost), n(tot.deductions), n(tot.tds), '', '', n(tot.net), '', ''].map(q).join(','));
-      lines.push('', 'TDS is deducted under section 194-O and credited against your PAN; it shows in your Form 26AS. Questions: hello@aerva.in');
+      lines.push('', 'TDS is deducted under section 194-O and credited against your PAN; it shows in your Form 26AS. Questions: raise a request in Aerva Support at aerva.in/index.html?view=help');
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="aerva-payouts-${m[1]}-${m[2]}.csv"`);
       return res.status(200).send('\ufeff' + lines.join('\r\n'));
@@ -3003,7 +3004,7 @@ module.exports = async (req, res) => {
     // cancelTerms); once check-in time has come, only Aerva can.
     order.hoursToCheckIn = hoursUntilCheckInTime(order.arrival, order.timezone, order.check_in_time);
     if (enforceCutoff && !(order.hoursToCheckIn > 0)) {
-      return { error: 'Check-in time has passed, so this booking can no longer be cancelled by the host. Please contact hello@aerva.in if this is urgent.', status: 400 };
+      return { error: 'Check-in time has passed, so this booking can no longer be cancelled by the host. If this is urgent, raise a request in Aerva Support (Help → Raise a request).', status: 400 };
     }
     // Emails and messages show plain dates, not a Date object's long form.
     order.arrival = dateStr(order.arrival) || order.arrival;
@@ -3046,7 +3047,7 @@ module.exports = async (req, res) => {
     try { await sql`UPDATE hosts SET cancel_claim = NULL, cancel_claimed_at = NULL WHERE id = ${hostId} AND cancel_claim = ${token}`; }
     catch (err) { /* columns not added yet */ }
   }
-  const HOST_LIMIT_MESSAGE = `You have already cancelled ${HOST_CANCELLATIONS_PER_YEAR} bookings in the last 12 months, which is the limit. To cancel this one, please contact hello@aerva.in.`;
+  const HOST_LIMIT_MESSAGE = `You have already cancelled ${HOST_CANCELLATIONS_PER_YEAR} bookings in the last 12 months, which is the limit. To cancel this one, raise a request in Aerva Support (Help → Raise a request).`;
 
   // Actually performs the refund + DB update + email — shared by a plain
   // host cancellation and a coupon-gated "prioritize a bigger booking"
@@ -3104,7 +3105,7 @@ module.exports = async (req, res) => {
       // today's rate (_currency.js). null = no record of the charge: refuse.
       const amt = await refundSubunitForInr(sql, { razorpayOrderId: row.razorpay_order_id || order.razorpay_order_id, amountInr: inr, currency });
       if (amt == null || (!amt && inr > 0)) {
-        throw Object.assign(new Error(`This ${currency} booking cannot be refunded automatically. Please contact hello@aerva.in.`), { isUserFacing: true, status: 502 });
+        throw Object.assign(new Error(`This ${currency} booking cannot be refunded automatically. Please raise a request in Aerva Support (Help → Raise a request).`), { isUserFacing: true, status: 502 });
       }
       return amt;
     };
@@ -3192,9 +3193,16 @@ module.exports = async (req, res) => {
     // guest paid does (emailed separately).
     if (terms.asCredit) {
       let all = { total: 0, back: 0 };
-      try { all = await require('./_fee-credits').creditForWholeBooking(sql, cancelledIds, terms.pairExperience ? 'experience_cancelled' : 'host_cancelled_late'); }
+      // A group booking (split payment): each payer's own share, in their own
+      // account (owner, 10 Nov 2026); otherwise the booking's guest.
+      const isGroup = !!(await sql`SELECT 1 FROM orders WHERE id = ${orderId} AND (to_jsonb(orders)->>'group_booking_id') IS NOT NULL`).length;
+      try { all = isGroup ? await require('./_fee-credits').creditForGroupPayers(sql, orderId, 'host_cancelled_late')
+                          : await require('./_fee-credits').creditForWholeBooking(sql, cancelledIds, terms.pairExperience ? 'experience_cancelled' : 'host_cancelled_late'); }
       catch (err) { console.error('credit not created (needs follow-up):', orderId, err.message); }
-      await sendCancellationEmail(order, Object.assign({}, emailOpts, { allCredit: all.total, creditBack: all.back }));
+      // The organiser is told their own share; every other payer is told theirs.
+      const mine = isGroup ? (all.credits || []).filter(c => Number(c.guestId) === Number(order.guest_id)).reduce((t, c) => t + c.amount, 0) : all.total;
+      await sendCancellationEmail(order, Object.assign({}, emailOpts, { allCredit: mine, creditBack: all.back }));
+      if (isGroup) await require('./_group-bookings').tellMembersAfterCancel(sql, orderId, 'The host cancelled the group booking. Your own share is held as Aerva credit in your account — use it on another booking, or refund it to your own payment any time from My Bookings. Any deposit goes back to your payment.');
       return true;
     }
     let credits = [];
@@ -3321,7 +3329,7 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('host-listings (cancelBooking) error:', err);
       const status = err.isUserFacing ? err.status : 500;
-      return res.status(status).json({ error: err.isUserFacing ? err.message : 'Could not cancel this booking right now. Please try again, or contact hello@aerva.in.' });
+      return res.status(status).json({ error: err.isUserFacing ? err.message : 'Could not cancel this booking right now. Please try again, or raise a request in Aerva Support (Help → Raise a request).' });
     }
   }
 
@@ -3433,7 +3441,7 @@ module.exports = async (req, res) => {
           // name while it was switched off (see _listing-rules.js).
           if ((l.listing_type || 'stay') === 'stay') {
             const clash = await findNameClashInPincode(sql, { propertyName: l.property_name, pincode: l.pincode, propertyType: l.property_type, excludeListingId: l.id });
-            if (clash) return res.status(409).json({ error: nameClashMessage(l.property_name, String(l.pincode || '').trim()) + ' It stays paused — write to hello@aerva.in and we will help you rename it.' });
+            if (clash) return res.status(409).json({ error: nameClashMessage(l.property_name, String(l.pincode || '').trim()) + ' It stays paused — raise a request in Aerva Support (Help → Raise a request) and we will help you rename it.' });
           }
           await sql`UPDATE listings SET status = 'approved', deactivated_by = NULL, deactivated_at = NULL WHERE id = ${l.id}`;
         }
@@ -3465,7 +3473,7 @@ module.exports = async (req, res) => {
       await sql`UPDATE hosts SET hosting_status = 'active' WHERE id = ${g.host_id}`;
       await logAudit(sql, { action: 'hosting_reactivated', success: true, actorType: 'host', actorIdentifier: String(g.host_id), targetType: 'host', targetId: g.host_id, metadata: { listings: restored.map(r => r.id), keptOffForNameClash: keepOffIds } });
       return res.status(200).json({ success: true, hostingStatus: 'active', listingsRestored: restored.length,
-        warning: keepOff.length ? keepOff.map(l => nameClashMessage(l.property_name, String(l.pincode || '').trim())).join(' ') + ' That listing stays paused — write to hello@aerva.in and we will help you rename it.' : undefined });
+        warning: keepOff.length ? keepOff.map(l => nameClashMessage(l.property_name, String(l.pincode || '').trim())).join(' ') + ' That listing stays paused — raise a request in Aerva Support (Help → Raise a request) and we will help you rename it.' : undefined });
     } catch (err) {
       console.error('deactivation failed:', err);
       return res.status(500).json({ error: 'Could not do this right now. Please try again.' });
@@ -3601,7 +3609,7 @@ module.exports = async (req, res) => {
           const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
           await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: loaded.order.guest_email, subject: `Your cancellation request for ${loaded.order.suite_name}`,
-              html: `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your cancellation request was declined</h2><p>Your host has declined your request to cancel your stay at <strong>${esc(loaded.order.suite_name)}</strong> (${loaded.order.arrival} — ${loaded.order.departure}). Your booking stands.</p>${note ? `<p><strong>Host’s note:</strong> ${esc(note)}</p>` : ''}<p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Contact hello@aerva.in.</p></div>` }) });
+              html: `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your cancellation request was declined</h2><p>Your host has declined your request to cancel your stay at <strong>${esc(loaded.order.suite_name)}</strong> (${loaded.order.arrival} — ${loaded.order.departure}). Your booking stands.</p>${note ? `<p><strong>Host’s note:</strong> ${esc(note)}</p>` : ''}<p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ order: loaded.order.id }, 'Questions?')}</p></div>` }) });
         }
       } catch (err) { console.error('decline email failed:', err.message); }
       return res.status(200).json({ success: true, accepted: false });
@@ -3756,7 +3764,7 @@ module.exports = async (req, res) => {
           targetType: 'coupon', targetId: coupon.id, metadata: { paymentId: razorpay_payment_id, refunded } });
         return res.status(409).json({ verified: false, error: refunded
           ? 'This coupon was already paid for, so this payment has been refunded to you.'
-          : 'This coupon was already paid for. We will refund this second payment — write to hello@aerva.in if it has not arrived in 7 days.' });
+          : 'This coupon was already paid for. We will refund this second payment — raise a request in Aerva Support (Help → Raise a request) if it has not arrived in 7 days.' });
       }
       try { await sql`UPDATE coupons SET paid_by_guest_id = ${accountId} WHERE id = ${coupon.id}`; } catch (err) { /* column added by migration_coupon_release.sql */ }
       await logAudit(sql, { action: 'coupon_purchased', success: true, actorType: cohostActor ? 'cohost' : 'host', actorIdentifier: String(cohostActor ? accountId : guest.host_id), targetType: 'coupon', targetId: coupon.id,
@@ -3837,7 +3845,7 @@ module.exports = async (req, res) => {
       // (PANs entered before this was asked.) Once only; checked against the
       // PAN's 5th letter like a new one.
       if (cleanPanName && !(typeof panDocumentUrl === 'string' && panDocumentUrl) && !(Array.isArray(panFiles) && panFiles.length)) {
-        if (host.pan_name) return res.status(400).json({ error: 'The name on your PAN is already on file. Contact hello@aerva.in if it needs to change.' });
+        if (host.pan_name) return res.status(400).json({ error: 'The name on your PAN is already on file. If it needs to change, raise a request in Aerva Support (Help → Raise a request).' });
         if (!host.pan_number) return res.status(400).json({ error: 'Add your PAN first.' });
         if (host.bank_account_holder_name && !bankCheck.sameName(cleanPanName, host.bank_account_holder_name)) {
           return res.status(400).json({ error: `The name on the PAN must be the same as your payout name (${host.bank_account_holder_name}). Check the name, or change the payout details first.` });
@@ -3862,7 +3870,7 @@ module.exports = async (req, res) => {
         // PAN card image is erased; the number stays (encrypted) for TDS.
         // A rejected PAN is submitted again, with a new card photo.
         if (host.pan_status && host.pan_status !== 'not_submitted' && host.pan_status !== 'rejected') {
-          return res.status(400).json({ error: 'Your PAN has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
+          return res.status(400).json({ error: 'Your PAN has already been submitted and can\'t be changed. If you need to update it, raise a request in Aerva Support (Help → Raise a request).' });
         }
         const cleanPan = typeof panNumber === 'string' ? panNumber.trim().toUpperCase() : '';
         if (!isValidPan(cleanPan)) {
@@ -3879,7 +3887,7 @@ module.exports = async (req, res) => {
           return res.status(400).json({ error: `The name on the PAN must be the same as your payout name (${payoutNameNow}). Check the name, or change the payout details first.` });
         }
         if (await bankCheck.panInUseElsewhere(sql, cleanPan, { hostId: guest.host_id, guestId })) {
-          return res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, write to hello@aerva.in.' });
+          return res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, raise a request in Aerva Support (Help → Raise a request).' });
         }
         if (instantPan) {
           try {
@@ -3933,7 +3941,7 @@ module.exports = async (req, res) => {
           return res.status(400).json({ error: 'Verify your ID in Account Settings → Verification instead. It takes under a minute and your ID is not stored.' });
         }
         if (host.aadhaar_status && host.aadhaar_status !== 'not_submitted') {
-          return res.status(400).json({ error: 'Your Aadhaar has already been submitted and can\'t be changed. Contact hello@aerva.in if you need to update it.' });
+          return res.status(400).json({ error: 'Your Aadhaar has already been submitted and can\'t be changed. If you need to update it, raise a request in Aerva Support (Help → Raise a request).' });
         }
         await sql`
           UPDATE hosts SET aadhaar_document_url = ${aadhaarDocumentUrl}, aadhaar_status = 'pending_review', aadhaar_rejection_reason = NULL
@@ -4319,6 +4327,18 @@ module.exports = async (req, res) => {
         b.payout_day = d.dueOn || null;
         b.payout_held = !!d.held;
         Object.assign(b, payoutStatusFor(b, rows.get(Number(b.id))));
+      });
+      // A payout past its day and not yet sent: say why it is waiting, so a
+      // host never just sees a date that has gone by.
+      let bankOk = null;
+      try { const h = (await sql`SELECT bank_status FROM hosts WHERE id = ${guest.host_id}`)[0]; bankOk = !!h && h.bank_status === 'verified'; } catch (e) { bankOk = null; }
+      const todayIn = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
+      const autoOn = require('./_payouts').razorpayxReady();
+      bookings.forEach(b => {
+        const dueYmd = b.payout_due_on instanceof Date ? b.payout_due_on.toISOString().slice(0, 10) : String(b.payout_due_on || '').slice(0, 10);
+        if (b.payout_status !== 'due' || !/^\d{4}-\d{2}-\d{2}$/.test(dueYmd) || dueYmd >= todayIn) return;
+        b.payout_overdue = true;
+        b.payout_waiting = bankOk === false ? 'bank' : autoOn ? 'sending' : 'manual';
       });
     } catch (err) {
       console.error('payout status unavailable (non-fatal):', err.message);

@@ -27,6 +27,7 @@
 // The price is hidden everywhere the recipient sees the booking: the gift
 // pages, My Bookings ("Gifted to you") and the booking's Messages.
 
+const { helpLine } = require('./_help-link');
 const crypto = require('crypto');
 const { logAudit } = require('./_audit-log');
 const { redactContactInfo } = require('./_redact');
@@ -101,7 +102,7 @@ async function sendMail(to, subject, html) {
   } catch (err) { console.error('gift email failed:', err.message); return false; }
 }
 const frame = (title, body) => `<div style="font-family:sans-serif; max-width:520px;"><h2 style="font-family:Georgia,serif;">${title}</h2>${body}
-  <p style="font-size:12px; opacity:0.6; margin-top:24px;">Questions? Reply to this email or write to hello@aerva.in.</p></div>`;
+  <p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({}, 'Questions?')}</p></div>`;
 const giftLink = (token) => `https://aerva.in/index.html?gift=${encodeURIComponent(token)}`;
 const niceDate = (d) => { const s = dateStr(d); return s ? new Date(s + 'T00:00:00Z').toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' }) : ''; };
 

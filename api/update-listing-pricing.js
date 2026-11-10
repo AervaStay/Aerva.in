@@ -138,7 +138,7 @@ module.exports = async (req, res) => {
   const access = await resolveManageAccess(req);
   const listingId = access ? access.listingId : null;
   if (!listingId) {
-    return res.status(400).json({ error: 'This link is no longer valid. Contact hello@aerva.in if you need a new one.' });
+    return res.status(400).json({ error: 'This link is no longer valid. Open Manage from My Collection in your host dashboard to get a new one.' });
   }
 
   // ---- Calendar sync (Manage page → Calendar sync) ----
@@ -554,7 +554,7 @@ module.exports = async (req, res) => {
       if (before[0].status !== 'approved' && !isComplianceBlocked) {
         return res.status(403).json({
           error: before[0].status === 'rejected'
-            ? 'This listing was not approved and needs to be resubmitted before it can be managed here. Please contact hello@aerva.in if you have questions about the rejection.'
+            ? 'This listing was not approved and needs to be resubmitted before it can be managed here. If you have questions about the rejection, raise a request in Aerva Support (Help → Raise a request).'
             : 'Your listing is still awaiting review — you\'ll be able to manage your rooms and pricing here once it\'s approved.'
         });
       }

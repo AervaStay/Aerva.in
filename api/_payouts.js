@@ -93,7 +93,7 @@ function payoutEmailHtml(s) {
       ${s.note ? `<p style="margin:12px 0 0; font-size:13px; color:#6e675d;">${esc(s.note)}</p>` : ''}
     </div>
     <p style="text-align:center; margin:22px 0 0;"><a href="${s.link}" style="color:#8a6c39;">View this payout on Aerva</a></p>
-    <p style="font-size:12px; color:#888; text-align:center; margin-top:18px;">Questions about this payout? Contact hello@aerva.in.</p>
+    <p style="font-size:12px; color:#888; text-align:center; margin-top:18px;">${helpLine({ category: 'payout_tds' }, 'Questions about this payout?')}</p>
   </div>`;
 }
 
@@ -133,6 +133,7 @@ const PAYOUT_HOUR = 17;                                  // 5 PM, property's loc
 // nothing for an individual/HUF within ₹5 lakh in the financial year).
 // Applied to the host (on their part of the booking) and to co-hosts (on
 // their share), so no amount is taxed twice.
+const { helpLine } = require('./_help-link');
 const { tdsForPayout, tdsLabel, tdsNote } = require('./_tds');
 const razorpayxReady = () => !!(process.env.RAZORPAYX_ACCOUNT_NUMBER && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET);
 const round2 = (n) => Math.round(n * 100) / 100;
