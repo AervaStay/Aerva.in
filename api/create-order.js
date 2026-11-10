@@ -190,7 +190,7 @@ function priceLines(stayDetails, experienceDetails, { gst, fee, deposit, coupon 
   const rates = [...new Set([...stayDetails, ...experienceDetails].filter(x => Number(x.gst) > 0).map(x => x.gstRate))];
   if (gst) lines.push({ kind: 'gst', label: rates.length === 1 ? `GST (${rates[0]}%)` : 'GST', amount: gst });
   lines.push({ kind: 'fee', label: 'Guest service fee', amount: fee });
-  if (deposit) lines.push({ kind: 'deposit', label: 'Refundable deposit (refunded after check-out)', amount: deposit });
+  if (deposit) lines.push({ kind: 'deposit', label: 'Refundable deposit (held 7 days)', amount: deposit });
   if (coupon) lines.push({ kind: 'coupon', label: 'Coupon', amount: -coupon });
   if (feeCredit) lines.push({ kind: 'fee_credit', label: 'Aerva credit', amount: -feeCredit });
   return lines;
@@ -307,6 +307,10 @@ module.exports = async (req, res) => {
       if (!first || !last || /\d/.test(first + last) || !/^[\p{L}\p{M} .'’-]+$/u.test(first + ' ' + last)) {
         return res.status(400).json({ error: 'Please give your first and last name as on your government ID: letters, spaces, dots, apostrophes and hyphens only.', needs: ['name'] });
       }
+      // As at any checkout: a guest whose ID is verified pays in that name — saving
+      // another name to the account would undo the verification without their knowing.
+      try { await require('./_guest-verify').assertNameKeepsId(sql, gid, first, last); }
+      catch (err) { if (err.isUserFacing) return res.status(err.status).json({ error: err.message, needs: err.needs || [] }); throw err; }
       await saveGuestName(sql, gid, first, last);
       await savePhoneIfMissing(sql, gid, req.body.phone);
       try { await assertCanBook(sql, gid); }
@@ -314,7 +318,7 @@ module.exports = async (req, res) => {
       const g = await G.load(sql, { token: String(req.body.groupPay).slice(0, 64) });
       if (!g) return res.status(404).json({ error: 'This group booking link is not valid.' });
       const blocked = await require('./_support-actions').blockedListingIds(sql, gid);
-      if (blocked.includes(Number(g.listing_id))) return res.status(403).json({ error: 'This listing is not available to book from your account. Please contact Aerva Support if you think this is a mistake.' });
+      if (blocked.includes(Number(g.listing_id))) return res.status(403).json({ error: 'This listing is not available to book from your account. Please raise a request in the Resolution Center (Help → Raise a request) if you think this is a mistake.' });
       const own = await sql`SELECT 1 FROM listings l WHERE l.id = ${g.listing_id} AND (l.host_id = (SELECT host_id FROM guests WHERE id = ${gid})
                               OR EXISTS (SELECT 1 FROM cohosts c WHERE c.host_id = l.host_id AND c.cohost_guest_id = ${gid} AND c.status = 'active' AND l.id = ANY(c.listing_ids)))`.catch(() => []);
       if (own.length) return res.status(400).json({ error: 'Hosts and co-hosts can’t book listings they run.' });
@@ -451,6 +455,11 @@ module.exports = async (req, res) => {
       if (/\d/.test(guestFirst + guestLast) || !/^[\p{L}\p{M} .'’-]+$/u.test(guestFirst + ' ' + guestLast)) {
         return res.status(400).json({ error: 'Please write the guest’s first and last name as on their government ID: letters, spaces, dots, apostrophes and hyphens only.', needs: ['name'] });
       }
+      // A guest whose ID is verified books in that name (_guest-verify.js,
+      // only while verification is required): saving another name to the
+      // account would undo the verification without their knowing.
+      try { await require('./_guest-verify').assertNameKeepsId(sql, guestId, guestFirst, guestLast); }
+      catch (err) { if (err.isUserFacing) return res.status(err.status).json({ error: err.message, needs: err.needs || [] }); throw err; }
       await saveGuestName(sql, guestId, guestFirst, guestLast);
 
       // "This stay is for someone else" (_gifts.js) and "Split the payment
@@ -483,6 +492,17 @@ module.exports = async (req, res) => {
         if (err.isUserFacing) return res.status(err.status).json({ error: err.message, needs: err.needs || [] });
         throw err;
       }
+      // Gifts and groups (_guest-verify.js, only while verification is
+      // required): the gift's buyer and the group's organiser must have a
+      // verified profile before paying. Everyone else may pay first — the
+      // payment is then held until their details are verified.
+      try { await require('./_guest-verify').assertBeforePayment(sql, guestId, { gift: !!req.body.gift, group: !!req.body.group }); }
+      catch (err) { if (err.isUserFacing) return res.status(err.status).json({ error: err.message, needs: err.needs || [] }); throw err; }
+      // Already paid for these dates and waiting for their details to be
+      // verified: no second payment for the same dates.
+      if (await require('./_guest-verify').ownHoldFor(sql, guestId, safeStays.map(x => ({ listingId: x && x.listingId, roomId: x && x.roomId, arrival: String((x && x.arrival) || ''), departure: String((x && x.departure) || '') })))) {
+        return res.status(409).json({ error: 'You have already paid for these dates. Complete your details in My Bookings to confirm the booking.', waitingForDetails: true });
+      }
     }
 
     // A guest Aerva has kept away from a listing cannot book it (Admin →
@@ -490,7 +510,7 @@ module.exports = async (req, res) => {
     if (guestId && !quoteOnly) {
       const ids = [...new Set([].concat(safeStays.map(x => Number(x && x.listingId))).concat(safeExperiences.map(x => Number(x && x.listingId))))].filter(Boolean);
       const blocked = await require('./_support-actions').blockedListingIds(sql, guestId);
-      if (ids.some(id => blocked.includes(id))) return res.status(403).json({ error: 'This listing is not available to book from your account. Please contact Aerva Support if you think this is a mistake.' });
+      if (ids.some(id => blocked.includes(id))) return res.status(403).json({ error: 'This listing is not available to book from your account. Please raise a request in the Resolution Center (Help → Raise a request) if you think this is a mistake.' });
     }
 
     // Hosts and co-hosts cannot book listings they run: a self-booking pays
@@ -558,7 +578,7 @@ module.exports = async (req, res) => {
       const e = exRows[0];
       if (!e || e.experience_type !== 'with_stay') continue;
       if (!e.hosting_listing_id) {
-        return res.status(400).json({ error: `${e.property_name} includes a stay, but no home is linked to it yet. Please raise a request in Aerva Support (Help → Raise a request).` });
+        return res.status(400).json({ error: `${e.property_name} includes a stay, but no home is linked to it yet. Please raise a request in the Resolution Center (Help → Raise a request).` });
       }
       const hostRows = await sql`SELECT id, status FROM listings WHERE id = ${e.hosting_listing_id}`;
       if (!hostRows[0] || hostRows[0].status !== 'approved') {
@@ -640,7 +660,7 @@ module.exports = async (req, res) => {
       // Priced by the shared rules in _pricing.js: listing, room, capacity,
       // availability, discount, amenities, pets, commission, GST, deposit.
       const priced = await priceStay(sql, s, i);
-      if (priced.error) return res.status(400).json({ error: plainError(priced.error, requestedItems) });
+      if (priced.error) return res.status(400).json({ error: plainError(priced.error, requestedItems), reason: priced.reason || undefined });
       const d = priced.detail;
       grandSubtotal += d.subtotal;
       grandGst += d.gst;

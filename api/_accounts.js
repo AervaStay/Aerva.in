@@ -130,6 +130,29 @@ async function deletionBlockers(sql, guestId) {
   const owed = await optional(sql`SELECT count(*)::int AS n FROM host_penalties WHERE status = 'owed'
                                   AND ((host_id = ${me.host_id || 0} AND payer_guest_id IS NULL) OR payer_guest_id = ${guestId})`);
   if (owed) blockers.push('You owe cancellation coupons.');
+  // The newer ways of having something open (each skipped before its database update):
+  // a gifted stay this account accepted, a group booking it organises or paid into,
+  // a payment waiting for its details to be verified, and Aerva credit not yet used or refunded.
+  const giftStays = await optional(sql`
+    SELECT count(DISTINCT g.id)::int AS n FROM booking_gifts g JOIN orders a ON a.id = g.order_id
+    JOIN orders o ON o.razorpay_order_id = a.razorpay_order_id JOIN listings l ON l.id = o.listing_id
+    WHERE g.status = 'accepted' AND g.accepted_guest_id = ${guestId} AND o.status = 'paid'
+      AND o.departure >= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date`);
+  if (giftStays) blockers.push(`You have ${giftStays} upcoming or current stay${giftStays === 1 ? '' : 's'} gifted to you.`);
+  const liveGroups = await optional(sql`
+    SELECT count(*)::int AS n FROM group_bookings g
+    WHERE g.status IN ('starting', 'open', 'awaiting_confirm', 'awaiting_gap', 'confirming')
+      AND (g.organiser_guest_id = ${guestId} OR EXISTS (SELECT 1 FROM group_claims c WHERE c.group_id = g.id AND c.guest_id = ${guestId} AND c.status IN ('open', 'paid')))`);
+  if (liveGroups) blockers.push(`You are part of ${liveGroups} group booking${liveGroups === 1 ? '' : 's'} still collecting payments.`);
+  const groupStays = await optional(sql`
+    SELECT count(DISTINCT o.id)::int AS n FROM group_claims c JOIN orders o ON o.group_booking_id = c.group_id JOIN listings l ON l.id = o.listing_id
+    WHERE c.guest_id = ${guestId} AND c.status = 'paid' AND o.guest_id <> ${guestId} AND o.status = 'paid'
+      AND o.departure >= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date`);
+  if (groupStays) blockers.push(`You have ${groupStays} upcoming or current group stay${groupStays === 1 ? '' : 's'} you paid a place in.`);
+  const heldPayments = await optional(sql`SELECT count(*)::int AS n FROM verification_holds WHERE guest_id = ${guestId} AND status IN ('waiting', 'confirming', 'refunding', 'attention')`);
+  if (heldPayments) blockers.push('You have a payment waiting for your details to be verified.');
+  const credit = await optional(sql`SELECT COALESCE(sum(remaining), 0)::int AS n FROM fee_credits WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0 AND cash_refundable IS NOT FALSE`);
+  if (credit) blockers.push(`You have ₹${Number(credit).toLocaleString('en-IN')} of Aerva credit. Use it, or have it refunded to your payment method from My Bookings, first.`);
   return blockers;
 }
 
@@ -164,6 +187,8 @@ async function deleteAccount(sql, guestId) {
     const idUrl = idRow && idRow.id_document_url ? require('./_secure-fields').decryptField(idRow.id_document_url) : null;
     if (idUrl) urls.push(idUrl);
   } catch (e) { /* before migration_trust_rules.sql */ }
+  // An ID photo sent to Aerva to check and still in storage (_guest-verify.js).
+  try { (await sql`SELECT document_url FROM guest_id_reviews WHERE guest_id = ${guestId} AND document_url IS NOT NULL`).forEach(r => urls.push(r.document_url)); } catch (e) { /* before 2026-11-10-09 */ }
   if (urls.length && process.env.BLOB_READ_WRITE_TOKEN) {
     try { await require('@vercel/blob').del(urls); } catch (e) { console.error('photo deletion failed:', e.message); }
   }
@@ -224,6 +249,20 @@ async function deleteAccount(sql, guestId) {
               profile_photo_url = NULL, profile_work = NULL, profile_hobbies = NULL, profile_about = NULL, email_verified = false
             WHERE id = ${guestId}`;
   await tryRun('ID proof', sql`UPDATE guests SET id_document_url = NULL, id_document_type = NULL, id_status = NULL, id_rejection_reason = NULL WHERE id = ${guestId}`);
+  // The name as on their ID, and the verification kept with it (ID type, last 4
+  // characters, the confirmed phone): the policy says name and verification are erased.
+  await tryRun('first and last name', sql`UPDATE guests SET first_name = NULL, last_name = NULL WHERE id = ${guestId}`);
+  await tryRun('guest verification', sql`UPDATE guests SET guest_id_type = NULL, guest_id_last4 = NULL, guest_id_name_match = NULL, guest_id_verified_at = NULL, guest_id_method = NULL,
+    phone_verified_at = NULL, phone_verified_number = NULL WHERE id = ${guestId}`);
+  await tryRun('ID sent for review', sql`UPDATE guest_id_reviews SET document_url = NULL, erased_at = COALESCE(erased_at, now()), status = CASE WHEN status = 'pending' THEN 'withdrawn' ELSE status END WHERE guest_id = ${guestId}`);
+  // Names and contact details kept beside bookings, gifts, group payments, credits and held payments.
+  await tryRun('names on bookings', sql`UPDATE orders SET guest_first_name = NULL, guest_last_name = NULL WHERE guest_id = ${guestId}`);
+  await tryRun('gifts accepted', sql`UPDATE booking_gifts SET accepted_first_name = NULL, accepted_last_name = NULL, accepted_phone = NULL WHERE accepted_guest_id = ${guestId}`);
+  await tryRun('gifts sent', sql`UPDATE booking_gifts SET buyer_first_name = NULL, message = NULL WHERE buyer_guest_id = ${guestId}`);
+  await tryRun('group payments', sql`UPDATE group_claims SET first_name = NULL, last_name = NULL, phone = NULL, email = ${placeholderEmail} WHERE guest_id = ${guestId}`);
+  await tryRun('groups organised', sql`UPDATE group_bookings SET organiser_first_name = NULL, organiser_last_name = NULL, organiser_email = ${placeholderEmail} WHERE organiser_guest_id = ${guestId}`);
+  await tryRun('credit emails', sql`UPDATE fee_credits SET guest_email = ${placeholderEmail} WHERE guest_id = ${guestId}`);
+  await tryRun('held payments', sql`UPDATE verification_holds SET guest_email = ${placeholderEmail} WHERE guest_id = ${guestId}`);
   await tryRun('stay dispute text', sql`UPDATE stay_disputes SET details = NULL, evidence = '[]'::jsonb WHERE guest_id = ${guestId}`);
   await tryRun('support requests', require('./_support').eraseForAccount(sql, guestId));
   await tryRun('mark deleted', sql`UPDATE guests SET deleted_at = now() WHERE id = ${guestId}`);

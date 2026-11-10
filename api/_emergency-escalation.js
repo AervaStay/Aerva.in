@@ -61,7 +61,7 @@ async function load(sql, requestId) {
 }
 function isEmergency(r) { return !!require('./_cancellations').RETIRED_REASONS[r.reason_code]; }   // an old request (see above)
 function reasonLabel(r) { return require('./_cancellations').REASON_LABELS[r.reason_code] || r.reason_code; }
-function stayLine(r) { return `${r.suite_name} (${dateStr(r.arrival)} → ${dateStr(r.departure)}, booking ${r.code})`; }
+function stayLine(r) { return `${r.suite_name} (${require('./_booking-rules').niceDay(r.arrival)} → ${require('./_booking-rules').niceDay(r.departure)}, booking ${r.code})`; }
 
 // May Aerva decide now? After every reminder went unanswered, or when
 // check-in is very close.

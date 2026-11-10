@@ -667,17 +667,19 @@
     var hostCancelCard = !hcx ? '' : hcx.status === 'pending'
       ? '<div class="hc-feedback" id="hcHostCancel"><h2>Confirm the cancellation of ' + esc(hcx.booking || ('booking #' + hcx.orderId)) + '</h2>'
         + '<ul class="hc-muted" style="text-align:left; line-height:1.6;">'
-        + '<li>Everything the guest paid — <strong>' + esc(rupees(hcx.refund)) + '</strong> (the booking, GST and Aerva\u2019s service fee) — is held for them as Aerva credit, which they can use or have refunded at any time. Any deposit is refunded to them.</li>'
+        + '<li>Everything the guest paid — <strong>' + esc(rupees(hcx.refund)) + '</strong> (the booking, GST, Aerva\u2019s service fee and any deposit) — goes back to them: any deposit to their payment method, the rest held for them as Aerva credit, which they can use or have refunded at any time.</li>'
         + '<li>It counts as one of your cancellations.</li>'
         + (hcx.couponAmount > 0
-          ? '<li>Check-in is within 48 hours, so the guest also gets an Aerva coupon of <strong>' + esc(rupees(hcx.couponAmount)) + '</strong>. Aerva pays it for you, and <strong>it is deducted from your next payout</strong>.</li>'
+          ? '<li>Check-in is within 48 hours, so you must first pay for an Aerva coupon worth <strong>' + esc(rupees(hcx.couponAmount)) + '</strong> (10% of the booking) for the guest. '
+            + (hcx.couponPaid ? 'You have paid it; it is sent to the guest automatically once the booking is cancelled.' : 'You pay it here when you confirm; it is sent to the guest automatically once the booking is cancelled.')
+            + ' Aerva does not pay it or deduct it later, and what you pay is not refunded.</li>'
           : '<li>No coupon is needed: check-in is more than 48 hours away.</li>')
-        + '</ul><p class="hc-muted">Nothing is cancelled until you confirm. This cannot be undone.</p>'
-        + '<div class="hc-actions"><button type="button" class="btn solid" id="hcHostCancelYes">Confirm the cancellation</button><button type="button" class="btn" id="hcHostCancelNo">Do not cancel</button></div>'
+        + '</ul><p class="hc-muted">Nothing is cancelled until you confirm' + (hcx.needsPayment ? ' and your payment goes through' : '') + '. This cannot be undone.</p>'
+        + '<div class="hc-actions"><button type="button" class="btn solid" id="hcHostCancelYes">' + (hcx.needsPayment ? 'Pay ' + esc(rupees(hcx.couponAmount)) + ' and confirm' : 'Confirm the cancellation') + '</button><button type="button" class="btn" id="hcHostCancelNo">Do not cancel</button></div>'
         + '<p class="hc-error" id="hcHostCancelErr" role="alert" hidden></p></div>'
       : '<p class="hc-status-note">' + esc(hcx.status === 'confirmed'
-          ? 'You confirmed the cancellation. Everything the guest paid is held for them as Aerva credit.' + (hcx.couponAmount > 0 ? ' The guest\u2019s ' + rupees(hcx.couponAmount) + ' coupon is ' + (hcx.couponIssued ? 'issued' : 'being issued') + ' by Aerva and deducted from your next payout.' : '')
-          : hcx.status === 'declined' ? 'You chose not to cancel. The booking stays as it is.' : 'This cancellation was not completed. Aerva support will follow up.') + '</p>';
+          ? 'You confirmed the cancellation. Everything the guest paid is held for them as Aerva credit.' + (hcx.couponAmount > 0 ? ' The ' + rupees(hcx.couponAmount) + ' coupon you paid for is sent to the guest automatically.' : '')
+          : hcx.status === 'declined' ? 'You chose not to cancel. The booking stays as it is.' : 'This cancellation was not completed. Aerva Support will follow up.') + '</p>';
     var html = head
       + '<div class="hc-req-head"><div><div class="privacy-eyebrow">' + esc(r.ref) + ' · ' + esc(r.categoryLabel) + '</div>'
       + '<h1 class="policies-title hc-req-title">' + esc(r.subject) + '</h1>'
@@ -697,10 +699,30 @@
       var b = document.getElementById(p[0]); if(!b) return;
       b.addEventListener('click', async function(){
         var err = document.getElementById('hcHostCancelErr'); err.hidden = true;
-        if(p[1] && !confirm('Cancel this booking now? Everything the guest paid is held for them as Aerva credit.' + (hcx.couponAmount > 0 ? ' ' + rupees(hcx.couponAmount) + ' is deducted from your next payout for their coupon.' : ''))) return;
-        b.disabled = true;
-        try{ drawRequest((await api('POST', '', { mode: 'hostCancelAnswer', ref: r.ref, accept: p[1] })).request); }
-        catch(e){ err.textContent = e.message; err.hidden = false; b.disabled = false; }
+        var both = [document.getElementById('hcHostCancelYes'), document.getElementById('hcHostCancelNo')];
+        var busy = function(on){ both.forEach(function(x){ if(x) x.disabled = on; }); };
+        var fail = function(m){ err.textContent = m; err.hidden = false; busy(false); };
+        var answer = async function(payment){
+          try{ drawRequest((await api('POST', '', { mode: 'hostCancelAnswer', ref: r.ref, accept: p[1], payment: payment || undefined })).request); }
+          catch(e){ fail(e.message); }
+        };
+        if(!p[1]) { busy(true); return answer(); }
+        if(!confirm('Cancel this booking now? Everything the guest paid is held for them as Aerva credit.' + (hcx.couponAmount > 0 ? (hcx.needsPayment ? ' You pay ' : ' You have paid ') + rupees(hcx.couponAmount) + ' for the guest’s coupon; it is not refunded.' : ''))) return;
+        busy(true);
+        if(!hcx.needsPayment) return answer();
+        // Within 48 hours of check-in: the host pays the guest's coupon first
+        // (Razorpay). The booking is cancelled only once the payment is verified.
+        var buy;
+        try{ buy = await api('POST', '', { mode: 'hostCancelPay', ref: r.ref }); }
+        catch(e){ return fail(e.message); }
+        if(buy.alreadyPaid) return answer();
+        if(typeof Razorpay === 'undefined') return fail('Payment is not available right now. Please try again in a moment.');
+        new Razorpay({
+          key: buy.keyId, amount: buy.amount * 100, currency: 'INR', order_id: buy.razorpayOrderId,
+          name: 'Aerva', description: 'Guest cancellation coupon', theme: { color: '#a9884f' },
+          handler: function(resp){ answer({ couponId: buy.couponId, razorpay_order_id: resp.razorpay_order_id, razorpay_payment_id: resp.razorpay_payment_id, razorpay_signature: resp.razorpay_signature }); },
+          modal: { ondismiss: function(){ busy(false); } }
+        }).open();
       });
     });
     if(!r.canReply) return;

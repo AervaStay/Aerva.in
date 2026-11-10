@@ -128,7 +128,7 @@ function tdsNote(row) {
   if (row.tds_reason === 'below_threshold') return `No TDS: your earnings through Aerva this financial year (${fyLabel(Number(row.tds_fy) || financialYear(row.created_at))}) are within ₹5,00,000.`;
   if (row.tds_reason === 'threshold_crossed') return 'Your earnings through Aerva this financial year went past ₹5,00,000, so TDS now applies to the whole year, as the law requires.';
   if (row.tds_reason === 'no_pan') return 'Add your PAN to have TDS cut from 5% to 0.1%.';
-  if (row.tds_reason === 'inoperative_pan') return 'Your PAN is inoperative because it is not linked to your Aadhaar. Link them at incometax.gov.in, then raise a request in Aerva Support (Help → Raise a request) to have TDS cut to 0.1%.';
+  if (row.tds_reason === 'inoperative_pan') return 'Your PAN is inoperative because it is not linked to your Aadhaar. Link them at incometax.gov.in, then raise a request in the Resolution Center (Help → Raise a request) to have TDS cut to 0.1%.';
   return null;
 }
 

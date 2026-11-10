@@ -382,7 +382,7 @@ function payoutItems(row, { who = 'host' } = {}) {
     ? new Date(new Date(row.bank_changed_at).getTime() + HOLD_HOURS_AFTER_CHANGE * 3600e3) : null;
   const add = (state, kind, title, body) => items.push({ id: `payout-details:${who}:${state}:${row.bank_checked_at || row.bank_changed_at || ''}`, kind, title, body, href });
   if (who === 'host') {
-    if (row.pan_status === 'rejected') add('pan-rejected', 'action', 'Action needed: your PAN was not approved', row.pan_rejection_reason || 'Please raise a request in Aerva Support (Help → Raise a request) to submit it again.');
+    if (row.pan_status === 'rejected') add('pan-rejected', 'action', 'Action needed: your PAN was not approved', row.pan_rejection_reason || 'Please raise a request in the Resolution Center (Help → Raise a request) to submit it again.');
     else if (!row.pan_status || row.pan_status === 'not_submitted') add('pan-missing', 'action', 'Add your PAN to pay less TDS', 'Payouts carry 5% TDS without a PAN, 0.1% with one. Add it in your payout details.');
     else if (row.pan_number && !row.pan_name) add('pan-name', 'action', 'Action needed: add the name on your PAN', 'Add it under Verification. It must be the same as your payout name.');
     if (row.bank_status === 'rejected') add('bank-rejected', 'action', 'Action needed: update your bank account', (row.bank_rejection_reason || 'Your bank account could not be verified.') + ' Payouts are on hold until a bank account is verified.');

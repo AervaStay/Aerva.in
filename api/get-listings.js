@@ -167,7 +167,9 @@ async function isAdminAuthorized(req) {
   const header = String(req.headers['authorization'] || '');
   if (header.startsWith('Bearer ')) {
     const payload = verifyToken(header.slice(7));
-    if (payload && payload.action === 'admin-session' && await adminSessionActive(sql, payload)) return true;
+    // Batch jobs are for admins only: a reviewer or customer representative
+    // reaches only Support, Lookup and Approvals (_support-actions.js).
+    if (payload && payload.action === 'admin-session' && await adminSessionActive(sql, payload)) return (await require('./_support-actions').roleOf(sql, payload, false)) === 'admin';
   }
   if (!req.headers['x-admin-secret']) return false;
   return (await checkAdminSecret(sql, req, 'get-listings')).ok;
@@ -609,6 +611,12 @@ const JOBS = [
   // and 1 day before check-in, the buyer told too); tell recipients of a cancellation.
   { name: 'gift_reminders', label: 'Gift bookings: remind recipients to accept (3 days and 1 day before check-in); cancellation notices', everyMinutes: 60, lockMinutes: 10,
     run: (c) => require('./_gifts').runReminders(c.sql, { deadlineMs: Math.min(4000, c.remainingMs) }) },
+  // Payments held until the guest's details are verified (_guest-verify.js):
+  // reminders at half-time and 1 hour before the deadline; an ID with Aerva
+  // at the deadline waits for the answer (to 10 AM on the check-in day);
+  // past the deadline → full refund to source, dates, coupon and credit back.
+  { name: 'guest_verification', label: 'Bookings waiting for the guest’s details: reminders; deadline passed → refund in full and release the dates; IDs with Aerva keep the booking waiting until decided', everyMinutes: 5,
+    run: (c) => require('./_guest-verify').runJob(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
   { name: 'coupon_release', label: 'Release cancellation coupons (15 minutes after a cancellation)', everyMinutes: 5,
     run: (c) => releaseDueCoupons(c.sql, { force: true }) },
   // Aerva's check-in promise (_checkin-promise.js): at check-in, ask guests

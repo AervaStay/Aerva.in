@@ -20,6 +20,10 @@
 //             'aadhaar-verification' / 'dispute-evidence' / 'support-evidence'
 //               — PDF allowed too (e-Aadhaar downloads, stay-dispute and
 //               Resolution Center evidence are often PDFs). Kept to those flows only.
+//             'guest-id' — a guest's photo ID sent for Aerva to check by hand
+//               (_guest-verify.js, "Send it to Aerva to check instead"): PDF
+//               allowed, private like a host's Aadhaar — never scanned as a
+//               photo (_photo-guard.js), and deleted once Aerva decides.
 // The old plain-string clientPayload ('aadhaar-verification') carried no
 // session and is refused.
 //
@@ -36,7 +40,7 @@ const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const photoGuard = require('./_photo-guard');
 
 const UPLOADS_PER_DAY = 200;
-const PDF_PURPOSES = ['aadhaar-verification', 'dispute-evidence', 'support-evidence', 'deposit-evidence', 'cancellation-proof'];
+const PDF_PURPOSES = ['aadhaar-verification', 'dispute-evidence', 'support-evidence', 'deposit-evidence', 'cancellation-proof', 'guest-id'];
 // A host's proof of damage to a property (a deposit concern): videos too.
 const VIDEO_PURPOSES = ['deposit-evidence'];
 const SESSION_ACTIONS = ['guest-session', 'manage-pricing', 'manage-cohost', 'admin-session'];
@@ -76,6 +80,11 @@ async function uploaderFrom(sql, clientPayload) {
     // The manage-listing link names a listing; it must still exist.
     const rows = await sql`SELECT id FROM listings WHERE id = ${Number(payload.listingId) || 0}`;
     if (!rows.length) throw new Error('This link is no longer valid.');
+    // …and its host must not be suspended or deleted (as update-listing-pricing.js checks).
+    try {
+      const a = (await sql`SELECT to_jsonb(g)->>'account_status' AS s, to_jsonb(g)->>'deleted_at' AS d FROM listings l JOIN guests g ON g.host_id = l.host_id WHERE l.id = ${Number(payload.listingId) || 0} ORDER BY g.id LIMIT 1`)[0];
+      if (a && (a.d || a.s === 'suspended')) throw Object.assign(new Error('This link is no longer valid.'), { refuse: true });
+    } catch (err) { if (err && err.refuse) throw err; }
   }
   // A co-host's Manage link: valid only while they are still an active
   // co-host of that listing (same check update-listing-pricing.js makes).
@@ -89,6 +98,8 @@ async function uploaderFrom(sql, clientPayload) {
   if (payload.action === 'admin-session') {
     const rows = await sql`SELECT id FROM admins WHERE id = ${Number(payload.listingId) || 0}`;
     if (!rows.length) throw new Error('Please sign in again to upload files.');
+    // "Sign out everywhere" and a changed role end an admin session (_admin-auth.js): for uploads too.
+    if (!(await require('./_admin-auth').adminSessionActive(sql, payload))) throw new Error('Please sign in again to upload files.');
   }
   const kind = { 'guest-session': 'guest', 'manage-pricing': 'listing', 'manage-cohost': 'listing', 'admin-session': 'admin' }[payload.action];
   // audit_log.actor_type allows admin | host | guest | system only.

@@ -738,10 +738,11 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
-<script src="aerva-cohost.js?v=2026-11-11b"></script>
+<script src="aerva-cohost.js?v=2026-11-11d"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
-<script src="aerva-policies.js?v=2026-11-11c"></script>
+<script src="aerva-policies.js?v=2026-11-11f"></script>
+<script src="aerva-guest-verify.js?v=2026-11-11d"></script>
 </head>
 <body>
 
@@ -853,7 +854,7 @@
       <ul class="feedback-next">
         <li>A person at Aerva reads every message.</li>
         <li>We come back to you on the email and number you gave us.</li>
-        <li>Urgent? <a href="index.html?view=help&amp;new=1">Raise a request in Aerva Support</a> and mention your reference.</li>
+        <li>Urgent? <a href="index.html?view=help&amp;new=1">Raise a request in the Resolution Center</a> and mention your reference.</li>
       </ul>
       <p class="feedback-ref" id="feedbackRef"></p>
       <button type="button" class="settings-save-btn" id="feedbackAgainBtn">Send another</button>
@@ -1202,7 +1203,7 @@
             </div>
           </div>
           <div class="settings-edit-actions">
-            <button type="button" class="settings-save-btn" id="phoneVerifySendBtn">Send code on WhatsApp</button>
+            <button type="button" class="settings-save-btn" id="phoneVerifySendBtn">Send code</button>
             <button type="button" class="settings-cancel-btn" data-cancel-target="profilePhoneVerifyForm">Cancel</button>
           </div>
           <div class="field" id="phoneVerifyOtpRow" style="display:none; margin-top:12px;">
@@ -2254,7 +2255,7 @@
         </div>
         ${v.panStatus === 'rejected' && v.panRejectionReason ? `<p class="verify-rejection-note">${escH(v.panRejectionReason)}</p>` : ''}
         ${v.panSubmitted
-          ? `<p class="verify-locked-note">${v.panNumberMasked ? 'PAN on file: ' + escH(v.panNumberMasked) + '. ' : ''}${v.panName ? 'Name on PAN: ' + escH(v.panName) + '. ' : ''}Submitted — this can't be changed here. If it needs to be updated, <a href="index.html?view=help&amp;new=1&amp;category=verification">raise a request in Aerva Support</a>.</p>
+          ? `<p class="verify-locked-note">${v.panNumberMasked ? 'PAN on file: ' + escH(v.panNumberMasked) + '. ' : ''}${v.panName ? 'Name on PAN: ' + escH(v.panName) + '. ' : ''}Submitted — this can't be changed here. If it needs to be updated, <a href="index.html?view=help&amp;new=1&amp;category=verification">raise a request in the Resolution Center</a>.</p>
              ${v.panName ? '' : `
                <p class="verify-locked-note" style="color:#8a6c39;">Add your name exactly as it is printed on your PAN card. Your bank account is checked against it before payouts.</p>
                <input type="text" id="panNameLaterInput" placeholder="Name as printed on your PAN card" autocomplete="name">
@@ -2827,8 +2828,8 @@
       if(!res.ok){ phoneVerifyMsg(data.error || 'Could not send a code. Please try again.', true); }
       else {
         document.getElementById('phoneVerifyOtpRow').style.display = 'block';
-        // The code goes on WhatsApp (api/_phone-otp.js); it is never shown here.
-        phoneVerifyMsg(`We sent a code on WhatsApp to ${data.sentTo || 'this number'}. It is good for ${data.expiresInMinutes || 10} minutes.`);
+        // otpForTesting exists only while no SMS provider is connected (see host-listings.js).
+        phoneVerifyMsg(data.otpForTesting ? `No SMS provider connected yet — your test code is ${data.otpForTesting}` : 'A code has been sent to this number.');
         document.getElementById('phoneVerifyOtp').focus();
       }
     }catch(e){ phoneVerifyMsg('Could not reach the server. Please try again.', true); }
@@ -2841,12 +2842,12 @@
     try{
       const post = (body) => fetch(API_BASE + '/api/host-listings', { method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken }, body: JSON.stringify(body) });
-      // The code is checked against the number it went to; the server then
-      // saves that number as the host's phone, verified (host-listings.js).
-      const res = await post({ verifyHostPhoneOtp: { otp, countryCode: document.getElementById('phoneVerifyCountry').value,
-        localNumber: document.getElementById('phoneVerifyNumber').value.trim() } });
+      const res = await post({ verifyHostPhoneOtp: { otp } });
       const data = await res.json().catch(() => ({}));
       if(!res.ok){ phoneVerifyMsg(data.error || 'Could not verify this code.', true); this.disabled = false; return; }
+      const c = PHONE_COUNTRIES.find(x => x[0] === document.getElementById('phoneVerifyCountry').value) || PHONE_COUNTRIES[0];
+      const digits = document.getElementById('phoneVerifyNumber').value.replace(/[\s\-().]/g, '').replace(/^0+/, '');
+      await post({ hostPhone: c[1] + digits }).catch(() => {});
       document.getElementById('phoneVerifyOtpRow').style.display = 'none';
       document.getElementById('phoneVerifyOtp').value = '';
       phoneVerifyMsg('');
@@ -2965,6 +2966,36 @@
     if(panel.style.display === 'block' && !e.target.closest('#profileTriggerCluster')) panel.style.display = 'none';
   });
 
+  // Payments waiting for the guest's details to be verified (api/_guest-verify.js):
+  // the dates are held and blocked, but it is not a booking yet — no guest
+  // name or contact details, no code, no payout. And holds that went in the
+  // last 3 days, with a short notice. Above the listings.
+  function renderWaitingForDetails(w){
+    const wrap = document.querySelector('.wrap');
+    let box = document.getElementById('waitingForDetails');
+    const waiting = (w && w.waiting) || [], released = (w && w.released) || [];
+    if(!waiting.length && !released.length){ if(box) box.remove(); return; }
+    if(!wrap) return;
+    const esc = (t) => String(t == null ? '' : t)
+      .replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;')
+      .replace(/"/g,'&quot;').replace(/'/g,'&#39;');
+    const day = (d) => { try { return new Date(String(d).slice(0, 10) + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); } catch (e) { return String(d || ''); } };
+    const when = (x) => x.departure && x.departure !== x.arrival ? day(x.arrival) + ' – ' + day(x.departure) : day(x.arrival);
+    const facts = (x) => [x.nights ? x.nights + ' night' + (Number(x.nights) === 1 ? '' : 's') : '', x.guests ? x.guests + ' guest' + (Number(x.guests) === 1 ? '' : 's') : ''].filter(Boolean).join(' · ');
+    if(!box){
+      box = document.createElement('div'); box.id = 'waitingForDetails';
+      const anchor = document.getElementById('complianceNotice');
+      if(anchor && anchor.parentNode) anchor.parentNode.insertBefore(box, anchor); else wrap.appendChild(box);
+    }
+    box.innerHTML = waiting.map(x => '<div class="notice-card" style="margin:0 0 12px; padding:14px 16px;">'
+        + '<strong>' + esc(x.label || 'Waiting for the guest’s details') + '</strong> · ' + esc(x.name) + '<br>'
+        + '<span style="font-size:14px;">' + esc(when(x)) + (facts(x) ? ' · ' + esc(facts(x)) : '') + ' · dates blocked</span>'
+        + '<p style="font-size:13.5px; color:#6e675d; margin:6px 0 0; line-height:1.5;">' + esc(x.note || '') + (x.untilText ? ' The guest has until ' + esc(x.untilText) + '.' : '') + '</p></div>').join('')
+      + released.map(x => '<div class="notice-card" style="margin:0 0 12px; padding:14px 16px; opacity:0.9;">'
+        + '<strong>Hold released</strong> · ' + esc(x.name) + '<br><span style="font-size:14px;">' + esc(when(x)) + '</span>'
+        + '<p style="font-size:13.5px; color:#6e675d; margin:6px 0 0; line-height:1.5;">' + esc(x.note || '') + '</p></div>').join('');
+  }
+
   function renderComplianceNotices(notices){
     const box = document.getElementById('complianceNotice');
     if(!box) return;
@@ -3071,6 +3102,7 @@
       loadHostReviews(data.listings || []);
       allHostBookings = data.bookings || [];
       renderVerification(data.verification);
+      renderWaitingForDetails(data.waitingForDetails);
 
       // Default to showing the first live item's sidebar right away —
       // a stay first if there is one (full toolset), otherwise the
@@ -3283,7 +3315,7 @@
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Guest paid</div>
-          <div class="settings-row-value">${fmt(Number(booking.subtotal) + Number(booking.gst))}</div>
+          <div class="settings-row-value">${fmt(Number(booking.subtotal) + Number(booking.gst) + (Number(booking.free_cancel_fee) || 0))}</div>
         </div>
       </div>` : ''}
       ${booking.payout_amount !== undefined ? `
@@ -3315,7 +3347,7 @@
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Your Payout</div>
-          <div class="settings-row-value payout-value">${fmt(booking.payout_amount)}</div>
+          <div class="settings-row-value payout-value">${fmt(Math.max(0, (Number(booking.payout_amount) || 0) - (Number(booking.cohost_share) || 0)))}${Number(booking.cohost_share) > 0 ? `<small style="display:block; font-size:12px; opacity:0.65; margin-top:2px;">After your co-host’s share of ${fmt(booking.cohost_share)}.</small>` : ''}</div>
         </div>
       </div>`}
       <div class="settings-row">
@@ -3967,6 +3999,11 @@
           const shortName = String(booking.guest_name || String(booking.guest_email || '').split('@')[0] || 'Booked').split(' ')[0];
           priceOrGuestHtml = `<span class="cal-day-guest">${escH(shortName)}</span>`;
           cellTitle = `${booking.guest_name || booking.guest_email} — click for details`;
+        } else if(!isPast){
+          // Dates held but not a booking yet (a payment waiting for the
+          // guest's details): the cell used to be dark and empty.
+          priceOrGuestHtml = '<span class="cal-day-guest" style="opacity:0.75;">Held</span>';
+          cellTitle = 'Dates held — not a booking yet (see “Waiting for the guest’s details” above)';
         }
       } else if(!isPast){
         priceOrGuestHtml = `<span class="cal-day-price">${formatCompactPrice(sbComputePriceForDate(dateStr))}</span>`;
@@ -4829,7 +4866,7 @@
       box.innerHTML = '<strong>Thank you — you have accepted the ' + esc(A.title) + ' (version ' + esc(VERSION) + ').</strong>'
         + '<p style="font-size:14px; margin:6px 0 0;">' + (j.emailed ? 'A copy has been emailed to you. ' : '') + 'You can see it any time under Account → Host Agreement.'
         + (j.restored ? ' ' + j.restored + ' listing' + (j.restored === 1 ? ' is' : 's are') + ' live again.' : '')
-        + (j.keptOff && j.keptOff.length ? ' ' + esc(j.keptOff.join(', ')) + ' stayed paused because another property now uses that name nearby — <a href="index.html?view=help&amp;new=1&amp;category=listing_photos">raise a request in Aerva Support</a> and we will help.' : '') + '</p>';
+        + (j.keptOff && j.keptOff.length ? ' ' + esc(j.keptOff.join(', ')) + ' stayed paused because another property now uses that name nearby — <a href="index.html?view=help&amp;new=1&amp;category=listing_photos">raise a request in the Resolution Center</a> and we will help.' : '') + '</p>';
       loadHistory();
     });
     if(document.getElementById('hostDeclineBtn')) document.getElementById('hostDeclineBtn').addEventListener('click', async () => {
@@ -4954,7 +4991,11 @@
         card();
         // Opened by itself once per visit while required steps are left (e.g. right after listing).
         let shown = false; try { shown = sessionStorage.getItem('aerva_setup_shown') === '1'; sessionStorage.setItem('aerva_setup_shown', '1'); } catch (e) {}
-        if(!shown || /[?&]setup=1/.test(location.search)) open(false);
+        // "Complete your profile" (aerva-guest-verify.js) comes first for a host
+        // too — once per sign-in — and these setup steps open after it.
+        const openSteps = () => { if(!shown || /[?&]setup=1/.test(location.search)) open(false); };
+        if(window.AervaGuestVerify && typeof window.AervaGuestVerify.promptIfNeeded === 'function') window.AervaGuestVerify.promptIfNeeded({ reason: 'login', fresh: true, then: openSteps });
+        else openSteps();
         return items;
       }).catch(() => []);
     }
@@ -5152,7 +5193,7 @@
   const day = (v) => { const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }); };
   const stay = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };
   const row = (k, v) => '<div style="display:flex; justify-content:space-between; gap:16px; padding:5px 0; font-size:14.5px;"><span style="opacity:0.65; flex:0 0 auto;">' + k + '</span><span style="text-align:right; overflow-wrap:anywhere;">' + v + '</span></div>';
-  const done = (r) => r.status === 'accepted' ? 'You accepted. ' + esc(inr(r.amount)) + ' is deducted from your next payout and added to ' + esc(r.cohostFirstName) + '’s.'
+  const done = (r) => r.status === 'accepted' ? 'You accepted. ' + esc(inr(r.amount)) + ' is deducted from your next payout and then paid to ' + esc(r.cohostFirstName) + '.'
     : r.status === 'reimbursed' ? 'You accepted. ' + esc(inr(r.amount)) + ' was deducted from your payout and goes to ' + esc(r.cohostFirstName) + '.'
     : r.status === 'declined' ? 'You declined. Nothing moves through Aerva.'
     : r.status === 'expired' ? 'Not answered in time: the request closed. Nothing moves through Aerva.'
@@ -5175,7 +5216,7 @@
             + row('Reason given', esc(r.reason || '—'))
             + row('Coupon', '<strong>' + esc(inr(r.amount)) + '</strong>')
             + (r.note ? '<p style="margin:8px 0 0; padding:10px 12px; background:#faf6ef; border-radius:8px; font-size:14.5px; overflow-wrap:anywhere;"><strong>' + esc(r.cohostFirstName) + ' wrote:</strong> ' + esc(r.note) + '</p>' : '')
-            + '<p style="font-size:13px; opacity:0.75; margin:10px 0;">If you accept, ' + esc(inr(r.amount)) + ' is deducted from your next payout and added to ' + esc(r.cohostFirstName) + '’s next payout. Aerva only moves it between the two payouts: no commission, no fee. If you decline, or do not answer by ' + esc(day(r.answerBy)) + ', nothing moves through Aerva.</p>'
+            + '<p style="font-size:13px; opacity:0.75; margin:10px 0;">If you accept, ' + esc(inr(r.amount)) + ' is deducted from your next payout, after your own TDS (which does not change), and paid to ' + esc(r.cohostFirstName) + ' once that payout is sent. Aerva takes no commission and no fee; TDS on it is deducted from ' + esc(r.cohostFirstName) + '’s side, at their rate. If you decline, or do not answer by ' + esc(day(r.answerBy)) + ', nothing moves through Aerva.</p>'
             + '<div style="display:flex; gap:10px; flex-wrap:wrap;">'
             + '<button type="button" class="settings-save-btn" data-cc-answer="accept" style="padding:11px 22px; border:none; border-radius:999px; cursor:pointer; font:inherit; font-size:14px;">Accept</button>'
             + '<button type="button" class="settings-cancel-btn" data-cc-answer="decline" style="padding:11px 22px; border-radius:999px; cursor:pointer; font:inherit; font-size:14px;">Decline</button></div>'

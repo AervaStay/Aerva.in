@@ -163,7 +163,7 @@ async function sendAdminNotification(listing, changeNote = null) {
     ? `Price: ₹${listing.nightly_rate || 'not specified'}${listing.experience_price_unit === 'per_person' ? ' per person' : ' flat'}`
     : `Rate: ₹${listing.nightly_rate || 'not specified'}/night`;
   const hostingLine = isExperienceListing
-    ? `<p>Hosted at: listing #${escHtml(listing.hosting_listing_id || 'not set')} · Category: ${escHtml(listing.experience_category || 'not set')}</p>`
+    ? `<p>${listing.hosting_listing_id ? 'Hosted at: listing #' + escHtml(listing.hosting_listing_id) : 'No stay included'} · Category: ${escHtml(listing.experience_category || 'not set')}</p>`
     : '';
 
   const html = `
@@ -252,7 +252,7 @@ module.exports = async (req, res) => {
     const {
       listingId, isDraft, listingType,
       propertyName, city, area, propertyType, bedrooms, maxGuests, nightlyRate,
-      description: descriptionIn, amenities, services, hostName, hostPhone,
+      description: descriptionIn, amenities, services, hostName: hostNameSent, hostPhone: hostPhoneSent,
       discountType, discountValue, discountMinNights, discountDescription,
       exteriorPhotoUrls, interiorPhotoUrls, roomPhotos, photoHashes, coverPhotoUrl,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
@@ -294,10 +294,29 @@ module.exports = async (req, res) => {
     // The guest's own account info is never trusted from the request body
     // — always looked up fresh from their session, same reasoning as the
     // old host-email lookup this replaces.
-    const guestRows = await sql`SELECT id, email, name, phone, host_id FROM guests WHERE id = ${guestId}`;
+    const guestRows = await sql`SELECT id, email, name, phone, host_id, to_jsonb(guests)->>'first_name' AS first_name, to_jsonb(guests)->>'last_name' AS last_name
+                                FROM guests WHERE id = ${guestId}`;
     const guest = guestRows[0];
     if (!guest) {
       return res.status(401).json({ error: 'Your account could not be found. Please log in again.' });
+    }
+    // The host's contact details come from their PROFILE (owner, 10 Nov
+    // 2026): the form no longer asks for them. Name: first and last name, or
+    // the account's full name; phone: the account's; email: the account's
+    // (below). Anything a cached old page still sends never overrides the
+    // account; only where the account has none is it used for that request,
+    // so an old page does not break. A draft may be saved without them;
+    // submitting for review needs both (needs: ['name'] / ['phone'] — the
+    // page opens "Complete your profile").
+    const accountName = [guest.first_name, guest.last_name].map(x => String(x || '').trim()).filter(Boolean).join(' ') || String(guest.name || '').trim();
+    const accountPhone = String(guest.phone || '').trim();
+    const hostName = accountName || String(typeof hostNameSent === 'string' ? hostNameSent : '').replace(/\s+/g, ' ').trim().slice(0, 120);
+    const hostPhone = accountPhone || String(typeof hostPhoneSent === 'string' ? hostPhoneSent : '').trim().slice(0, 40);
+    if (!isDraft && (!hostName || !hostPhone)) {
+      const needs = [!hostName ? 'name' : null, !hostPhone ? 'phone' : null].filter(Boolean);
+      return res.status(400).json({ needs, error: needs.length === 2 ? 'Please add your name and mobile number to your profile first: guests and Aerva reach you on these details.'
+        : needs[0] === 'phone' ? 'Please add your mobile number to your profile first: guests and Aerva reach you on it.'
+        : 'Please add your first and last name to your profile first.' });
     }
 
     const { hostId, error: hostError } = await getOrCreateHostForGuest(guest);
@@ -667,6 +686,9 @@ module.exports = async (req, res) => {
       : [];
     const safeMaxPets = safePetFriendly === true && maxPetsAllowed ? Number(maxPetsAllowed) : null;
     const safePetFee = safePetFriendly === true && petFee ? Number(petFee) : null;
+    // (A negative pet fee would lower the guest's total per pet.)
+    if (safeMaxPets != null && !(Number.isInteger(safeMaxPets) && safeMaxPets >= 1 && safeMaxPets <= 10)) return res.status(400).json({ error: 'Maximum pets must be a whole number from 1 to 10.' });
+    if (safePetFee != null && !(Number.isFinite(safePetFee) && safePetFee >= 0)) return res.status(400).json({ error: 'The pet fee cannot be negative.' });
 
     // Security deposit — entirely optional, like the pet fee. A host who
     // doesn't want one just leaves it blank; guests only ever see and pay

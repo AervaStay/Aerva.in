@@ -39,7 +39,7 @@
 //          way PAN/Aadhaar/bank are, so no re-verification triggered.
 //   POST { raiseDispute: { orderId, reason } } — flags a concern on one
 //          of this host's bookings' held security deposits, before it
-//          would otherwise auto-refund to the guest 24 hours after
+//          would otherwise auto-refund to the guest 7 days after
 //          checkout. Only works while deposit_status is still 'held' and
 //          the release date hasn't passed. See get-pending-listings.js's
 //          resolveDispute mode for how an admin follows up.
@@ -90,8 +90,7 @@ const { respondChange } = require('./_booking-changes');
 const { respondDispute } = require('./_stay-disputes');
 const { hoursUntilCheckIn, hoursUntilCheckInTime, paidByOrderRow, dateStr } = require('./_booking-rules');
 const { executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, HOST_CANCELLATIONS_PER_YEAR, claimForCancellation, releaseClaim, claimRequest, unclaimRequest, hostOption, postThreadMessage, REASON_LABELS, depositStillHeld, guestGetsBackFor, clearUnsentPayouts } = require('./_cancellations');
-const { validatePhoneNumber, normalizeToE164, toE164 } = require('./_phone-validation');
-const phoneOtp = require('./_phone-otp');
+const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
 const { sanitizeBody } = require('./_plain-text');
@@ -163,9 +162,16 @@ async function sendCancellationEmail(order, opts = {}){
     return;
   }
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // An experience is not a "stay", and its stored end date is the day after its last day.
+  const isExp = order.order_type === 'experience';
+  const what = isExp ? 'booking' : 'stay';
+  const nice = require('./_booking-rules').niceDay;
+  const lastDay = isExp && order.departure ? new Date(new Date(require('./_booking-rules').dateStr(order.departure) + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10) : order.departure;
+  const when = isExp && lastDay <= require('./_booking-rules').dateStr(order.arrival) ? esc(nice(order.arrival))
+    : `${esc(nice(order.arrival) || order.arrival)} – ${esc(nice(lastDay) || lastDay)}`;
   const lead = opts.guestRequested
-    ? `Your host has accepted your request to cancel your stay at <strong>${esc(order.suite_name)}</strong> (${order.arrival} — ${order.departure}).`
-    : `Your host has cancelled your stay at <strong>${esc(order.suite_name)}</strong> (${order.arrival} — ${order.departure}).`;
+    ? `Your host has accepted your request to cancel your ${what} at <strong>${esc(order.suite_name)}</strong> (${when}).`
+    : `Your host has cancelled your ${what} at <strong>${esc(order.suite_name)}</strong> (${when}).`;
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">Your booking has been cancelled</h2>
@@ -524,6 +530,29 @@ async function loadPayoutDue(sql, ids) {
   rows.forEach(r => out.set(Number(r.id), { dueOn: r.due_on, held: !!r.held }));
   return out;
 }
+// A listing's FIRST stay arriving on or after the check-in promise date is
+// paid after that guest's check-out (_checkin-promise.js payoutHolds), not
+// the day after check-in: its due day is the check-out day. id → 'YYYY-MM-DD'.
+async function firstStayPayoutDays(sql, ids) {
+  const out = new Map();
+  try {
+    if (!ids || !ids.length) return out;
+    const holds = await require('./_checkin-promise').payoutHolds(sql, ids);
+    const first = [...holds.entries()].filter(([, why]) => /first stay at this listing/.test(String(why))).map(([id]) => Number(id));
+    // Held for another reason (a report on arrival, the listing being checked): no day to promise.
+    out.waiting = new Set([...holds.entries()].filter(([, why]) => !/first stay at this listing/.test(String(why))).map(([id]) => Number(id)));
+    if (!first.length) return out;
+    (await sql`SELECT id, to_char(departure, 'YYYY-MM-DD') AS d FROM orders WHERE id = ANY(${first})`).forEach(r => out.set(Number(r.id), r.d));
+  } catch (e) { /* the usual day stands */ }
+  return out;
+}
+// 'YYYY-MM-DD' that is a date on the calendar ('2026-13-45' reached the
+// database and came back as a server error).
+function isRealDate(v) {
+  if (typeof v !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(v)) return false;
+  const d = new Date(v + 'T00:00:00Z');
+  return !isNaN(d) && d.toISOString().slice(0, 10) === v;
+}
 // b: { status, payout_day (the day after check-in), payout_held }; row: that
 // payee's payout row.
 function payoutStatusFor(b, row) {
@@ -609,7 +638,7 @@ async function loadCohostMoney(ctx, accountId, mode) {
 const COHOST_BOOKING_KEYS = ['id', 'suite_name', 'listing_id', 'arrival', 'departure', 'nights', 'guests',
   'deposit_amount', 'deposit_status', 'deposit_release_at', 'deposit_window_open', 'dispute_reason', 'dispute_raised_at',
   'cancellation_reason', 'cancelled_at', 'status', 'created_at', 'pet_types', 'service_animal_types', 'young_litter_count',
-  'charge_currency', 'guest_email', 'guest_name', 'refund_percent', 'refund_status', 'cancelled_by', 'can_cancel'];
+  'charge_currency', 'guest_email', 'guest_name', 'refund_percent', 'refund_status', 'cancelled_by', 'can_cancel', 'order_type'];
 // One booking on the status calendar.
 const COHOST_CALENDAR_BOOKING_KEYS = ['id', 'start_date', 'end_date', 'guest_email', 'guests', 'nights',
   'deposit_amount', 'deposit_status', 'created_at', 'razorpay_order_id', 'guest_name', 'guest_phone',
@@ -624,7 +653,7 @@ const COHOST_TODAY_KEYS = ['orderId', 'guestName', 'guests', 'arrival', 'departu
 // animals, deposit or messages: those stay behind 'bookings' / 'messages'.
 // can_cancel: every co-host may cancel (ALWAYS_PERMISSIONS 'cancel').
 const COHOST_SHARE_BOOKING_KEYS = ['id', 'suite_name', 'listing_id', 'arrival', 'departure', 'nights', 'status',
-  'created_at', 'cancelled_at', 'cancelled_by', 'can_cancel'];
+  'created_at', 'cancelled_at', 'cancelled_by', 'can_cancel', 'order_type'];
 const COHOST_SHARE_TODAY_KEYS = ['orderId', 'arrival', 'departure', 'nights', 'listingId', 'listingName',
   'photoUrl', 'checkInTime', 'checkOutTime', 'nightsLeft', 'kind', 'startTime', 'daysAway'];
 const firstNameOnly = (name) => String(name || '').trim().split(/\s+/)[0] || 'Guest';
@@ -710,8 +739,13 @@ function trimForCohost(ctx, mode, body) {
   if (mode === 'statusCalendar') {
     // Each booking's total and the host's payout, for these listings only.
     const CAL_FIGURES = cohostCan(ctx, 'host_earnings') ? ['total', 'payout_amount'] : [];
+    // Status without bookings access: who is booked by first name only —
+    // the guest's email and phone stay behind 'bookings'.
+    const calKeys = cohostCan(ctx, 'bookings') ? COHOST_CALENDAR_BOOKING_KEYS
+      : COHOST_CALENDAR_BOOKING_KEYS.filter(k => !['guest_email', 'guest_phone', 'guest_phone_verified'].includes(k));
+    const calName = (b) => (cohostCan(ctx, 'bookings') ? {} : { guest_name: firstNameOnly(/@/.test(b.guest_name || '') ? '' : b.guest_name) });
     return stripHostMoney({ ...body, shareOnly: true, rows: (body.rows || []).filter(r => inScope(r.listingId)).map(r => ({
-      ...r, bookings: (r.bookings || []).map(b => ({ ...pickKeys(b, COHOST_CALENDAR_BOOKING_KEYS), ...pickKeys(b, CAL_FIGURES), cohost_share: shareOf(b.id) }))
+      ...r, bookings: (r.bookings || []).map(b => ({ ...pickKeys(b, calKeys), ...calName(b), ...pickKeys(b, CAL_FIGURES), cohost_share: shareOf(b.id) }))
     })) }, new Set(['cohost_share'].concat(CAL_FIGURES)));
   }
   // myPenalties is the co-host's own coupon deductions (payer_guest_id is
@@ -896,7 +930,7 @@ async function handleCohostModes(req, res, accountId) {
         const panProblem = (lastName && pan.charAt(3) === 'P' && pan.charAt(4) !== lastName.charAt(0).toUpperCase())
           ? 'The PAN and the name do not match. Check both against your PAN card.' : bankCheck.panNameProblem(pan, panName);
         if (panProblem) { res.status(400).json({ error: panProblem }); return true; }
-        if (await bankCheck.panInUseElsewhere(sql, pan, { guestId: me.id, hostId: me.host_id || null })) { res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, raise a request in Aerva Support (Help → Raise a request).' }); return true; }
+        if (await bankCheck.panInUseElsewhere(sql, pan, { guestId: me.id, hostId: me.host_id || null })) { res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, raise a request in the Resolution Center (Help → Raise a request).' }); return true; }
         const coCompany = bankCheck.companyPanProblem(pan, holder);
         if (coCompany) { res.status(400).json({ error: coCompany }); return true; }
         // A trade-name account on a personal PAN: only with the business's GSTIN under that PAN.
@@ -1119,7 +1153,7 @@ async function handleCohostModes(req, res, accountId) {
         listings: ownListings.map(l => {
           const c = cards[l.id] || {};
           return { id: l.id, name: l.property_name, type: l.listing_type === 'experience' ? 'experience' : 'stay',
-                   place: [c.area, c.city].filter(Boolean).join(', '), propertyType: c.property_type || null,
+                   place: [c.area, c.city].filter((v, i, arr) => v && !(i === 0 && arr[1] && String(v).trim().toLowerCase() === String(arr[1]).trim().toLowerCase())).join(', '), propertyType: c.property_type || null,
                    price: Number(c.nightly_rate) || null, priceUnit: c.experience_price_unit || null, photoUrl: c.photo_url || null };
         }),
         permissionLabels: COHOST_PERMISSIONS,
@@ -1271,7 +1305,7 @@ async function handleCohostModes(req, res, accountId) {
 function isAervaBlobUrl(url) {
   return typeof url === 'string' && /^https:\/\/[a-z0-9]+\.public\.blob\.vercel-storage\.com\/[^\s]+$/i.test(url);
 }
-const ENCRYPTION_UNAVAILABLE = 'Bank and PAN details cannot be saved right now. Please try again later, or raise a request in Aerva Support (Help → Raise a request).';
+const ENCRYPTION_UNAVAILABLE = 'Bank and PAN details cannot be saved right now. Please try again later, or raise a request in the Resolution Center (Help → Raise a request).';
 
 module.exports = async (req, res) => {
   // Typed text can never become markup — see _plain-text.js.
@@ -1503,8 +1537,9 @@ module.exports = async (req, res) => {
   // ---- Monthly payout statement for the host's CA (owner, 9 Nov 2026) ----
   // GET ?payoutStatement=YYYY-MM → CSV of every payout SENT to this account
   // that month (as host, or as co-host): booking, stay, gross, Aerva's
-  // commission, co-host shares, deductions, TDS (rate, PAN given), net, date
-  // sent and bank reference — with totals. India time.
+  // commission, co-host shares, deductions, the amount TDS is deducted on,
+  // TDS (rate, PAN given), net, date sent and bank reference — with totals.
+  // India time.
   if (req.method === 'GET' && req.query && typeof req.query.payoutStatement === 'string' && req.query.actingHost === undefined) {
     const m = /^(\d{4})-(\d{2})$/.exec(req.query.payoutStatement);
     if (!m || Number(m[2]) < 1 || Number(m[2]) > 12) return res.status(400).json({ error: 'Choose a month.' });
@@ -1514,6 +1549,7 @@ module.exports = async (req, res) => {
       const me = (await sql`SELECT host_id, name, email FROM guests WHERE id = ${accountId}`)[0] || {};
       const rows = await sql`
         SELECT p.id, p.payee_type, COALESCE(to_jsonb(p)->>'kind', 'booking') AS kind, p.gross, p.commission, p.cohost_shares, p.deductions, p.tds, p.tds_rate, p.pan_furnished, p.net,
+               (to_jsonb(p)->>'tds_base')::numeric AS tds_base,
                p.deducted_penalty_ids, p.sent_at, p.reference, COALESCE(o.confirmation_code, '#' || o.id) AS code, o.suite_name, o.arrival, o.departure
         FROM payouts p JOIN orders o ON o.id = p.order_id
         WHERE p.status = 'sent' AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp
@@ -1523,13 +1559,18 @@ module.exports = async (req, res) => {
       const d = (v) => v ? new Date(v).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : '';
       const n = (v) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
       // A coupon a co-host paid and the host agreed to cover (_cohost-coupon.js)
-      // is a transfer between the two payouts, not income: it has its own
-      // column (− for the host, + for the co-host) and is in neither Gross
-      // nor Deductions, so Net = Gross − commission − co-host shares −
-      // deductions − TDS + coupon reimbursement on every row.
-      const head = ['Payout ID', 'As', 'Type', 'Booking', 'Listing', 'Check-in', 'Check-out', 'Gross (INR)', 'Aerva commission (INR)', 'Co-host shares (INR)', 'Deductions (INR)', 'TDS (INR)', 'TDS rate %', 'PAN given', 'Coupon reimbursement (INR)', 'Net paid (INR)', 'Sent on', 'Bank reference', 'Notes'];
+      // is moved between the two payouts: it has its own column (− for the
+      // host, + for the co-host) and is in neither Gross nor Deductions, so
+      // Net = Gross − commission − co-host shares − deductions − TDS +
+      // coupon reimbursement on every row. The host's TDS is unchanged by it;
+      // the co-host's row carries TDS on the reimbursement, at their rate.
+      // "TDS deducted on": the amount credited that each row's TDS applies to
+      // (what Form 26AS shows as the amount credited) — for a booking, the amount
+      // due after commission and co-host shares; for a reimbursement to a
+      // co-host, the coupon amount.
+      const head = ['Payout ID', 'As', 'Type', 'Booking', 'Listing', 'Check-in', 'Check-out', 'Gross (INR)', 'Aerva commission (INR)', 'Co-host shares (INR)', 'Deductions (INR)', 'TDS deducted on (INR)', 'TDS (INR)', 'TDS rate %', 'PAN given', 'Coupon reimbursement (INR)', 'Net paid (INR)', 'Sent on', 'Bank reference', 'Notes'];
       const lines = [`Aerva payout statement — ${me.name || me.email || ''} — ${m[1]}-${m[2]}`, '', head.join(',')];
-      const tot = { gross: 0, commission: 0, cohost: 0, deductions: 0, tds: 0, net: 0, reimb: 0 };
+      const tot = { gross: 0, commission: 0, cohost: 0, deductions: 0, tds: 0, net: 0, reimb: 0, tdsOn: 0 };
       const rupees = (v) => '₹' + (Math.round(Number(v || 0) * 100) / 100).toLocaleString('en-IN');
       let anyReimb = false;
       for (const r of rows) {
@@ -1537,16 +1578,20 @@ module.exports = async (req, res) => {
         const taken = isReimb ? [] : await cohostCoupon.deductionLines(sql, r.deducted_penalty_ids || []);
         const takenSum = taken.reduce((t, x) => t + x.amount, 0);
         const gross = isReimb ? 0 : Number(r.gross) || 0, deductions = (Number(r.deductions) || 0) - takenSum, reimb = isReimb ? Number(r.gross) || 0 : -takenSum;
-        const note = isReimb ? `Coupon for booking ${r.code}: +${rupees(r.gross)} (reimbursed by host)` : taken.map(x => `${x.label}: −${rupees(x.amount)}`).join('; ');
+        const tdsOn = r.tds_base != null ? Number(r.tds_base) : (r.payee_type === 'host' && !isReimb ? (Number(r.gross) || 0) - (Number(r.commission) || 0) - (Number(r.cohost_shares) || 0) : Number(r.gross) || 0);
+        const note = isReimb
+          ? `Coupon for booking ${r.code}: +${rupees(r.gross)} (reimbursed by host)` + (Number(r.tds) > 0 ? `; TDS ₹${n(r.tds)} at ${Number(r.tds_rate) || 0}%; ₹${n(r.net)} paid` : '; no TDS due on it')
+          : taken.map(x => `${x.label}: −${rupees(x.amount)}`).join('; ');
         if (isReimb || taken.length) anyReimb = true;
         lines.push([r.id, r.payee_type === 'host' ? 'Host' : 'Co-host', r.kind === 'deposit' ? 'Deposit compensation' : isReimb ? 'Coupon reimbursed by host' : 'Booking', r.code, r.suite_name, d(r.arrival), d(r.departure),
-          n(gross), n(r.commission), n(r.cohost_shares), n(deductions), n(r.tds), n(r.tds_rate), r.pan_furnished ? 'Yes' : 'No', n(reimb), n(r.net), d(r.sent_at), r.reference || '', note].map(q).join(','));
+          n(gross), n(r.commission), n(r.cohost_shares), n(deductions), n(tdsOn), n(r.tds), n(r.tds_rate), r.pan_furnished ? 'Yes' : 'No', n(reimb), n(r.net), d(r.sent_at), r.reference || '', note].map(q).join(','));
         tot.gross += gross; tot.commission += Number(r.commission) || 0; tot.cohost += Number(r.cohost_shares) || 0;
-        tot.deductions += deductions; tot.tds += Number(r.tds) || 0; tot.net += Number(r.net) || 0; tot.reimb += reimb;
+        tot.deductions += deductions; tot.tds += Number(r.tds) || 0; tot.net += Number(r.net) || 0; tot.reimb += reimb; tot.tdsOn += tdsOn;
       }
-      lines.push(['Total', '', '', '', '', '', '', n(tot.gross), n(tot.commission), n(tot.cohost), n(tot.deductions), n(tot.tds), '', '', n(tot.reimb), n(tot.net), '', '', ''].map(q).join(','));
-      lines.push('', 'TDS is deducted under section 194-O and credited against your PAN; it shows in your Form 26AS. Questions: raise a request in Aerva Support at aerva.in/index.html?view=help');
-      if (anyReimb) lines.push('Coupon reimbursement: a guest’s cancellation coupon paid by a co-host and covered by the host, moved by Aerva between their two payouts. It is a reimbursement, not income: no commission, no fee and no TDS, and the TDS base of both payouts is unchanged. Please confirm the treatment with your CA.');
+      lines.push(['Total', '', '', '', '', '', '', n(tot.gross), n(tot.commission), n(tot.cohost), n(tot.deductions), n(tot.tdsOn), n(tot.tds), '', '', n(tot.reimb), n(tot.net), '', '', ''].map(q).join(','));
+      lines.push('', 'TDS is deducted under section 194-O and credited against your PAN; it shows in your Form 26AS. Questions: raise a request in the Resolution Center at aerva.in/index.html?view=help');
+      lines.push('TDS deducted on: the amount credited to you that the row’s TDS applies to, as in Form 26AS (for a booking, the amount due after Aerva’s commission and co-host shares).');
+      if (anyReimb) lines.push('Coupon reimbursement: a guest’s cancellation coupon paid by a co-host and covered by the host, moved by Aerva between their two payouts, with no commission and no fee. Host: the full coupon amount is taken after the host’s own TDS, which it does not change. Co-host: TDS is deducted from the reimbursement at the co-host’s own rate, as on their share (0.1% with a PAN; 5% without one or with an inoperative PAN); it is in the TDS column of that row, counts in the co-host’s total for the year and shows in their Form 26AS. Please confirm the treatment in your books with your CA.');
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="aerva-payouts-${m[1]}-${m[2]}.csv"`);
       return res.status(200).send('\ufeff' + lines.join('\r\n'));
@@ -1636,78 +1681,124 @@ module.exports = async (req, res) => {
     cohostActor = { cohostId: gate.ctx.cohostId, guestId: accountId, ctx: gate.ctx };
   }
 
-  // ---- Verify a host's phone number: a code on WhatsApp ----
-  // (owner, 10 Nov 2026: Meta's WhatsApp Cloud API, fallback email only.)
-  // The code is made, sent and checked in _phone-otp.js and belongs to the
-  // exact number it was sent to, so a correct code proves THAT number: it
-  // is then saved as the host's phone, verified, in the same step. Until
-  // WhatsApp codes are set up, sending answers 503 (nothing is shown on
-  // screen any more — the old test code in the reply is gone).
+  // ---- Send an OTP to verify a host's phone number ----
+  // Country-aware format validation (length + digits-only) happens
+  // here, server-side, before anything is "sent" — never trusts
+  // whatever the frontend already checked, since a direct API call
+  // could skip that entirely. Actual SMS delivery is intentionally NOT
+  // wired to a real provider yet — see the comment on otpForTesting
+  // below for why, and what changes once a provider is chosen.
   if (req.method === 'POST' && req.body && req.body.sendHostPhoneOtp) {
     try {
       const { countryCode, localNumber } = req.body.sendHostPhoneOtp;
-      const validation = toE164(countryCode, localNumber);
+      const validation = validatePhoneNumber(countryCode, localNumber);
       if (!validation.valid) {
         return res.status(400).json({ error: validation.error });
       }
 
-      const guest = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      const guestRows = await sql`SELECT host_id, email FROM guests WHERE id = ${guestId}`;
+      const guest = guestRows[0];
       if (!guest || !guest.host_id) {
         return res.status(403).json({ error: 'You do not have permission to do this.' });
       }
-      const out = await phoneOtp.sendCode(sql, { phone: validation.e164, purpose: 'host', ip: getClientIp(req), actor: 'host:' + guest.host_id });
+
+      // Rate-limited per host (not just per IP) — a host retrying OTP
+      // requests for their own number shouldn't be able to spam
+      // themselves (or, if their session were somehow compromised,
+      // spam an SMS provider's bill) unlimited times.
+      const recentSends = await countRecentAttempts(sql, {
+        action: 'host_phone_otp_sent', windowMinutes: 10, byEmail: String(guest.host_id)
+      });
+      if (recentSends >= 5) {
+        return res.status(429).json({ error: 'Too many OTP requests — please wait a few minutes and try again.' });
+      }
+
+      const otp = String(crypto.randomInt(100000, 1000000)); // 6 digits, never starts with 0 so it always displays as 6 characters
+      const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
+      const OTP_LIFETIME_MINUTES = 10;
+
+      await sql`
+        UPDATE hosts SET
+          phone_country_code = ${countryCode}, phone_otp_hash = ${otpHash},
+          phone_otp_expires_at = now() + (${OTP_LIFETIME_MINUTES} || ' minutes')::interval,
+          phone_otp_attempts = 0, phone_verified = FALSE
+        WHERE id = ${guest.host_id}
+      `;
+
       await logAudit(sql, {
         action: 'host_phone_otp_sent', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-        targetType: 'host', targetId: guest.host_id, metadata: { ip: getClientIp(req), countryCode, channel: 'whatsapp' }
+        targetType: 'host', targetId: guest.host_id, metadata: { ip: getClientIp(req), countryCode }
       });
-      return res.status(200).json({ success: true, channel: out.channel, sentTo: validation.e164,
-        expiresInMinutes: out.expiresInMinutes, resendAfterSeconds: out.resendAfterSeconds });
+
+      // No real SMS provider is connected yet ("we'll take services
+      // based on country the host belongs to, later on" — per the
+      // request this was built for) — the OTP mechanism itself (
+      // generation, hashing, expiry, attempt-limiting, verification) is
+      // fully real and working; only the delivery step is a placeholder.
+      // Returned directly in the response for now so the flow is
+      // actually testable end to end without a provider connected —
+      // this MUST be removed the moment a real SMS integration is
+      // wired in, since shipping this to production as-is would defeat
+      // the entire point of an OTP.
+      return res.status(200).json({ success: true, otpForTesting: otp, note: 'No SMS provider connected yet — this code is returned directly for testing. Remove this field once a real provider is wired in.' });
     } catch (err) {
-      if (err.isUserFacing) {
-        return res.status(err.status || 400).json({ error: err.message, emailFallback: !!err.emailFallback,
-          notOnWhatsApp: !!err.notOnWhatsApp, waitSeconds: err.waitSeconds || undefined });
-      }
       console.error('host-listings (sendHostPhoneOtp) error:', err);
       return res.status(500).json({ error: 'Could not send a verification code right now. Please try again.' });
     }
   }
 
-  // ---- Check the code just sent ----
-  // { verifyHostPhoneOtp: { otp, countryCode, localNumber } } — the number
-  // is sent again so the code is checked against the number it went to.
+  // ---- Verify the OTP just sent ----
   if (req.method === 'POST' && req.body && req.body.verifyHostPhoneOtp) {
     try {
-      const { otp, countryCode, localNumber } = req.body.verifyHostPhoneOtp;
+      const { otp } = req.body.verifyHostPhoneOtp;
       if (!otp || typeof otp !== 'string' || !/^[0-9]{6}$/.test(otp.trim())) {
         return res.status(400).json({ error: 'Please enter the 6-digit code.' });
       }
-      const validation = toE164(countryCode, localNumber);
-      if (!validation.valid) return res.status(400).json({ error: validation.error });
 
-      const guest = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
+      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
+      const guest = guestRows[0];
       if (!guest || !guest.host_id) {
         return res.status(403).json({ error: 'You do not have permission to do this.' });
       }
-      const check = await phoneOtp.checkCode(sql, { phone: validation.e164, purpose: 'host', code: otp });
-      if (!check.ok) {
+
+      const hostRows = await sql`
+        SELECT phone_otp_hash, phone_otp_expires_at, phone_otp_attempts
+        FROM hosts WHERE id = ${guest.host_id}
+      `;
+      const host = hostRows[0];
+      if (!host || !host.phone_otp_hash) {
+        return res.status(400).json({ error: 'No verification code was requested — please request a new one.' });
+      }
+      if (new Date(host.phone_otp_expires_at) < new Date()) {
+        return res.status(400).json({ error: 'This code has expired — please request a new one.' });
+      }
+      // Five wrong guesses invalidates the code entirely, rather than
+      // leaving it guessable indefinitely within its 10-minute window —
+      // a fresh OTP request is required after this, same recovery path
+      // as an expired code.
+      if (host.phone_otp_attempts >= 5) {
+        return res.status(400).json({ error: 'Too many incorrect attempts — please request a new code.' });
+      }
+
+      const submittedHash = crypto.createHash('sha256').update(otp.trim()).digest('hex');
+      if (submittedHash !== host.phone_otp_hash) {
+        await sql`UPDATE hosts SET phone_otp_attempts = phone_otp_attempts + 1 WHERE id = ${guest.host_id}`;
         await logAudit(sql, {
           action: 'host_phone_otp_verified', success: false, actorType: 'host', actorIdentifier: String(guest.host_id),
           targetType: 'host', targetId: guest.host_id, metadata: { ip: getClientIp(req) }
         });
-        return res.status(check.status || 400).json({ error: check.error });
+        return res.status(400).json({ error: 'Incorrect code — please try again.' });
       }
 
-      // The proved number becomes the host's phone, verified.
       await sql`
-        UPDATE hosts SET phone = ${check.phone}, phone_country_code = ${countryCode}, phone_verified = TRUE,
-          phone_otp_hash = NULL, phone_otp_expires_at = NULL, phone_otp_attempts = 0
+        UPDATE hosts SET phone_verified = TRUE, phone_otp_hash = NULL, phone_otp_expires_at = NULL, phone_otp_attempts = 0
         WHERE id = ${guest.host_id}
       `;
       await logAudit(sql, {
         action: 'host_phone_otp_verified', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-        targetType: 'host', targetId: guest.host_id, metadata: { channel: 'whatsapp' }
+        targetType: 'host', targetId: guest.host_id, metadata: {}
       });
-      return res.status(200).json({ success: true, phone: check.phone });
+      return res.status(200).json({ success: true });
     } catch (err) {
       console.error('host-listings (verifyHostPhoneOtp) error:', err);
       return res.status(500).json({ error: 'Could not verify this code right now. Please try again.' });
@@ -1822,7 +1913,7 @@ module.exports = async (req, res) => {
         RETURNING id
       `;
       // No damage: the host releases the deposit with the review — refunded
-      // at once instead of when their 24 hours end (_deposits.js).
+      // two bank working days later instead of after 7 days (_deposits.js).
       let deposit = null;
       if (b.releaseDeposit === true) {
         deposit = await require('./_deposits').releaseEarly(sql, order.id, { hostId: me.host_id });
@@ -2248,6 +2339,8 @@ module.exports = async (req, res) => {
             `;
             const bookedRanges = bookedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
             await require('./_gifts').decorateHostRows(sql, bookedRanges);   // a gift: the guest staying, no phone until accepted
+            // Dates held while a guest's details are verified: blocked, no guest shown (_guest-verify.js).
+            bookedRanges.push(...await require('./_guest-verify').calendarRanges(sql, { listingId: listing.id, roomId: room.id, startStr, endStr }));
             const blockedRangesRaw = await sql`
               SELECT b.start_date, b.end_date, b.source_feed_id, f.name AS feed_name FROM listing_blocked_dates b
               LEFT JOIN calendar_feeds f ON f.id = b.source_feed_id
@@ -2294,6 +2387,8 @@ module.exports = async (req, res) => {
           `;
           const bookedRanges = bookedRangesRaw.map(r => ({ ...r, start_date: toDateStr(r.start_date), end_date: toDateStr(r.end_date) }));
           await require('./_gifts').decorateHostRows(sql, bookedRanges);   // a gift: the guest staying, no phone until accepted
+          // Dates held while a guest's details are verified: blocked, no guest shown (_guest-verify.js).
+          bookedRanges.push(...await require('./_guest-verify').calendarRanges(sql, { listingId: listing.id, roomId: null, startStr, endStr }));
           const blockedRangesRaw = await sql`
             SELECT b.start_date, b.end_date, b.source_feed_id, f.name AS feed_name FROM listing_blocked_dates b
             LEFT JOIN calendar_feeds f ON f.id = b.source_feed_id
@@ -2339,7 +2434,7 @@ module.exports = async (req, res) => {
   if (req.method === 'POST' && req.body && req.body.toggleBlockedDate) {
     try {
       const { listingId, roomId, date } = req.body.toggleBlockedDate;
-      if (!listingId || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      if (!listingId || !date || !isRealDate(date)) {
         return res.status(400).json({ error: 'Missing or invalid listing/date.' });
       }
       const listingRows = await sql`
@@ -2399,7 +2494,7 @@ module.exports = async (req, res) => {
     try {
       const { listingId, roomId, startDate, endDate, scope } = req.body.unblockRange;
       if (!listingId || !startDate || !endDate
-          || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+          || !isRealDate(startDate) || !isRealDate(endDate)) {
         return res.status(400).json({ error: 'Missing or invalid listing/date range.' });
       }
       if (endDate <= startDate) {
@@ -2496,6 +2591,11 @@ module.exports = async (req, res) => {
       if (bookedRows[0]) {
         return res.status(400).json({ error: 'Part of this range already has a real booking — please adjust the dates and try again.' });
       }
+      // A guest has paid for these dates and their details are being
+      // verified (_guest-verify.js): held for them until that is decided.
+      if (await require('./_guest-verify').datesHeld(sql, { listingId, roomId: safeRoomId, arrival: startDate, departure: endDate })) {
+        return res.status(400).json({ error: 'Part of this range is held for a guest who has paid and whose details are being verified — please adjust the dates, or try again once that is decided.' });
+      }
 
       await sql`
         INSERT INTO listing_blocked_dates (listing_id, room_id, start_date, end_date, reason)
@@ -2518,9 +2618,11 @@ module.exports = async (req, res) => {
   if (req.method === 'POST' && req.body && req.body.addPromotion) {
     try {
       const { listingId, roomId, name, discountType, discountValue, minNights, startDate, endDate } = req.body.addPromotion;
-      if (!listingId || !startDate || !endDate || !/^\d{4}-\d{2}-\d{2}$/.test(startDate) || !/^\d{4}-\d{2}-\d{2}$/.test(endDate)) {
+      if (!listingId || !startDate || !endDate || !isRealDate(startDate) || !isRealDate(endDate)) {
         return res.status(400).json({ error: 'Missing or invalid listing/date range.' });
       }
+      if (endDate <= startDate) return res.status(400).json({ error: 'The promotion must end after it starts.' });
+      if (minNights !== undefined && minNights !== null && String(minNights).trim() !== '' && !(Number.isInteger(Number(minNights)) && Number(minNights) >= 1)) return res.status(400).json({ error: 'Minimum nights must be 1 or more.' });
       if (!name || !name.trim()) return res.status(400).json({ error: 'Please give this promotion a name.' });
       if (discountType !== 'flat' && discountType !== 'percentage') return res.status(400).json({ error: 'Invalid discount type.' });
       const value = Number(discountValue);
@@ -2639,7 +2741,7 @@ module.exports = async (req, res) => {
   if (req.method === 'POST' && req.body && req.body.removePromotionDay) {
     try {
       const { promotionId, date } = req.body.removePromotionDay;
-      if (!promotionId || !date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      if (!promotionId || !date || !isRealDate(date)) {
         return res.status(400).json({ error: 'Missing promotion or date.' });
       }
       const rows = await sql`
@@ -2784,8 +2886,9 @@ module.exports = async (req, res) => {
       // never trust orderId alone, since it's just a number a guest's
       // browser could also send.
       const rows = await sql`
-        SELECT o.id, o.deposit_status, o.deposit_release_at, o.deposit_amount, o.departure,
-               COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}) AS tz, to_jsonb(l)->>'check_out_time' AS check_out_time
+        SELECT o.id, o.deposit_status, o.deposit_release_at, o.deposit_amount,
+               (o.deposit_release_at IS NOT NULL
+                AND (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date > o.deposit_release_at) AS window_closed
         FROM orders o
         JOIN listings l ON o.listing_id = l.id
         WHERE o.id = ${orderId} AND l.host_id = ${guest.host_id}
@@ -2802,11 +2905,11 @@ module.exports = async (req, res) => {
         const rel = (await sql`SELECT to_jsonb(orders)->>'deposit_released_by_host_at' AS t FROM orders WHERE id = ${orderId}`)[0];
         if (rel && rel.t) return res.status(400).json({ error: 'You confirmed there was no damage when you reviewed this guest, so the deposit is being refunded.' });
       } catch (e) { /* column not added yet */ }
-      // "Within 24 hours of check-out" (owner, 10 Nov 2026; was 7 days):
-      // counted from the listing's check-out time on the property's own
-      // clock (_deposits.js claimWindowOpen).
-      if (!require('./_deposits').claimWindowOpen(order.departure, order.tz, order.check_out_time)) {
-        return res.status(400).json({ error: 'The 24 hours after check-out to report damage on this deposit have passed.' });
+      // "Within 7 days of check-out" (aerva-policies.js): deposit_release_at
+      // is check-out + 7 days, and that whole day still counts — on the
+      // listing's own calendar, not the server's UTC clock.
+      if (order.window_closed === true || order.window_closed === 't') {
+        return res.status(400).json({ error: 'The 7-day window to raise a concern on this deposit has passed.' });
       }
 
       // Guarded on 'held' in the UPDATE itself, not just the check above:
@@ -3007,7 +3110,7 @@ module.exports = async (req, res) => {
     // cancelTerms); once check-in time has come, only Aerva can.
     order.hoursToCheckIn = hoursUntilCheckInTime(order.arrival, order.timezone, order.check_in_time);
     if (enforceCutoff && !(order.hoursToCheckIn > 0)) {
-      return { error: 'Check-in time has passed, so this booking can no longer be cancelled by the host. If this is urgent, raise a request in Aerva Support (Help → Raise a request).', status: 400 };
+      return { error: 'Check-in time has passed, so this booking can no longer be cancelled by the host. If this is urgent, raise a request in the Resolution Center (Help → Raise a request).', status: 400 };
     }
     // Emails and messages show plain dates, not a Date object's long form.
     order.arrival = dateStr(order.arrival) || order.arrival;
@@ -3050,7 +3153,7 @@ module.exports = async (req, res) => {
     try { await sql`UPDATE hosts SET cancel_claim = NULL, cancel_claimed_at = NULL WHERE id = ${hostId} AND cancel_claim = ${token}`; }
     catch (err) { /* columns not added yet */ }
   }
-  const HOST_LIMIT_MESSAGE = `You have already cancelled ${HOST_CANCELLATIONS_PER_YEAR} bookings in the last 12 months, which is the limit. To cancel this one, raise a request in Aerva Support (Help → Raise a request).`;
+  const HOST_LIMIT_MESSAGE = `You have already cancelled ${HOST_CANCELLATIONS_PER_YEAR} bookings in the last 12 months, which is the limit. To cancel this one, raise a request in the Resolution Center (Help → Raise a request).`;
 
   // Actually performs the refund + DB update + email — shared by a plain
   // host cancellation and a coupon-gated "prioritize a bigger booking"
@@ -3108,7 +3211,7 @@ module.exports = async (req, res) => {
       // today's rate (_currency.js). null = no record of the charge: refuse.
       const amt = await refundSubunitForInr(sql, { razorpayOrderId: row.razorpay_order_id || order.razorpay_order_id, amountInr: inr, currency });
       if (amt == null || (!amt && inr > 0)) {
-        throw Object.assign(new Error(`This ${currency} booking cannot be refunded automatically. Please raise a request in Aerva Support (Help → Raise a request).`), { isUserFacing: true, status: 502 });
+        throw Object.assign(new Error(`This ${currency} booking cannot be refunded automatically. Please raise a request in the Resolution Center (Help → Raise a request).`), { isUserFacing: true, status: 502 });
       }
       return amt;
     };
@@ -3349,7 +3452,7 @@ module.exports = async (req, res) => {
     } catch (err) {
       console.error('host-listings (cancelBooking) error:', err);
       const status = err.isUserFacing ? err.status : 500;
-      return res.status(status).json({ error: err.isUserFacing ? err.message : 'Could not cancel this booking right now. Please try again, or raise a request in Aerva Support (Help → Raise a request).' });
+      return res.status(status).json({ error: err.isUserFacing ? err.message : 'Could not cancel this booking right now. Please try again, or raise a request in the Resolution Center (Help → Raise a request).' });
     }
   }
 
@@ -3461,7 +3564,7 @@ module.exports = async (req, res) => {
           // name while it was switched off (see _listing-rules.js).
           if ((l.listing_type || 'stay') === 'stay') {
             const clash = await findNameClashInPincode(sql, { propertyName: l.property_name, pincode: l.pincode, propertyType: l.property_type, excludeListingId: l.id });
-            if (clash) return res.status(409).json({ error: nameClashMessage(l.property_name, String(l.pincode || '').trim()) + ' It stays paused — raise a request in Aerva Support (Help → Raise a request) and we will help you rename it.' });
+            if (clash) return res.status(409).json({ error: nameClashMessage(l.property_name, String(l.pincode || '').trim()) + ' It stays paused — raise a request in the Resolution Center (Help → Raise a request) and we will help you rename it.' });
           }
           await sql`UPDATE listings SET status = 'approved', deactivated_by = NULL, deactivated_at = NULL WHERE id = ${l.id}`;
         }
@@ -3493,7 +3596,7 @@ module.exports = async (req, res) => {
       await sql`UPDATE hosts SET hosting_status = 'active' WHERE id = ${g.host_id}`;
       await logAudit(sql, { action: 'hosting_reactivated', success: true, actorType: 'host', actorIdentifier: String(g.host_id), targetType: 'host', targetId: g.host_id, metadata: { listings: restored.map(r => r.id), keptOffForNameClash: keepOffIds } });
       return res.status(200).json({ success: true, hostingStatus: 'active', listingsRestored: restored.length,
-        warning: keepOff.length ? keepOff.map(l => nameClashMessage(l.property_name, String(l.pincode || '').trim())).join(' ') + ' That listing stays paused — raise a request in Aerva Support (Help → Raise a request) and we will help you rename it.' : undefined });
+        warning: keepOff.length ? keepOff.map(l => nameClashMessage(l.property_name, String(l.pincode || '').trim())).join(' ') + ' That listing stays paused — raise a request in the Resolution Center (Help → Raise a request) and we will help you rename it.' : undefined });
     } catch (err) {
       console.error('deactivation failed:', err);
       return res.status(500).json({ error: 'Could not do this right now. Please try again.' });
@@ -3522,6 +3625,8 @@ module.exports = async (req, res) => {
         `;
       } catch (err) { /* migration_cancellation_requests.sql not run yet */ }
       if (cohostActor) rows = rows.filter(r => cohostHasListing(cohostActor.ctx, r.listing_id));
+      // A co-host without bookings access: the guest's first name only, never their email.
+      if (cohostActor && !cohostCan(cohostActor.ctx, 'bookings')) rows.forEach(r => { r.guest_name = firstNameOnly(/@/.test(r.guest_name || '') ? '' : r.guest_name); });
       for (const r of rows) {
         const opt = hostOption(r);
         // A natural disaster: information only — what Aerva would hold as credit.
@@ -3629,7 +3734,7 @@ module.exports = async (req, res) => {
           const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
           await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
             body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: loaded.order.guest_email, subject: `Your cancellation request for ${loaded.order.suite_name}`,
-              html: `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your cancellation request was declined</h2><p>Your host has declined your request to cancel your stay at <strong>${esc(loaded.order.suite_name)}</strong> (${loaded.order.arrival} — ${loaded.order.departure}). Your booking stands.</p>${note ? `<p><strong>Host’s note:</strong> ${esc(note)}</p>` : ''}<p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ order: loaded.order.id }, 'Questions?')}</p></div>` }) });
+              html: `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">Your cancellation request was declined</h2><p>Your host has declined your request to cancel your stay at <strong>${esc(loaded.order.suite_name)}</strong> (${esc(require('./_booking-rules').niceDay(loaded.order.arrival) || loaded.order.arrival)} – ${esc(require('./_booking-rules').niceDay(loaded.order.departure) || loaded.order.departure)}). Your booking stands.</p>${note ? `<p><strong>Host’s note:</strong> ${esc(note)}</p>` : ''}<p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({ order: loaded.order.id }, 'Questions?')}</p></div>` }) });
         }
       } catch (err) { console.error('decline email failed:', err.message); }
       return res.status(200).json({ success: true, accepted: false });
@@ -3659,6 +3764,7 @@ module.exports = async (req, res) => {
           ORDER BY c.created_at`;
       } catch (err) { /* booking_changes not created yet */ }
       if (cohostActor) rows = rows.filter(r => cohostHasListing(cohostActor.ctx, r.listing_id));
+      if (cohostActor && !cohostCan(cohostActor.ctx, 'bookings')) rows.forEach(r => { r.guest_name = firstNameOnly(/@/.test(r.guest_name || '') ? '' : r.guest_name); });
       return res.status(200).json({ changes: rows.map(r => ({ id: r.id, orderId: r.order_id, listing: r.suite_name, guestName: r.guest_name,
         summary: r.summary, difference: r.difference, createdAt: r.created_at })) });
     } catch (err) {
@@ -3784,7 +3890,7 @@ module.exports = async (req, res) => {
           targetType: 'coupon', targetId: coupon.id, metadata: { paymentId: razorpay_payment_id, refunded } });
         return res.status(409).json({ verified: false, error: refunded
           ? 'This coupon was already paid for, so this payment has been refunded to you.'
-          : 'This coupon was already paid for. We will refund this second payment — raise a request in Aerva Support (Help → Raise a request) if it has not arrived in 7 days.' });
+          : 'This coupon was already paid for. We will refund this second payment — raise a request in the Resolution Center (Help → Raise a request) if it has not arrived in 7 days.' });
       }
       try { await sql`UPDATE coupons SET paid_by_guest_id = ${accountId} WHERE id = ${coupon.id}`; } catch (err) { /* column added by migration_coupon_release.sql */ }
       await logAudit(sql, { action: 'coupon_purchased', success: true, actorType: cohostActor ? 'cohost' : 'host', actorIdentifier: String(cohostActor ? accountId : guest.host_id), targetType: 'coupon', targetId: coupon.id,
@@ -3865,7 +3971,7 @@ module.exports = async (req, res) => {
       // (PANs entered before this was asked.) Once only; checked against the
       // PAN's 5th letter like a new one.
       if (cleanPanName && !(typeof panDocumentUrl === 'string' && panDocumentUrl) && !(Array.isArray(panFiles) && panFiles.length)) {
-        if (host.pan_name) return res.status(400).json({ error: 'The name on your PAN is already on file. If it needs to change, raise a request in Aerva Support (Help → Raise a request).' });
+        if (host.pan_name) return res.status(400).json({ error: 'The name on your PAN is already on file. If it needs to change, raise a request in the Resolution Center (Help → Raise a request).' });
         if (!host.pan_number) return res.status(400).json({ error: 'Add your PAN first.' });
         if (host.bank_account_holder_name && !bankCheck.sameName(cleanPanName, host.bank_account_holder_name)) {
           return res.status(400).json({ error: `The name on the PAN must be the same as your payout name (${host.bank_account_holder_name}). Check the name, or change the payout details first.` });
@@ -3890,7 +3996,7 @@ module.exports = async (req, res) => {
         // PAN card image is erased; the number stays (encrypted) for TDS.
         // A rejected PAN is submitted again, with a new card photo.
         if (host.pan_status && host.pan_status !== 'not_submitted' && host.pan_status !== 'rejected') {
-          return res.status(400).json({ error: 'Your PAN has already been submitted and can\'t be changed. If you need to update it, raise a request in Aerva Support (Help → Raise a request).' });
+          return res.status(400).json({ error: 'Your PAN has already been submitted and can\'t be changed. If you need to update it, raise a request in the Resolution Center (Help → Raise a request).' });
         }
         const cleanPan = typeof panNumber === 'string' ? panNumber.trim().toUpperCase() : '';
         if (!isValidPan(cleanPan)) {
@@ -3907,7 +4013,7 @@ module.exports = async (req, res) => {
           return res.status(400).json({ error: `The name on the PAN must be the same as your payout name (${payoutNameNow}). Check the name, or change the payout details first.` });
         }
         if (await bankCheck.panInUseElsewhere(sql, cleanPan, { hostId: guest.host_id, guestId })) {
-          return res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, raise a request in Aerva Support (Help → Raise a request).' });
+          return res.status(409).json({ error: 'This PAN is already registered to another Aerva account. If it is yours, raise a request in the Resolution Center (Help → Raise a request).' });
         }
         if (instantPan) {
           try {
@@ -3961,7 +4067,7 @@ module.exports = async (req, res) => {
           return res.status(400).json({ error: 'Verify your ID in Account Settings → Verification instead. It takes under a minute and your ID is not stored.' });
         }
         if (host.aadhaar_status && host.aadhaar_status !== 'not_submitted') {
-          return res.status(400).json({ error: 'Your Aadhaar has already been submitted and can\'t be changed. If you need to update it, raise a request in Aerva Support (Help → Raise a request).' });
+          return res.status(400).json({ error: 'Your Aadhaar has already been submitted and can\'t be changed. If you need to update it, raise a request in the Resolution Center (Help → Raise a request).' });
         }
         await sql`
           UPDATE hosts SET aadhaar_document_url = ${aadhaarDocumentUrl}, aadhaar_status = 'pending_review', aadhaar_rejection_reason = NULL
@@ -4203,16 +4309,16 @@ module.exports = async (req, res) => {
              COALESCE((to_jsonb(o)->>'free_cancel_fee')::int, 0) AS free_cancel_fee,
              COALESCE((to_jsonb(o)->>'free_cancel_commission')::int, 0) AS free_cancel_commission,
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
-             -- deposit_window_open / deposit_claim_until are added below
-             -- (same rule as raiseDispute: 24 hours from check-out time)
-             to_jsonb(l)->>'check_out_time' AS listing_check_out_time,
+             -- the host may still raise a concern (same rule as raiseDispute)
+             (o.deposit_release_at IS NOT NULL
+              AND (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date <= o.deposit_release_at) AS deposit_window_open,
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.cancellation_reason, o.cancelled_at,
              o.status, o.created_at, o.pet_types, o.service_animal_types, o.young_litter_count,
              -- not revenue: only so the page knows what unit a refund
              -- amount is in before it prints a ₹ in front of it
              o.charge_currency,
-             o.guest_email, g.name AS guest_name,
+             o.guest_email, g.name AS guest_name, COALESCE(o.order_type, 'stay') AS order_type,
              -- for can_cancel (the host's 48-hour limit, on the property's clock)
              l.timezone AS listing_timezone, l.check_in_time AS listing_check_in_time,
              -- set only when a GUEST cancellation was settled (_cancellations.js)
@@ -4226,16 +4332,6 @@ module.exports = async (req, res) => {
       ORDER BY o.created_at DESC
       LIMIT ${bookingsLimit}
     `;
-    // Until when the host may report damage on a held deposit: 24 hours
-    // from the check-out time, on the property's clock (_deposits.js).
-    {
-      const dep = require('./_deposits');
-      for (const b of bookings) {
-        const until = dep.claimDeadlineMs(b.departure, b.listing_timezone || DEFAULT_TIMEZONE, b.listing_check_out_time);
-        b.deposit_claim_until = Number.isFinite(until) ? new Date(until).toISOString() : null;
-        b.deposit_window_open = Number.isFinite(until) && Date.now() <= until;
-      }
-    }
     // A gift: the guest staying, marked "Gift — booked by …" (_gifts.js).
     await require('./_gifts').decorateHostRows(sql, bookings, { phoneKey: '__none' });
     // Each booking's co-host shares, so the host sees what is theirs after
@@ -4352,6 +4448,8 @@ module.exports = async (req, res) => {
     try {
       const ids = bookings.map(b => b.id);
       const due = await loadPayoutDue(sql, ids);
+      const firstStayDays = await firstStayPayoutDays(sql, ids);
+      firstStayDays.forEach((d, id) => { const x = due.get(id); if (x) x.dueOn = d; });
       let rows = new Map();
       try { rows = await loadPayoutRows(sql, ids, { hostId: guest.host_id }); }
       catch (e) { console.error('payout rows unavailable (non-fatal):', e.message); }
@@ -4360,6 +4458,8 @@ module.exports = async (req, res) => {
         b.payout_day = d.dueOn || null;
         b.payout_held = !!d.held;
         Object.assign(b, payoutStatusFor(b, rows.get(Number(b.id))));
+        if (b.payout_status === 'due' && firstStayDays.has(Number(b.id))) b.payout_after_checkout = true;
+        if (b.payout_status === 'due' && firstStayDays.waiting && firstStayDays.waiting.has(Number(b.id))) { b.payout_status = 'on_hold'; b.payout_due_on = null; b.payout_hold_checkin = true; }
       });
       // A payout past its day and not yet sent: say why it is waiting, so a
       // host never just sees a date that has gone by.
@@ -4469,7 +4569,7 @@ module.exports = async (req, res) => {
     try {
       const rows = await sql`
         SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.guests, o.nights,
-               o.payout_amount,
+               o.payout_amount, (SELECT COALESCE(SUM(s.amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id)::int AS cohost_shares_total,
                o.guest_email, g.name AS guest_name, g.profile_photo_url,
                COALESCE(l.listing_type, 'stay') AS listing_type,
                l.experience_start_time, l.experience_duration_days,
@@ -4521,7 +4621,8 @@ module.exports = async (req, res) => {
         arrival: r.arrival,
         departure: r.departure,
         nights: Number(r.nights) || null,
-        payout: Number(r.payout_amount) || null,
+        // The host's own part: after their co-hosts' shares, as in My Earnings.
+        payout: Math.max(0, (Number(r.payout_amount) || 0) - (Number(r.cohost_shares_total) || 0)) || null,
         // When it is paid out (payoutStatusFor; status added below).
         payoutDay: r.payout_due_on || null,
         payoutHeld: !!r.payout_held,
@@ -4559,7 +4660,7 @@ module.exports = async (req, res) => {
       // calendar), so the host can prepare (owner, 9 Nov 2026).
       const UPCOMING_DAYS = 14;
       const next = await sql`
-        SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.guests, o.nights, o.payout_amount, o.guest_email,
+        SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.guests, o.nights, o.payout_amount, (SELECT COALESCE(SUM(s.amount), 0) FROM order_cohost_shares s WHERE s.order_id = o.id)::int AS cohost_shares_total, o.guest_email,
                g.name AS guest_name, g.profile_photo_url, COALESCE(l.listing_type, 'stay') AS listing_type, l.experience_start_time,
                l.check_in_time, l.check_out_time, o.pet_types, o.service_animal_types, o.young_litter_count,
                COALESCE(NULLIF(btrim(l.cover_photo_url), ''), CASE WHEN jsonb_typeof(l.exterior_photo_urls->0) = 'string' THEN l.exterior_photo_urls->>0 ELSE l.exterior_photo_urls->0->>'url' END) AS cover_photo_url,
@@ -4576,6 +4677,8 @@ module.exports = async (req, res) => {
         const lists = ['arrivals', 'departures', 'staying', 'experiences', 'upcoming'];
         const ids = [...new Set(lists.flatMap(k => today[k].map(r => r.orderId)))];
         const prow = await loadPayoutRows(sql, ids, { hostId: guest.host_id });
+        const firstDays = await firstStayPayoutDays(sql, ids);
+        lists.forEach(k => today[k].forEach(r => { if (firstDays.has(Number(r.orderId))) r.payoutDay = firstDays.get(Number(r.orderId)); }));
         lists.forEach(k => today[k].forEach(r => Object.assign(r, camelPayout(payoutStatusFor(
           { status: 'paid', payout_day: r.payoutDay, payout_held: r.payoutHeld }, prow.get(Number(r.orderId)))))));
       } catch (e) { console.error('today payout status unavailable (non-fatal):', e.message); }
@@ -4605,7 +4708,13 @@ module.exports = async (req, res) => {
       const rates = await require('./_cancellations').listingCancelRates(sql, listingsWithLinks.map(l => l.id));
       listingsWithLinks.forEach(l => { const r = rates[l.id]; if (r) { l.host_cancel_rate = r.rate; l.host_cancel_count = r.cancelled; l.host_cancel_bookings = r.bookings; } });
     } catch (err) { /* shown as 0% */ }
-    return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, bookingsMeta, verification, complianceNotices, today });
+    // Payments waiting for the guest's details to be verified (_guest-verify.js):
+    // the dates are held and blocked, but there is no booking yet — shown as
+    // "Waiting for the guest's details", with no guest name or contact
+    // details and no money; and holds that went in the last 3 days, with a
+    // short notice. { waiting: [...], released: [...] }
+    const waitingForDetails = await require('./_guest-verify').hostWaiting(sql, guest.host_id);
+    return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, bookingsMeta, verification, complianceNotices, today, waitingForDetails });
   } catch (err) {
     console.error('host-listings error:', err);
     return res.status(500).json({ error: 'Could not load your listings.' });

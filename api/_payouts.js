@@ -19,7 +19,8 @@
 // (_cohost-coupon.js): deducted from the host's next payout like any other
 // amount owed (host_penalties, kind 'cohost_coupon', after TDS), and paid to
 // the co-host as a payout of its own (payouts.kind 'cohost-coupon': no
-// commission, no fee, no TDS) once the host's payout has been sent.
+// commission and no fee; TDS at the co-host's own rate, like their share)
+// once the host's payout has been sent.
 // The summary is built from the saved payout row and its booking, so the
 // email, the notification and the page always show the same figures.
 
@@ -44,6 +45,17 @@ async function loadPayoutSummary(sql, payoutId) {
     WHERE p.id = ${Number(payoutId) || 0}
   `)[0];
   if (!r) return null;
+  // A co-host's own payout: the guest's full name only with bookings access
+  // (full access, or 'bookings' ticked); otherwise the first name, as on
+  // their dashboard (host-listings.js, trimForCohost).
+  if (r.payee_type === 'cohost') {
+    let seesGuest = false;
+    try {
+      const c = (await sql`SELECT access, permissions FROM cohosts WHERE host_id = ${r.host_id} AND cohost_guest_id = ${r.payee_guest_id} AND status = 'active' LIMIT 1`)[0];
+      seesGuest = !!c && (c.access === 'full' || (Array.isArray(c.permissions) && c.permissions.includes('bookings')));
+    } catch (e) { /* first name only */ }
+    if (!seesGuest) r.guest_name = String(r.guest_name || '').trim().split(/\s+/)[0] || 'Guest';
+  }
   const CC = require('./_cohost-coupon');
   const lines = r.kind === 'deposit'
     ? [['Security deposit compensation', Number(r.gross)]]
@@ -84,7 +96,7 @@ async function loadPayoutSummary(sql, payoutId) {
     // Same reference the guest's booking confirmation shows.
     booking: r.razorpay_order_id || ('#' + r.booking_id),
     lines: lines.filter(([, v]) => v !== 0 && !Object.is(v, -0)).map(([label, value]) => ({ label, value })),
-    note: r.kind === CC.PAYOUT_KIND ? CC.REIMBURSEMENT_NOTE : (tdsNote(r) || (reimbursed.length ? CC.DEDUCTION_NOTE : null)),
+    note: r.kind === CC.PAYOUT_KIND ? [CC.REIMBURSEMENT_NOTE, tdsNote(r)].filter(Boolean).join(' ') : (tdsNote(r) || (reimbursed.length ? CC.DEDUCTION_NOTE : null)),
     kind: r.kind || 'booking',
     link: `${SITE}/index.html?payout=${r.id}`
   };
@@ -535,10 +547,14 @@ const DEAD = ['failed', 'reversed', 'rejected', 'cancelled'];
 // hours); one the bank fails or reverses becomes 'failed' (admin retries).
 // A payout's TDS worked out again just before it is sent: a PAN added,
 // approved, rejected or marked inoperative since the row was created
-// counts. Only 'due' or 'failed' booking payouts change; the year's other
-// payouts are taken as they are. Returns the row (updated or not).
+// counts. Only 'due' or 'failed' booking payouts change — and a coupon
+// reimbursed to a co-host (kind 'cohost-coupon', _cohost-coupon.js), which
+// carries TDS like their share; the year's other payouts are taken as they
+// are. Returns the row (updated or not).
 async function refreshTds(sql, row) {
-  if (!row || (row.kind && row.kind !== 'booking') || !['due', 'failed'].includes(row.status)) return row;
+  if (!row || !['due', 'failed'].includes(row.status)) return row;
+  if (row.kind === 'cohost-coupon') return refreshReimbursementTds(sql, row);
+  if (row.kind && row.kind !== 'booking') return row;
   try {
     const key = row.payee_type === 'host' ? 'host' : 'cohost:' + row.payee_guest_id;
     const plan = (await planPayouts(sql, row.order_id, { creditAt: row.created_at, excludeIds: { [key]: row.id } }))
@@ -561,6 +577,28 @@ async function refreshTds(sql, row) {
       upd = await sql`UPDATE payouts SET tds = ${plan.tds}, tds_rate = ${plan.tdsRate}, pan_furnished = ${plan.panFurnished}, net = ${net}
                       WHERE id = ${row.id} AND status IN ('due', 'failed') RETURNING *`;
     }
+    return upd[0] || row;
+  } catch (err) {
+    console.error('TDS refresh failed for payout', row.id, err.message || err);
+    return row;
+  }
+}
+
+// The same for a coupon reimbursed to a co-host: TDS on the row's own gross
+// (the coupon amount, which never changes), at the co-host's rate today.
+async function refreshReimbursementTds(sql, row) {
+  try {
+    const payee = await cohostPayee(sql, row.payee_guest_id);
+    const t = await tdsForPayout(sql, { payee: { payeeType: 'cohost', payeeGuestId: row.payee_guest_id }, base: Number(row.gross), pan: (payee && payee.pan) || {},
+      creditAt: row.created_at, excludePayoutId: row.id });
+    const tds = Math.min(Number(row.gross), t.tds);
+    if (tds === Number(row.tds) && Number(t.rate) === Number(row.tds_rate) && t.reason === row.tds_reason) return row;
+    const net = round2(Number(row.gross) - Number(row.deductions || 0) - tds);
+    if (net < 0) return row;
+    const upd = await sql`
+      UPDATE payouts SET tds = ${tds}, tds_rate = ${t.rate}, pan_furnished = ${t.reason !== 'no_pan' && t.reason !== 'inoperative_pan'}, tds_base = ${t.base},
+                         tds_reason = ${t.reason}, tds_catchup_base = ${t.catchupBase}, tds_fy = ${t.fy}, net = ${net}
+      WHERE id = ${row.id} AND status IN ('due', 'failed') RETURNING *`;
     return upd[0] || row;
   } catch (err) {
     console.error('TDS refresh failed for payout', row.id, err.message || err);

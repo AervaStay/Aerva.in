@@ -115,7 +115,7 @@ async function payoutSent(sql, orderId) {
 }
 const WINDOW_CLOSED = 'This booking can no longer be moved to another property. Once a stay has started, a transfer can be asked for until 10 AM on the day after check-in.';
 const PAID_OUT = 'This booking can no longer be moved to another property: the host has already been paid for it.';
-const LOCKED = 'This booking was transferred, so it cannot be changed, moved, split again, shortened or cancelled. If something is not working, contact Aerva Support; Aerva will look at it and decide.';
+const LOCKED = 'This booking was transferred, so it cannot be changed, moved, split again, shortened or cancelled. If something is not working, raise a request in the Resolution Center; Aerva will look at it and decide.';
 async function transfersReady(sql) {
   try { await sql`SELECT transfer_change_id FROM orders LIMIT 0`; return true; } catch (e) { return false; }
 }
@@ -124,8 +124,13 @@ async function assertTransferable(sql, o, guestId, at = null) {
   if (o.transfer_change_id) throw userError(LOCKED);
   if (!(await transfersReady(sql))) throw userError('Moving a booking to another property is not switched on yet. Please try again later.', 503);
   if (o.status !== 'paid') throw userError('Only a confirmed booking can be moved.');
-  if ((o.charge_currency || 'INR') !== 'INR') throw userError('This booking cannot be moved online. Please raise a request in Aerva Support (Help → Raise a request).');
+  if ((o.charge_currency || 'INR') !== 'INR') throw userError('This booking cannot be moved online. Please raise a request in the Resolution Center (Help → Raise a request).');
   if (o.kind !== 'stay') throw userError('Only a stay can be moved to another property.');
+  // A group (split-payment) booking is paid by several people and is one
+  // booking for all of them: its payers' check-in details, Messages, refunds
+  // and credits all hang on that one booking (_group-bookings.js,
+  // _fee-credits.js creditForGroupPayers), so it cannot be split into parts.
+  if (o.group_booking_id) throw userError('A group booking cannot be moved to another property: it is one booking shared by everyone who paid. For help, raise a request in the Resolution Center (Help → Raise a request).');
   if (!transferOpen(o, at)) throw userError(WINDOW_CLOSED);
   if (await payoutSent(sql, o.id)) throw userError(PAID_OUT);
 }
@@ -347,7 +352,7 @@ async function applyTransfer(sql, razorpay, change, { paymentId = null } = {}) {
     const a = p.addOn || { fee: 0, gst: 0, commission: 0 };
     const commission = stayCommission + Math.round(Number(a.commission) || 0);
     let releaseAt = null;
-    if (Number(d.depositAmount) > 0) releaseAt = require('./_deposits').releaseDateFor(p.departure);   // the host has 24 hours from check-out (_deposits.js)
+    if (Number(d.depositAmount) > 0) { const x = new Date(p.departure + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 7); releaseAt = x.toISOString().slice(0, 10); }
     return { commission, releaseAt, fee: Math.round(d.guestServiceFee + (p.transferFee || 0)), total: p.total,
              rate: d.subtotal > 0 ? Number(((stayCommission / d.subtotal) * 100).toFixed(2)) : 0, payout: Math.round(d.subtotal + (Number(a.fee) || 0) - commission) };
   };
@@ -496,7 +501,7 @@ async function applyTransfer(sql, razorpay, change, { paymentId = null } = {}) {
   for (const id of rowIds) await postThreadMessage(sql, id, 'host', `Booking transferred. ${change.summary}. ${money}`);
   await email(o.guest_email, `Your booking has been moved to ${q.toName}`,
     `<h2 style="font-family:Georgia,serif;">Your booking has been moved</h2><p>${esc(change.summary)}.</p><p>Your stay is now:</p><ul>${partsHtml}</ul><p>${esc(money)}</p>
-     <p>Each part has its own booking code in My Bookings. As agreed, a transferred booking can no longer be changed, split again, shortened or cancelled. If something is not working, contact Aerva Support — Aerva will look at it and decide.</p>`);
+     <p>Each part has its own confirmation code in My Bookings. As agreed, a transferred booking can no longer be changed, split again, shortened or cancelled. If something is not working, raise a request in the Resolution Center — Aerva will look at it and decide.</p>`);
   const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
   const payNote = settled.hostRecovered > 0 ? `<p>Your payout for this booking had already been sent, so the ${inr(settled.hostRecovered)} no longer owed will be deducted from your next payout.</p>`
     : settled.hostAdded > 0 ? `<p>Your payout for this booking had already been sent, so the extra ${inr(settled.hostAdded)} (before TDS) is paid to you separately.</p>` : '';

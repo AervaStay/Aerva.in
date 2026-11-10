@@ -10,8 +10,13 @@
 // shared with the payment_reconcile job that records payments whose
 // browser never came back.
 //
+// A guest whose details are not verified yet (name, phone code, photo ID —
+// _guest-verify.js, only while GUEST_VERIFICATION_REQUIRED is on) pays as
+// always, but the answer is { verified: false, held: {…} }: the payment is
+// held and becomes a booking once the details are verified.
+//
 // Security deposit lifecycle (see orders.deposit_status):
-//   'held'     — set when payment is confirmed; released 24 hours after
+//   'held'     — set when payment is confirmed; released 7 days after
 //                departure unless the host raises a concern.
 //   'disputed' — host-listings.js raiseDispute.
 //   'refunded' — _deposits.js (scheduler / admin).
@@ -151,7 +156,17 @@ module.exports = async (req, res) => {
     }
     switch (result.status) {
       case 'confirmed': return res.status(200).json({ verified: true, confirmationCodes: result.confirmationCodes || [], summary: await summaryFor() });
+      // Paid, but the guest's details are not verified yet (_guest-verify.js):
+      // no booking, code or host email exists. The page shows "Your booking
+      // will be confirmed once your details are submitted and verified."
+      case 'held': return res.status(200).json({ verified: false, held: result.held, message: result.held && result.held.message });
       case 'duplicate': {
+        // A held payment asked about again: still waiting, or what became of it.
+        const hold = await require('./_guest-verify').byOrder(sql, razorpay_order_id);
+        if (hold && ['waiting', 'confirming'].includes(hold.status)) return res.status(200).json({ verified: false, held: hold.view, message: hold.view.message });
+        if (hold && ['refunding', 'refunded'].includes(hold.status)) {
+          return res.status(200).json({ verified: false, refunded: true, message: `${hold.outcome || 'Your details were not verified in time.'} The booking was not made, and your payment is being refunded in full — we have emailed you the details.` });
+        }
         // Already recorded — by an earlier call, or by the reconcile job.
         const codes = await codesFor();
         return res.status(200).json({ verified: true, alreadyConfirmed: true, confirmationCodes: codes, summary: await summaryFor() });

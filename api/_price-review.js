@@ -47,7 +47,7 @@ function discountReason({ type, value, baseRate }) {
   const v = Number(value) || 0;
   if (!(v > 0)) return null;
   const pct = type === 'percentage' ? v : (Number(baseRate) > 0 ? Math.round(v / Number(baseRate) * 100) : 0);
-  if (pct > RULES.maxDiscountPct) return type === 'percentage' ? `${v}% off` : `${inr(v)} off is ${pct}% of the ${inr(baseRate)} price`;
+  if (pct > RULES.maxDiscountPct) return type === 'percentage' ? `${v}% off` : `${inr(v)} off, ${pct}% of the ${inr(baseRate)} price`;
   return null;
 }
 

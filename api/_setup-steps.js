@@ -6,7 +6,9 @@
 // same order, on the dashboard ("Getting set up"), in the profile's
 // Verification tab, and in the bell. The aim: a host listed and sorted in
 // about 10 minutes, a guest in under 5 — every step one clear action.
-// Guests: confirm email → name → phone → profile photo (optional).
+// Guests: confirm email → name → phone → profile photo (optional) → verify
+// phone and verify ID (_guest-verify.js: optional, or required and before
+// the photo while GUEST_VERIFICATION_REQUIRED is on).
 
 const V = 'host-dashboard.html?openProfile=1&profileTab=verification';
 
@@ -33,11 +35,18 @@ async function guestSteps(sql, guestId) {
                               to_jsonb(guests)->>'first_name' AS first_name, to_jsonb(guests)->>'last_name' AS last_name, name
                        FROM guests WHERE id = ${guestId}`)[0];
   if (!g) return [];
+  // Verify phone (SMS code) and verify ID (_guest-verify.js): optional
+  // steps, required ones while GUEST_VERIFICATION_REQUIRED is on. Not shown
+  // at all before their database update.
+  let verify = [];
+  try { verify = await require('./_guest-verify').setupSteps(sql, guestId); } catch (err) { verify = []; }
+  const photo = { key: 'photo', label: 'Add a profile photo', why: 'Optional — hosts like to know who is coming.', optional: true, done: !!g.profile_photo_url, href: 'index.html?view=profile' };
   return [
     { key: 'email', label: 'Confirm your email', why: 'Booking confirmations and receipts go there.', done: !!(g.email_verified || g.email_verified_at), href: 'index.html?view=profile' },
     { key: 'name', label: 'Add your first and last name', why: 'As on your government ID — the host checks it at check-in.', done: !!(String(g.first_name || '').trim() && String(g.last_name || '').trim()), href: 'index.html?view=profile' },
     { key: 'phone', label: 'Add your phone number', why: 'Your host uses it to reach you about the stay.', done: !!String(g.phone || '').trim(), href: 'index.html?view=profile' },
-    { key: 'photo', label: 'Add a profile photo', why: 'Optional — hosts like to know who is coming.', optional: true, done: !!g.profile_photo_url, href: 'index.html?view=profile' }
+    // required steps before optional ones
+    ...(verify.some(v => !v.optional) ? verify.concat([photo]) : [photo].concat(verify))
   ];
 }
 

@@ -12,17 +12,26 @@
 //      contact details are removed from it, like in messages.
 //   3. Only the host's own account answers (never another co-host), within
 //      ANSWER_DAYS (7) days. No answer = expired.
-//   4. ACCEPTED: Aerva only moves the amount between two payouts — no
-//      commission, no fee, no TDS (a reimbursement, not income; the TDS
-//      base of both payouts is unchanged — a point for the CA, see below).
+//   4. ACCEPTED: Aerva moves the amount between two payouts — no
+//      commission and no fee. TDS: nothing changes for the host; the
+//      co-host's side carries TDS like their normal share (see below).
 //        • host:    a host_penalties row, kind 'cohost_coupon', deducted
 //                   from the host's NEXT payout by _payouts.js planPayouts
-//                   (after TDS, whole, when it fits; otherwise it waits for
-//                   the next one that it fits in);
+//                   (after the host's own TDS, whole, when it fits; otherwise
+//                   it waits for the next one that it fits in). The host's
+//                   TDS base is unchanged;
 //        • co-host: when that payout has actually been SENT (the deduction
 //                   is 'recovered'), a payout row of its own to the co-host,
 //                   payouts.kind 'cohost-coupon', sent like any other payout
-//                   (RazorpayX, or by hand in Admin → Payouts).
+//                   (RazorpayX, or by hand in Admin → Payouts): the coupon
+//                   amount, less TDS at the co-host's own rate.
+//      THE AMOUNT IS FIXED AT CANCELLATION: what the co-host actually paid
+//      for the coupon (coupons.amount), copied to the request when they ask
+//      (cohost_coupon_requests.amount) and from there to the deduction and
+//      the co-host's payout. Nothing later — a refund, a change to the
+//      booking, another deduction, the coupon being used or expiring — ever
+//      recalculates it. Only the TDS on it depends on the co-host's PAN and
+//      year, as for any payout.
 //      So money is never paid to the co-host before it is taken from the
 //      host. Each step is guarded by a unique index, so nothing is applied
 //      twice: one request per booking, one deduction per request, one
@@ -31,17 +40,31 @@
 //      told, and that they can settle with the host directly. A declined or
 //      expired request cannot be sent again.
 //
-// FOR THE CA (TDS). The host's deduction is taken after TDS, so the host's
-// TDS base stays the booking amount due to them; the co-host's row carries
-// tds 0, tds_base 0, tds_reason 'not_applicable' and no tds_fy, so it is in
-// no TDS return or yearly total. Treated as a reimbursement of an expense
-// between two payees, not a payment for services under s.194-O / s.393(1).
+// FOR THE CA (TDS) — the owner's rule of 10 Nov 2026 (it replaces the first
+// version of the same day, which deducted no TDS on the reimbursement).
+//   • Host: the deduction is taken after the host's own TDS, in full, so
+//     the host's TDS base stays the booking amount due to them.
+//   • Co-host: TDS IS deducted from the reimbursement, by the same rules as
+//     their share (_tds.js tdsForPayout): 0.1% with a PAN, 5% with no PAN
+//     or an inoperative one; and, only if the ₹5,00,000 exemption for
+//     individuals/HUFs is ever switched on (TDS_THRESHOLD_INDIVIDUAL), it
+//     counts toward the year's total and the catch-up rules apply. The row
+//     carries tds, tds_rate, tds_base (= the coupon amount), tds_reason,
+//     tds_catchup_base and tds_fy (the financial year its row is created
+//     in), so it is in the TDS return / CSV (Admin → Payouts → TDS), the
+//     co-host's yearly total, their monthly statement and Accounts (TDS
+//     payable). Like a booking payout, its TDS is worked out again just
+//     before it is sent (_payouts.js refreshTds): a PAN added or marked
+//     inoperative since counts.
+//     Example: coupon ₹1,100, PAN on file → TDS ₹1.10, ₹1,098.90 paid;
+//     no PAN → TDS ₹55, ₹1,045 paid. The host is charged ₹1,100 either way.
 //
 // Before the database update has run every function here answers "not
 // available" (ready() is false) and nothing else changes.
 
 const { logAudit } = require('./_audit-log');
 const { redactContactInfo } = require('./_redact');
+const { tdsForPayout } = require('./_tds');
 
 const ASK_DAYS = 30;          // from the cancellation, to ask
 const ANSWER_DAYS = 7;        // for the host to answer
@@ -53,7 +76,7 @@ const MIGRATION = '2026-11-10-08-cohost-coupon-requests.sql';
 
 const userError = (message, status = 400, extra) => Object.assign(new Error(message), { isUserFacing: true, status }, extra ? { extra } : {});
 const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-const inr = (n) => '₹' + (Math.round((Number(n) || 0) * 100) / 100).toLocaleString('en-IN');
+const inr = (n) => { const v = Math.round((Number(n) || 0) * 100) / 100; return '₹' + v.toLocaleString('en-IN', Number.isInteger(v) ? {} : { minimumFractionDigits: 2, maximumFractionDigits: 2 }); };
 const round2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const firstName = (first, name, fallback) => String(first || '').trim().split(/\s+/)[0] || String(name || '').trim().split(/\s+/)[0] || fallback;
 const dayText = (v) => {
@@ -180,7 +203,7 @@ async function ask(sql, { orderId, cohostGuestId, note, from = 'later' }) {
         <tr><td style="padding:5px 0; color:#6e675d;">Coupon</td><td style="padding:5px 0; text-align:right; font-weight:bold;">${esc(inr(r.amount))}</td></tr>
       </table>
       ${r.note ? `<p style="background:#faf6ef; border-radius:10px; padding:12px 14px;"><strong>${esc(r.cohostFirstName)} wrote:</strong> ${esc(r.note)}</p>` : ''}
-      <p><strong>If you accept</strong>, ${esc(inr(r.amount))} is deducted from your next payout and added to ${esc(r.cohostFirstName)}’s next payout. Aerva only moves it between the two payouts: no commission and no fee.</p>
+      <p><strong>If you accept</strong>, ${esc(inr(r.amount))} is deducted from your next payout, after your own TDS (your TDS does not change), and paid to ${esc(r.cohostFirstName)} once that payout has been sent. Aerva charges no commission and no fee on it; TDS is deducted from ${esc(r.cohostFirstName)}’s side at their own rate, as on their share.</p>
       <p><strong>If you decline, or do not answer by ${esc(dayText(r.answerBy))}</strong>, nothing moves through Aerva.</p>
       <p style="text-align:center; margin:22px 0;"><a href="${SITE}/host-dashboard.html?coupon=${r.id}" style="display:inline-block; background:#1c1a17; color:#fff; padding:12px 22px; border-radius:999px; text-decoration:none;">Answer on Aerva</a></p>
       <p style="font-size:12.5px; color:#888;">Only you can answer, from your own account.</p>`));
@@ -189,11 +212,29 @@ async function ask(sql, { orderId, cohostGuestId, note, from = 'later' }) {
 }
 
 // Tell the co-host what became of their request (email; the bell reads the table).
-async function tellCohost(r, outcome) {
+async function tellCohost(r, outcome, sql) {
+  // What the co-host can expect to receive: TDS as it stands today (their
+  // PAN and year); the payout itself is worked out when it is created.
+  let tdsLine = `TDS is deducted from it at your own rate, as on your co-host share: 0.1% with a PAN on file, 5% without one or if your PAN is inoperative. It counts in your Form 26AS like your other payouts.`;
+  if (outcome === 'accepted' && sql) {
+    try {
+      const payee = await require('./_payouts').cohostPayee(sql, r.cohostGuestId);
+      const t = await tdsForPayout(sql, { payee: { payeeType: 'cohost', payeeGuestId: r.cohostGuestId }, base: round2(r.amount), pan: (payee && payee.pan) || {} });
+      const tds = Math.min(round2(r.amount), t.tds);
+      const why = t.reason === 'no_pan' ? `${t.rate}%, no PAN on file` : t.reason === 'inoperative_pan' ? `${t.rate}%, your PAN is not linked to Aadhaar` : t.reason === 'threshold_crossed' ? `${t.rate}%, including this year’s earlier payouts` : `${t.rate}%`;
+      tdsLine = tds > 0
+        ? `TDS is deducted from it at your own rate, as on your co-host share. As things stand today: ${esc(inr(r.amount))} − TDS ${esc(inr(tds))} (${esc(why)}) = <strong>${esc(inr(round2(r.amount - tds)))}</strong> paid to you. The TDS is worked out when the payout is made, is credited against your PAN and shows in your Form 26AS.`
+        : t.reason === 'below_threshold'
+        ? `TDS applies to it as to your co-host share. As things stand today no TDS is due on it (your earnings through Aerva this financial year are within ₹5,00,000), so ${esc(inr(r.amount))} is paid to you; it counts toward your year’s total.`
+        : tdsLine;
+    } catch (e) { /* the general line */ }
+  }
   const settle = 'Nothing moves through Aerva for this coupon. You can settle it with the host directly.';
   const text = outcome === 'accepted'
     ? `<p>${esc(r.hostName)} agreed to cover the ${esc(inr(r.amount))} coupon you paid for booking ${esc(r.booking)} (${esc(r.listing)}).</p>
-       <p>It is deducted from their next payout and paid to you then, with nothing taken off: no commission, no fee and no TDS. It shows in your payout summary as “+${esc(inr(r.amount))} (reimbursed by host)”.</p>`
+       <p>The full ${esc(inr(r.amount))} is deducted from their next payout and paid to you once that payout has been sent. Aerva takes no commission and no fee on it.</p>
+       <p>${tdsLine}</p>
+       <p>It shows in your payout summary as “Coupon for booking ${esc(r.booking)} (reimbursed by host)”, with the TDS on its own line.</p>`
     : outcome === 'declined'
     ? `<p>${esc(r.hostName)} declined to cover the ${esc(inr(r.amount))} coupon you paid for booking ${esc(r.booking)} (${esc(r.listing)}).</p><p>${settle}</p>`
     : outcome === 'expired'
@@ -262,7 +303,7 @@ async function answer(sql, { requestId, guestId, accept }) {
   if (!pen.length) throw userError('This request has already been answered.', 409);
   await logAudit(sql, { action: 'cohost_coupon_request_accepted', success: true, actorType: 'host', actorIdentifier: String(me.id), targetType: 'order', targetId: r.orderId,
     metadata: { requestId: r.id, amount: r.amount, penaltyId: pen[0].id, cohostGuestId: row.cohost_guest_id } });
-  try { await tellCohost(r, 'accepted'); } catch (err) { /* told by the bell */ }
+  try { await tellCohost(Object.assign(r, { cohostGuestId: row.cohost_guest_id }), 'accepted', sql); } catch (err) { /* told by the bell */ }
   return { accepted: true, amount: r.amount, request: Object.assign(r, { status: 'accepted' }) };
 }
 
@@ -298,15 +339,20 @@ async function settleDeducted(sql, opts = {}) {
           }
           continue;
         }
-        // Taken from the host: the co-host's own payout row. No commission,
-        // no fee, no TDS. ON CONFLICT (one per booking, co-host and kind).
+        // Taken from the host: the co-host's own payout row. No commission
+        // and no fee; TDS at the co-host's own rate, like their share, on
+        // the coupon amount fixed on the request (never worked out again).
+        // ON CONFLICT (one per booking, co-host and kind).
         const payee = await P.cohostPayee(sql, r.cohost_guest_id);
         const amount = round2(r.amount);
+        const t = await tdsForPayout(sql, { payee: { payeeType: 'cohost', payeeGuestId: r.cohost_guest_id }, base: amount, pan: (payee && payee.pan) || {} });
+        const tds = Math.min(amount, t.tds);
+        const panOk = t.reason !== 'no_pan' && t.reason !== 'inoperative_pan';
         let made = (await sql`
           INSERT INTO payouts (order_id, payee_type, host_id, payee_guest_id, status, gross, commission, cohost_shares, deductions, deducted_penalty_ids, tds, tds_rate, pan_furnished, net, bank_label, auto_eligible, kind,
                                tds_base, tds_reason, tds_catchup_base, tds_fy)
-          VALUES (${r.order_id}, 'cohost', ${r.host_id}, ${r.cohost_guest_id}, 'due', ${amount}, 0, 0, 0, ${[]}, 0, 0, ${!!(payee && payee.panFurnished)}, ${amount},
-                  ${(payee && payee.bankLabel) || null}, ${P.razorpayxReady()}, ${PAYOUT_KIND}, 0, 'not_applicable', 0, NULL)
+          VALUES (${r.order_id}, 'cohost', ${r.host_id}, ${r.cohost_guest_id}, 'due', ${amount}, 0, 0, 0, ${[]}, ${tds}, ${t.rate}, ${panOk}, ${round2(amount - tds)},
+                  ${(payee && payee.bankLabel) || null}, ${P.razorpayxReady()}, ${PAYOUT_KIND}, ${t.base}, ${t.reason}, ${t.catchupBase}, ${t.fy})
           ON CONFLICT DO NOTHING RETURNING id`)[0];
         const fresh = !!made;
         if (!made) made = (await sql`SELECT id FROM payouts WHERE order_id = ${r.order_id} AND payee_type = 'cohost' AND payee_guest_id = ${r.cohost_guest_id} AND kind = ${PAYOUT_KIND}`)[0];
@@ -316,7 +362,7 @@ async function settleDeducted(sql, opts = {}) {
         if (!done.length) continue;
         out.reimbursed++; out.payoutIds.push(made.id);
         await logAudit(sql, { action: 'cohost_coupon_reimbursement_due', success: true, actorType: 'system', targetType: 'order', targetId: r.order_id,
-          metadata: { requestId: r.id, amount, penaltyId: r.penalty_id, hostPayoutId: r.host_payout_id || null, cohostPayoutId: made.id, cohostGuestId: r.cohost_guest_id } });
+          metadata: { requestId: r.id, amount, tds, tdsRate: t.rate, tdsReason: t.reason, net: round2(amount - tds), penaltyId: r.penalty_id, hostPayoutId: r.host_payout_id || null, cohostPayoutId: made.id, cohostGuestId: r.cohost_guest_id } });
         if (fresh && opts.send !== false && P.razorpayxReady()) { try { await P.attemptPayout(sql, made.id); } catch (e) { /* retried every 4 hours */ } }
       } catch (err) { console.error('co-host coupon reimbursement not created (retried by the payouts job):', r.id, err.message); }
     }
@@ -384,7 +430,7 @@ async function bellNotifications(sql, { hostId, guestId }) {
       rows.forEach(r => {
         const host = r.host_name || 'Your host', amt = inr(r.amount);
         const t = r.status === 'accepted' ? [`${host} will cover the ${amt} coupon`, 'It is deducted from their next payout and paid to you then.']
-          : r.status === 'reimbursed' ? [`${amt} coupon reimbursed by ${host}`, 'Taken from their payout; it is on its way to you as a payout of its own.']
+          : r.status === 'reimbursed' ? [`${amt} coupon reimbursed by ${host}`, 'Taken from their payout; it is on its way to you as a payout of its own, less TDS at your rate.']
           : r.status === 'declined' ? [`${host} declined to cover the ${amt} coupon`, 'Nothing moves through Aerva. You can settle it with the host directly.']
           : r.status === 'expired' ? [`No answer about the ${amt} coupon`, `${host} did not answer in ${ANSWER_DAYS} days. You can settle it with the host directly.`]
           : [`The ${amt} coupon will not be covered through Aerva`, 'You can settle it with the host directly.'];
@@ -421,8 +467,10 @@ async function deductionLines(sql, penaltyIds) {
   } catch (e) { return []; }
 }
 const reimbursementLabel = (code) => `Coupon for booking ${code} (reimbursed by host)`;
-const REIMBURSEMENT_NOTE = 'A reimbursement from your host for the guest’s coupon you paid: not income, so no commission, no fee and no TDS.';
-const DEDUCTION_NOTE = 'The coupon reimbursement to your co-host is taken after TDS and does not change it.';
+// Under a payout's lines. The co-host's: with the TDS line's own note (a
+// missing PAN, the year's total) when there is one.
+const REIMBURSEMENT_NOTE = 'A reimbursement from your host for the guest’s coupon you paid: no commission and no fee. TDS is deducted at your own rate, as on your co-host share, and counts toward your earnings through Aerva for the year.';
+const DEDUCTION_NOTE = 'The coupon reimbursement to your co-host is taken in full after your TDS and does not change it. TDS on the reimbursement is deducted from your co-host’s side, not yours.';
 
 module.exports = { ASK_DAYS, ANSWER_DAYS, NOTE_MAX, PENALTY_KIND, PAYOUT_KIND, ready, cleanNote, eligibility, ask, answer, expireDue, settleDeducted,
   forHost, forCohost, bellNotifications, adminList, deductionLines, reimbursementLabel, REIMBURSEMENT_NOTE, DEDUCTION_NOTE };

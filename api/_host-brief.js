@@ -33,8 +33,8 @@ async function sendBriefs(sql, { deadlineMs = 8000 } = {}) {
     const li = (r, what) => `<li><strong>${esc(r.guest_name)}</strong>${Number(r.guests) > 1 ? ` (${Number(r.guests)} guests)` : ''} — ${esc(r.suite_name)} · ${what}</li>`;
     const html = `<div style="font-family:sans-serif; max-width:540px; color:#1c1a17; line-height:1.6;">
       <h2 style="font-family:Georgia,serif;">Your day on Aerva</h2>
-      <p><strong>Checking in today:</strong> ${arrivals.length ? '' : 'nobody'}</p>${arrivals.length ? `<ul>${arrivals.map(r => li(r, `from ${esc(r.check_in_time || '1:00 pm')}, ${Number(r.nights)} night${Number(r.nights) === 1 ? '' : 's'}`)).join('')}</ul>` : ''}
-      <p><strong>Checking out today:</strong> ${departures.length ? '' : 'nobody'}</p>${departures.length ? `<ul>${departures.map(r => li(r, `by ${esc(r.check_out_time || '11:00 am')}`)).join('')}</ul>` : ''}
+      <p><strong>Checking in today:</strong> ${arrivals.length ? '' : 'nobody'}</p>${arrivals.length ? `<ul>${arrivals.map(r => li(r, `from ${esc(r.check_in_time || '2:00 PM')}, ${Number(r.nights)} night${Number(r.nights) === 1 ? '' : 's'}`)).join('')}</ul>` : ''}
+      <p><strong>Checking out today:</strong> ${departures.length ? '' : 'nobody'}</p>${departures.length ? `<ul>${departures.map(r => li(r, `by ${esc(r.check_out_time || '11:00 AM')}`)).join('')}</ul>` : ''}
       <p><strong>Coming up in the next ${AHEAD_DAYS} days:</strong> ${ahead.length ? '' : 'no arrivals'}</p>${ahead.length ? `<ul>${ahead.map(r => li(r, `arrives ${esc(day(r.arrival))}, ${Number(r.nights)} night${Number(r.nights) === 1 ? '' : 's'}`)).join('')}</ul>` : ''}
       <p><a href="https://aerva.in/index.html?view=today" style="color:#8a6c39;">Open Today on Aerva</a></p>
       <p style="font-size:12px; opacity:0.6;">You get this each morning when something is booked. ${helpLine({}, 'Questions?')}</p></div>`;

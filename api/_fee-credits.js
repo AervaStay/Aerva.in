@@ -366,6 +366,33 @@ async function creditForGroupPayers(sql, orderId, reason) {
     const p = byPerson.get(c.guest_id) || { email: c.email, amount: 0, expiresAt: row.expires_at };
     p.amount += money; byPerson.set(c.guest_id, p);
   }
+  // What was paid on top after confirmation — the difference of a change to
+  // the booking (longer dates, add-ons), paid by the organiser on its own
+  // payment, not a group place — is that payer's too: without this it was
+  // neither refunded nor credited when the booking was cancelled.
+  try {
+    const claimPays = new Set(claims.map(c => c.razorpay_payment_id));
+    const extras = await sql`SELECT bc.id, bc.guest_id, bc.difference, bc.razorpay_payment_id, bc.applied_at, g.email FROM booking_changes bc JOIN guests g ON g.id = bc.guest_id
+                             WHERE bc.order_id = ${o.id} AND bc.status = 'applied' AND bc.difference > 0 AND bc.razorpay_payment_id IS NOT NULL ORDER BY bc.id`;
+    for (const x of extras) {
+      if (claimPays.has(x.razorpay_payment_id)) continue;
+      if ((await sql`SELECT 1 FROM fee_credits WHERE group_order_id = ${o.id} AND razorpay_payment_id = ${x.razorpay_payment_id} AND group_claim_id IS NULL`).length) continue;
+      const refunded = Number((await sql`SELECT COALESCE(sum(amount), 0) AS v FROM refunds WHERE order_id = ${o.id} AND razorpay_payment_id = ${x.razorpay_payment_id} AND status <> 'failed'`)[0].v) / 100;
+      const money = Math.max(0, Math.floor(Number(x.difference) - refunded));
+      if (money <= 0) continue;
+      const row = (await sql`INSERT INTO fee_credits (guest_id, guest_email, source_order_id, razorpay_payment_id, amount, remaining, expires_at, reason, group_order_id)
+                             VALUES (${x.guest_id}, ${x.email}, NULL, ${x.razorpay_payment_id}, ${money}, ${money}, ${creditEnd(x.applied_at)}::timestamptz, ${reason}, ${o.id}) RETURNING *`)[0];
+      await entry(sql, row.id, 'issued', money, { orderId: o.id, reference: x.razorpay_payment_id,
+        note: `${reason === 'natural_disaster' ? 'Natural disaster / government order (approved by Aerva)' : 'Host cancelled'}: group booking, the difference this payer paid for a change` });
+      out.total += money; out.credits.push({ id: row.id, guestId: x.guest_id, email: x.email, amount: money, paymentId: x.razorpay_payment_id });
+      out.expiresAt = (!out.expiresAt || new Date(row.expires_at) < new Date(out.expiresAt)) ? row.expires_at : out.expiresAt;
+      const p = byPerson.get(x.guest_id) || { email: x.email, amount: 0, expiresAt: row.expires_at };
+      p.amount += money; byPerson.set(x.guest_id, p);
+    }
+  } catch (err) {
+    console.error('group credit for a change payment not made (needs follow-up):', o.id, err.message);
+    await logAudit(sql, { action: 'group_credit_failed', success: false, actorType: 'system', targetType: 'order', targetId: o.id, metadata: { changePayment: true, error: String(err.message || err).slice(0, 200) } });
+  }
   for (const p of byPerson.values()) await creditEmail(p.email, { amount: p.amount, suite: o.suite_name, expiresAt: p.expiresAt, reason, share: true });
   return out;
 }
@@ -511,7 +538,7 @@ const EMAIL_MONTHS = [2, 5, 8, 11];    // 2nd month of each quarter
 const EMAIL_DAY = 15, EMAIL_LAST_DAY = 21;
 const TAGLINES = [
   { subject: (a) => `Your next getaway is already ${a} closer`, line: (a) => `You have <strong>${a}</strong> of Aerva credit waiting. Pick a stay — it comes off the price automatically.` },
-  { subject: (a) => `${a} is waiting in your Aerva wallet`, line: (a) => `Somewhere beautiful is waiting, and <strong>${a}</strong> of it is already paid for.` },
+  { subject: (a) => `${a} of Aerva credit is waiting for you`, line: (a) => `Somewhere beautiful is waiting, and <strong>${a}</strong> of it is already paid for.` },
   { subject: (a) => `A weekend away, partly on us: ${a} of credit`, line: (a) => `Your <strong>${a}</strong> Aerva credit is ready to use on any stay or experience in India.` },
   { subject: (a) => `Don’t let ${a} sit idle — plan your escape`, line: (a) => `Hills, beaches or a quiet villa: use your <strong>${a}</strong> credit on your next booking.` }
 ];

@@ -26,7 +26,7 @@ function helpUrl({ category, order, listing } = {}) {
 
 const attr = (s) => String(s).replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;');
 
-function helpLink(opts = {}, text = 'Raise a request in Aerva Support') {
+function helpLink(opts = {}, text = 'Raise a request in the Resolution Center') {
   return `<a href="${attr(helpUrl(opts))}" style="color:#8a6c39;">${text}</a>`;
 }
 
@@ -43,7 +43,7 @@ function signinHelpUrl({ problem } = {}) {
   if (problem && SIGNIN_PROBLEMS.includes(problem)) q.push('problem=' + problem);
   return SITE + '/index.html?' + q.join('&');
 }
-function signinHelpLink(opts = {}, text = 'tell us through “Can’t sign in?” in Aerva Support') {
+function signinHelpLink(opts = {}, text = 'tell us through “Can’t sign in?” in the Resolution Center') {
   return `<a href="${attr(signinHelpUrl(opts))}" style="color:#8a6c39;">${text}</a>`;
 }
 const SIGNIN_HELP_TEXT = 'Help → Can’t sign in? (aerva.in/index.html?view=help&signin=1)';

@@ -390,6 +390,156 @@
   const listingForm = document.getElementById('listingForm');
   const listingSubmitBtn = document.getElementById('listingSubmitBtn');
 
+  // ---- Light photo previews (10 Nov 2026) ----
+  // A phone photo is 12 megapixels or more: showing 40 of them at full size
+  // (and decoding 40 at once to sort them) used so much memory that the
+  // browser threw the page away and reloaded it — the form came back empty.
+  // Every preview on this form is now a small copy, made one photo at a
+  // time; the original file is only read again when it is uploaded.
+  const smallPreviews = new WeakMap();   // File -> small data URL
+  const originalUrls = new WeakMap();    // File -> object URL of the original (until the small copy is ready)
+  let previewQueue = Promise.resolve();
+  function smallCopy(file, maxSide, quality){
+    const draw = (source, w, h, done) => {
+      const k = Math.min(1, maxSide / Math.max(w, h));
+      const c = document.createElement('canvas');
+      c.width = Math.max(1, Math.round(w * k)); c.height = Math.max(1, Math.round(h * k));
+      c.getContext('2d').drawImage(source, 0, 0, c.width, c.height);
+      const data = c.toDataURL('image/jpeg', quality);
+      c.width = c.height = 0;
+      done(data);
+    };
+    const viaImage = () => new Promise((resolve) => {
+      const url = URL.createObjectURL(file);
+      const img = new Image();
+      img.onload = () => { try{ draw(img, img.naturalWidth, img.naturalHeight, resolve); }catch(e){ resolve(null); } URL.revokeObjectURL(url); img.src = ''; };
+      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
+      img.src = url;
+    });
+    if(typeof createImageBitmap !== 'function') return viaImage();
+    // Decoded straight to the small size where the browser can (far less memory).
+    return createImageBitmap(file, { resizeWidth: maxSide, resizeQuality: 'medium' })
+      .then(bmp => new Promise((resolve) => { try{ draw(bmp, bmp.width, bmp.height, resolve); }catch(e){ resolve(null); } if(bmp.close) bmp.close(); }))
+      .catch(viaImage);
+  }
+  function photoPreviewUrl(file){
+    if(smallPreviews.has(file)) return smallPreviews.get(file);
+    if(!originalUrls.has(file)){
+      const url = URL.createObjectURL(file);
+      originalUrls.set(file, url);
+      // One at a time, in the background; then every picture showing the
+      // original switches to the small copy and the original is let go.
+      previewQueue = previewQueue.then(() => smallCopy(file, 480, 0.7)).then((data) => {
+        if(!data) return;
+        smallPreviews.set(file, data);
+        document.querySelectorAll('img').forEach(img => { if(img.src === url) img.src = data; });
+        originalUrls.delete(file);
+        setTimeout(() => URL.revokeObjectURL(url), 1500);
+      }).catch(() => {});
+    }
+    return originalUrls.get(file);
+  }
+
+  // ---- What was typed survives a reload (10 Nov 2026) ----
+  // Kept in this browser only, per account, for 7 days; cleared when the
+  // listing is submitted or saved as a draft. Photos cannot be kept this
+  // way — the note says so.
+  const LIST_AUTOSAVE_KEY = 'aerva_list_property_autosave';
+  function listAutosaveOwner(){ return String(safeStorage.get('aerva_guest_email') || '').trim().toLowerCase(); }
+  function listAutosaveFields(){
+    return Array.from(listingForm.querySelectorAll('input, select, textarea')).filter(el =>
+      (el.id || el.name) && !['file', 'password', 'hidden', 'submit', 'button'].includes(el.type) && !el.closest('[data-no-autosave]'));
+  }
+  let listAutosaveTimer = null, listAutosaveOff = false;
+  // A resumed draft (?edit=) and a cloned listing (?clone=1) fill the form
+  // themselves from a saved listing: nothing typed for a NEW listing is
+  // brought into them, and they are not kept as "what you had typed" for
+  // the next new listing either.
+  function listAutosaveNotThisForm(){ const q = new URLSearchParams(window.location.search); return q.get('clone') === '1' || !!q.get('edit'); }
+  function listAutosaveNow(){
+    if(listAutosaveOff || !listAutosaveOwner() || listAutosaveNotThisForm()) return;
+    const values = {};
+    listAutosaveFields().forEach(el => {
+      const key = (el.type === 'checkbox' || el.type === 'radio') ? 'c:' + (el.name || el.id) + ':' + el.value : 'v:' + (el.id || el.name);
+      if(el.type === 'checkbox' || el.type === 'radio'){ if(el.checked) values[key] = 1; }
+      else if(String(el.value || '').trim()) values[key] = String(el.value).slice(0, 6000);
+    });
+    // The highlights, recommendations and chosen experiences are drawn by
+    // their own editor (no ids), and the picked location sits in hidden fields.
+    let special = null, loc = null;
+    try{
+      const sp = listSpecialEditor ? listSpecialEditor.get() : null;
+      if(sp && (sp.specialHighlights.length || sp.hostRecommendations.length || sp.suggestedExperienceIds.length)) special = sp;
+      const lat = document.getElementById('listLatitude').value, lng = document.getElementById('listLongitude').value;
+      if(lat && lng) loc = { lat, lng, addr: String(document.getElementById('listFormattedAddress').value || '').slice(0, 500) };
+    }catch(e){ special = null; loc = null; }
+    try{
+      if(Object.keys(values).length || special || loc) safeStorage.set(LIST_AUTOSAVE_KEY, JSON.stringify({ owner: listAutosaveOwner(), at: Date.now(), values, special, loc }));
+      else safeStorage.remove(LIST_AUTOSAVE_KEY);
+    }catch(e){ /* storage full or blocked: nothing kept */ }
+  }
+  function listAutosaveClear(){ try{ safeStorage.remove(LIST_AUTOSAVE_KEY); }catch(e){} }
+  function listAutosaveRestore(){
+    // A cloned listing or a resumed draft fills the form itself.
+    if(listAutosaveNotThisForm()) return;
+    let saved = null;
+    try{ saved = JSON.parse(safeStorage.get(LIST_AUTOSAVE_KEY) || 'null'); }catch(e){ saved = null; }
+    if(!saved || !saved.values || !listAutosaveOwner() || saved.owner !== listAutosaveOwner() || Date.now() - Number(saved.at || 0) > 7 * 864e5){ if(saved) listAutosaveClear(); return; }
+    let restored = 0;
+    listAutosaveOff = true;
+    // Selects that reshape the form (property type, bedrooms) first.
+    const fields = listAutosaveFields().sort((a, b) => (a.tagName === 'SELECT' ? 0 : 1) - (b.tagName === 'SELECT' ? 0 : 1));
+    fields.forEach(el => {
+      if(el.type === 'checkbox' || el.type === 'radio'){
+        const on = !!saved.values['c:' + (el.name || el.id) + ':' + el.value];
+        if(on && !el.checked){ el.checked = true; restored++; el.dispatchEvent(new Event('change', { bubbles: true })); }
+      } else {
+        const v = saved.values['v:' + (el.id || el.name)];
+        // A select always has a value (its default): restored when it differs.
+        const empty = el.tagName === 'SELECT' ? el.value !== v : !String(el.value || '').trim();
+        if(v != null && empty){ el.value = v; if(el.value === v){ restored++; el.dispatchEvent(new Event(el.tagName === 'SELECT' ? 'change' : 'input', { bubbles: true })); } }
+      }
+    });
+    try{
+      const sp = saved.special;
+      if(sp && listSpecialEditor){
+        const cur = listSpecialEditor.get();
+        if(!cur.specialHighlights.length && !cur.hostRecommendations.length && !cur.suggestedExperienceIds.length){
+          listSpecialEditor.set({ special_highlights: sp.specialHighlights, special_story: document.getElementById('listSpecialStory') ? document.getElementById('listSpecialStory').value : sp.specialStory,
+            host_recommendations: sp.hostRecommendations, suggested_experience_ids: sp.suggestedExperienceIds });
+          restored++;
+        }
+      }
+      const loc = saved.loc;
+      if(loc && isFinite(Number(loc.lat)) && isFinite(Number(loc.lng)) && !document.getElementById('listLatitude').value){
+        document.getElementById('listLatitude').value = loc.lat;
+        document.getElementById('listLongitude').value = loc.lng;
+        document.getElementById('listFormattedAddress').value = loc.addr || '';
+        const locConfirm = document.getElementById('listLocationConfirm');
+        if(locConfirm){ locConfirm.textContent = '✓ Location set: ' + (loc.addr || ''); locConfirm.style.display = 'block'; }
+        try{ updateListPinMap(loc.lat, loc.lng); }catch(e){}
+        restored++;
+      }
+    }catch(e){ /* the rest is still restored */ }
+    listAutosaveOff = false;
+    if(restored){
+      const note = document.createElement('p');
+      note.setAttribute('role', 'status');
+      note.style.cssText = 'background:#f4eadc; border-radius:8px; padding:10px 12px; font-size:13.5px; margin:0 0 14px;';
+      note.textContent = 'We brought back what you had typed. Photos could not be kept — please add them again. ';
+      const b = document.createElement('button');
+      b.type = 'button'; b.textContent = 'Start with an empty form';
+      b.style.cssText = 'background:none; border:none; color:#8a6c39; text-decoration:underline; cursor:pointer; font-size:13px; padding:0;';
+      b.addEventListener('click', () => { listAutosaveClear(); location.reload(); });
+      note.appendChild(b);
+      listingForm.insertBefore(note, listingForm.firstChild);
+    }
+  }
+  ['input', 'change'].forEach(evt => listingForm.addEventListener(evt, () => { clearTimeout(listAutosaveTimer); listAutosaveTimer = setTimeout(listAutosaveNow, 600); }));
+  window.addEventListener('pagehide', listAutosaveNow);
+  // After everything else on the form has been set up.
+  setTimeout(listAutosaveRestore, 0);
+
   // ---- Login gate: a listing must belong to a real, logged-in account ----
   // (single login now — see guest-auth.js/guest-phone-auth.js — there's
   // no separate "host account" to sign into anymore)
@@ -398,8 +548,60 @@
   if(!hostSessionToken){
     document.getElementById('loggedOutGate').style.display = 'block';
     listingForm.style.display = 'none';
-  } else {
-    document.getElementById('listHostEmailDisplay').textContent = hostSessionEmail || '';
+  }
+
+  // ---- The host's contact details come from their Profile (owner, 10 Nov
+  // 2026). The listing forms do not ask for a name, phone or email: the
+  // server (api/submit-listing.js) takes them from the signed-in account. The
+  // form shows them on one read-only line, with a link to the profile; and
+  // if the name or the phone is missing, "Complete your profile"
+  // (aerva-guest-verify.js) opens — when the form is opened, and, REQUIRED,
+  // when the host presses Submit (a draft saves without). Nothing typed in
+  // the form is touched: the submit simply carries on after saving.
+  let aervaListingContact = null;
+  async function aervaLoadListingContact(){
+    const token = safeStorage.get('aerva_guest_session');
+    if(!token) return null;
+    try{
+      const r = await fetch(SUITES_API_BASE + '/api/guest-auth', { headers: { 'Authorization': 'Bearer ' + token } });
+      if(!r.ok) return aervaListingContact;
+      const g = (await r.json()).guest || {};
+      const pp = g.profilePrompt || {};
+      const name = [pp.firstName, pp.lastName].filter(Boolean).join(' ').trim() || String(g.name || '').trim();
+      aervaListingContact = { name, phone: String(g.phone || '').trim(), email: String(g.email || '').trim(), firstName: pp.firstName || '', lastName: pp.lastName || '',
+        missing: [].concat(name ? [] : ['firstName', 'lastName'], String(g.phone || '').trim() ? [] : ['phone']) };
+    }catch(e){ /* the line stays as it was */ }
+    aervaRenderListingContact();
+    return aervaListingContact;
+  }
+  function aervaRenderListingContact(){
+    const c = aervaListingContact;
+    ['listContactLine', 'expContactLine'].forEach(id => {
+      const el = document.getElementById(id);
+      if(!el) return;
+      if(!c){ el.hidden = true; return; }
+      const esc = escapeMessageHtml;
+      const bits = [c.name ? esc(c.name) : '<em>no name yet</em>', c.phone ? esc(c.phone) : '<em>no phone yet</em>', c.email ? esc(c.email) : ''].filter(Boolean).join(' · ');
+      el.innerHTML = `<strong>Contact:</strong> ${bits} — from your profile (<a href="index.html?view=profile" style="color:var(--gold-deep); text-decoration:underline;">Edit</a>)`;
+      el.hidden = false;
+    });
+  }
+  // true when the account has a name and a phone (asking for them first if
+  // not). required: Submit — no "Do it later"; "Back to the form" stops the submit.
+  async function aervaEnsureListingContact(required){
+    const c = await aervaLoadListingContact();
+    if(!c || !c.missing.length) return true;       // (not known: the server has the final say)
+    if(!window.AervaGuestVerify) return false;
+    return new Promise((resolve) => {
+      window.AervaGuestVerify.openProfilePrompt({ needed: true, missing: c.missing, firstName: c.firstName, lastName: c.lastName, phone: c.phone },
+        { required: true, lead: 'Guests and Aerva reach you on these details.',
+          then: async (done) => { if(done) await aervaLoadListingContact(); resolve(!!done && !!aervaListingContact && !aervaListingContact.missing.length); } });
+    });
+  }
+  if(hostSessionToken){
+    const v = new URLSearchParams(window.location.search).get('view');
+    if(v === 'list-property' || v === 'list-experience') setTimeout(() => { aervaEnsureListingContact(true); }, 900);
+    else setTimeout(aervaLoadListingContact, 0);
   }
 
   // "not you?" — goes to guest-login.html in "switch account" mode
@@ -408,10 +610,7 @@
   // succeeds (see storeSession() there, a plain overwrite). Logging out
   // immediately on just a click would strand the host with no account
   // at all if they back out or the new login fails.
-  document.getElementById('listSwitchAccountLink').addEventListener('click', function(e){
-    e.preventDefault();
-    window.location.href = 'guest-login.html?switchAccount=1';
-  });
+  // (The "not you?" link went with the contact section: the form no longer shows the email field.)
 
   // ---- Host phone: country-aware format validation, then OTP
   // verification before the number is accepted. Real SMS delivery isn't
@@ -442,6 +641,9 @@
 
   (function setupHostPhoneVerification(){
     const countrySelect = document.getElementById('listHostPhoneCountry');
+    // The form no longer asks for the host's phone (it comes from the
+    // Profile): nothing to wire. Kept for pages that still carry the field.
+    if(!countrySelect) return;
     const localInput = document.getElementById('listHostPhoneLocal');
     const hiddenInput = document.getElementById('listHostPhone');
     const errorEl = document.getElementById('listHostPhoneError');
@@ -527,19 +729,23 @@
           errorEl.textContent = data.error || 'Could not send a verification code. Please try again.';
           errorEl.style.display = 'block';
         } else {
-          // The code goes on WhatsApp (api/_phone-otp.js); it is never shown here.
           otpRow.style.display = 'flex';
           otpMsgEl.style.display = 'block';
-          otpMsgEl.style.color = '';
-          otpMsgEl.textContent = `We sent a code on WhatsApp to ${data.sentTo || 'this number'}. It is good for ${data.expiresInMinutes || 10} minutes.`;
-          otpInput.focus();
+          // otpForTesting exists ONLY because no real SMS provider is
+          // connected yet (see the backend comment) — this line is
+          // exactly what needs to be deleted the moment one is, since
+          // showing the code on-screen defeats the purpose of an OTP
+          // the second real delivery exists.
+          otpMsgEl.textContent = data.otpForTesting
+            ? `No SMS provider connected yet — your test code is ${data.otpForTesting}`
+            : 'A verification code has been sent.';
         }
       } catch(err){
         errorEl.textContent = 'Could not reach the server — please try again.';
         errorEl.style.display = 'block';
       }
       sendBtn.disabled = false;
-      sendBtn.textContent = 'Send code on WhatsApp';
+      sendBtn.textContent = 'Send verification code';
     });
 
     verifyBtn.addEventListener('click', async () => {
@@ -556,7 +762,7 @@
         const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
-          body: JSON.stringify({ verifyHostPhoneOtp: { otp, countryCode: countrySelect.value, localNumber: localInput.value.trim() } })
+          body: JSON.stringify({ verifyHostPhoneOtp: { otp } })
         });
         const data = await res.json();
         if(!res.ok){
@@ -1429,7 +1635,7 @@
     function renderPreviews(){
       previewContainer.innerHTML = '';
       selectedPhotos.forEach((photo, idx) => {
-        const url = photo.url || URL.createObjectURL(photo.file);
+        const url = photo.url || photoPreviewUrl(photo.file);
         const isCover = photo.id === coverPhotoId;
         const item = document.createElement('div');
         item.className = 'photo-preview-item' + (isCover ? ' is-cover' : '');
@@ -1712,7 +1918,7 @@
     const photos = room[bucketKey];
     const isDropTarget = pickedUpPhoto !== null && pickedUpPhoto.roomIdx === roomIdx && pickedUpPhoto.bucketKey !== bucketKey;
     const thumbs = photos.map((photo, photoIdx) => {
-      const src = photo.file ? URL.createObjectURL(photo.file) : photo.url;
+      const src = photo.file ? photoPreviewUrl(photo.file) : photo.url;
       const isPickedUp = pickedUpPhoto && pickedUpPhoto.roomIdx === roomIdx && pickedUpPhoto.bucketKey === bucketKey && pickedUpPhoto.photoIndex === photoIdx;
       return `
         <div style="position:relative; display:inline-block;" draggable="true" data-drag-source="${bucketKey}:${photoIdx}">
@@ -1825,7 +2031,7 @@
       const isLast = idx === roomSpaceRows.length - 1;
       const thumbs = room.photos.map((photo, photoIdx) => `
         <div style="position:relative; display:inline-block;">
-          <div class="room-space-photo-box"><img src="${photo.file ? URL.createObjectURL(photo.file) : photo.url}" alt=""></div>
+          <div class="room-space-photo-box"><img src="${photo.file ? photoPreviewUrl(photo.file) : photo.url}" alt=""></div>
           <button type="button" class="room-photo-remove-btn" data-fixed-remove="${photoIdx}" aria-label="Remove this photo">×</button>
         </div>`).join('');
       return `
@@ -2026,22 +2232,19 @@
 
   // Small copy for sorting only (the original File is what gets uploaded).
   function sortThumb(file){
-    return new Promise((resolve) => {
-      const url = URL.createObjectURL(file);
-      const img = new Image();
-      img.onload = () => {
-        const k = Math.min(1, 640 / Math.max(img.naturalWidth, img.naturalHeight));
-        const c = document.createElement('canvas');
-        c.width = Math.max(1, Math.round(img.naturalWidth * k)); c.height = Math.max(1, Math.round(img.naturalHeight * k));
-        c.getContext('2d').drawImage(img, 0, 0, c.width, c.height);
-        URL.revokeObjectURL(url);
-        const data = c.toDataURL('image/jpeg', 0.72).split(',')[1];
-        c.width = c.height = 0;
-        resolve(data);
-      };
-      img.onerror = () => { URL.revokeObjectURL(url); resolve(null); };
-      img.src = url;
+    return smallCopy(file, 640, 0.72).then((data) => {
+      if(!data) return null;
+      if(!smallPreviews.has(file)) smallPreviews.set(file, data);
+      return data.split(',')[1];
     });
+  }
+  // A few at a time, never all 40 at once (see "Light photo previews").
+  async function sortThumbsFor(files){
+    const out = new Array(files.length);
+    let next = 0;
+    const worker = async () => { while(next < files.length){ const i = next++; out[i] = await sortThumb(files[i]).catch(() => null); } };
+    await Promise.all([worker(), worker()]);
+    return out;
   }
 
   // AI result → places. Bedroom letters A, B, … go to Bedroom 1, 2, … in
@@ -2093,7 +2296,7 @@
       const files = again ? picked : await screenPhotosAtProperty(picked);
       files.forEach(f => { if(!photoSort.files.includes(f)) photoSort.files.push(f); });
       say(`Sorting ${files.length} photo${files.length === 1 ? '' : 's'}…`);
-      const thumbs = await Promise.all(files.map(sortThumb));
+      const thumbs = await sortThumbsFor(files);
       const send = files.map((f, i) => ({ id: 'p' + i, data: thumbs[i] })).filter(x => x.data);
       let result = [];
       if(send.length){
@@ -2129,8 +2332,7 @@
 
   const sortPreviewUrls = new WeakMap();
   function sortPreviewUrl(f){
-    if(!sortPreviewUrls.has(f)) sortPreviewUrls.set(f, URL.createObjectURL(f));
-    return sortPreviewUrls.get(f);
+    return photoPreviewUrl(f);
   }
   function renderPhotoSortPanel(){
     const box = document.getElementById('photoSortPanel');
@@ -2476,6 +2678,9 @@
     // retry after an error) — only hidden for good once a full
     // submission actually succeeds, see below.
     document.getElementById('draftHintText').style.display = 'block';
+    // Submitting for review needs the host's name and phone on their
+    // profile (a draft does not): asked for here, then the submit carries on.
+    if(!isDraft && !(await aervaEnsureListingContact(true))) return;
 
     const activeBtn = isDraft ? listingDraftBtn : listingSubmitBtn;
     const otherBtn = isDraft ? listingSubmitBtn : listingDraftBtn;
@@ -2541,7 +2746,7 @@
         errorEl.style.display = 'block';
         return;
       }
-      if(exteriorPhotoManager.getOrderedIds().length === 0 && !(listingSubmissionState.exteriorUrls && listingSubmissionState.exteriorUrls.length)){
+      if(exteriorPhotoManager.getOrderedIds().length === 0){
         errorEl.textContent = 'Please attach at least 1 exterior photo.';
         errorEl.style.display = 'block';
         return;
@@ -2572,16 +2777,6 @@
           return;
         }
       }
-      if(!document.getElementById('listHostName').value.trim()){
-        errorEl.textContent = 'Please enter your name.';
-        errorEl.style.display = 'block';
-        return;
-      }
-      if(!document.getElementById('listHostPhone').value.trim()){
-        errorEl.textContent = 'Please enter a valid phone number.';
-        errorEl.style.display = 'block';
-        return;
-      }
       if(!petFriendlyYes.checked && !petFriendlyNo.checked){
         errorEl.textContent = 'Please tell us whether pets are allowed at this property.';
         errorEl.style.display = 'block';
@@ -2594,8 +2789,15 @@
 
     // Reuse already-uploaded exterior URLs from a prior attempt if we
     // have them — no need to re-upload the same files again on a retry.
-    let exteriorPhotoUrls = listingSubmissionState.exteriorUrls;
-    let exteriorPhotoHashes = listingSubmissionState.exteriorHashes;
+    // (Per photo, not one list for the whole gallery: after a draft save or
+    // a refused submit the host may add, remove or reorder exterior photos,
+    // and the old cached list sent the earlier set regardless — or, when a
+    // draft was saved before any photo was added, no photo at all.)
+    const exteriorDone = listingSubmissionState.exteriorDone || (listingSubmissionState.exteriorDone = new Map());
+    const exteriorFilesNow = exteriorPhotoManager.getFiles();
+    const exteriorPending = [...new Set(exteriorFilesNow.filter(f => !exteriorDone.has(f)))];
+    let exteriorPhotoUrls = null;
+    let exteriorPhotoHashes = null;
     const exteriorIdsAtUpload = exteriorPhotoManager.getOrderedIds();
 
     // Every photo still needing upload — a fixed space's single file/url
@@ -2609,11 +2811,14 @@
       allRoomPhotos(room).forEach(photo => { if(photo.file && !photo.url) uploadTasks.push(photo); });
     });
 
-    if(exteriorPhotoUrls === null || uploadTasks.length){
-      activeBtn.textContent = 'Uploading photos…';
+    {
+      if(exteriorPending.length || uploadTasks.length) activeBtn.textContent = 'Uploading photos…';
       try{
         const [exteriorResult, roomResult] = await Promise.all([
-          exteriorPhotoUrls === null ? uploadPhotoCategory(exteriorPhotoManager.getFiles()) : Promise.resolve({ urls: exteriorPhotoUrls, hashes: exteriorPhotoHashes || [] }),
+          uploadPhotoCategory(exteriorPending).then(r => {
+            exteriorPending.forEach((f, i) => { if(r.urls[i]) exteriorDone.set(f, { url: r.urls[i], hash: r.hashes[i] }); });
+            return { urls: exteriorFilesNow.map(f => exteriorDone.has(f) ? exteriorDone.get(f).url : null), hashes: exteriorFilesNow.map(f => exteriorDone.has(f) ? exteriorDone.get(f).hash : null) };
+          }),
           uploadPhotoCategory(uploadTasks.map(t => t.file))
         ]);
         exteriorPhotoUrls = exteriorResult.urls;
@@ -2788,14 +2993,14 @@
           freeCancelOffered: !!(document.getElementById('listFreeCancelOffered') || {}).checked && document.getElementById('listType').value !== 'Resort',
           // Its fixed ₹ price per booking (kept when switched off, for switching back on).
           freeCancelFee: (() => { const v = ((document.getElementById('listFreeCancelFee') || {}).value || '').trim(); return v === '' ? null : Number(v); })(),
-          hostName: document.getElementById('listHostName').value,
-          hostPhone: document.getElementById('listHostPhone').value,
           latitude: document.getElementById('listLatitude').value,
           longitude: document.getElementById('listLongitude').value,
           formattedAddress: document.getElementById('listFormattedAddress').value,
           pincode: document.getElementById('listPincode').value,
           exteriorPhotoUrls: exteriorPhotoUrls,
-          interiorPhotoUrls: interiorPhotoUrls,
+          // A resumed draft saved again as a draft before its room photos
+          // were added again keeps the ones it already had.
+          interiorPhotoUrls: (isDraft && !interiorPhotoUrls.length && Array.isArray(listingSubmissionState.keptInterior)) ? listingSubmissionState.keptInterior : interiorPhotoUrls,
           roomPhotos: roomPhotos,
           coverPhotoUrl: coverPhotoUrl,
           // Where each new photo was taken, for the admin (api/_photo-location.js).
@@ -2837,6 +3042,8 @@
         activeBtn.disabled = false;
         otherBtn.disabled = false;
         activeBtn.textContent = 'Save as Draft';
+        // The draft is on Aerva now: the copy in this browser is no longer needed.
+        listAutosaveClear(); listAutosaveOff = true;
         return;
       }
 
@@ -2851,6 +3058,7 @@
       }
       confirmEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
       document.getElementById('draftHintText').style.display = 'none';
+      listAutosaveClear(); listAutosaveOff = true;   // (leaving the page must not keep the emptied form's leftovers)
       listingForm.reset();
       if(listSpecialEditor) listSpecialEditor.reset();
       exteriorPhotoManager.clear();
@@ -2860,7 +3068,6 @@
       pickedUpPhoto = null;
       syncBedroomRowCount();
       listingSubmissionState = { currentListingId: null, exteriorUrls: null };
-      document.getElementById('listHostEmailDisplay').textContent = hostSessionEmail || '';
       activeBtn.disabled = false;
       otherBtn.disabled = false;
       // Closes the form itself once submitted — briefly shows the "thank
@@ -2965,8 +3172,6 @@
       document.getElementById('listPrice').value = draft.nightly_rate || '';
       document.getElementById('listDescription').value = draft.description || '';
       if(listSpecialEditor) listSpecialEditor.set(draft);
-      document.getElementById('listHostName').value = draft.host_name || '';
-      document.getElementById('listHostPhone').value = draft.host_phone || '';
       (draft.amenities || []).forEach(v => {
         const box = listingForm.querySelector(`input[name="Amenities"][value="${v}"]`);
         if(box) box.checked = true;
@@ -2990,9 +3195,18 @@
         petFriendlyNo.checked = true;
       }
 
+      // The exterior photos already saved with the draft go back into the
+      // gallery (as a clone "with photos" does): saving the draft again used
+      // to send an empty gallery and erase them.
+      const keptExterior = (Array.isArray(draft.exterior_photo_urls) ? draft.exterior_photo_urls : []).map(u => typeof u === 'string' ? u : (u && u.url)).filter(u => typeof u === 'string' && /^https:\/\//i.test(u));
+      if(keptExterior.length && exteriorPhotoManager.getOrderedIds().length === 0) exteriorPhotoManager.addExistingUrls(keptExterior);
+      listingSubmissionState.keptInterior = (Array.isArray(draft.interior_photo_urls) ? draft.interior_photo_urls : []).map(u => typeof u === 'string' ? u : (u && u.url)).filter(u => typeof u === 'string' && /^https:\/\//i.test(u));
       const errorEl = listingForm.querySelector('.listing-error');
       errorEl.style.color = 'var(--gold-deep)';
-      errorEl.textContent = draft.status === 'rejected'
+      errorEl.textContent = keptExterior.length ? (draft.status === 'rejected'
+          ? `Editing your rejected listing. Reason given: "${draft.rejection_reason || 'not specified'}" — make the needed changes below, then submit to send it back for review. Your exterior photos are in the gallery below; room and space photos need adding again.`
+          : 'Resuming your draft — your details and exterior photos are filled in. Room and space photos need adding again.')
+        : draft.status === 'rejected'
         ? `Editing your rejected listing. Reason given: "${draft.rejection_reason || 'not specified'}" — make the needed changes below, then submit to send it back for review. You'll need to re-attach your photos (browsers don't allow us to pre-load previously uploaded files for security reasons).`
         : 'Resuming your draft — your text details are filled in, but you\'ll need to re-attach your photos (browsers don\'t allow us to pre-load previously uploaded files for security reasons).';
       errorEl.style.display = 'block';
@@ -3153,8 +3367,6 @@
       document.getElementById('expName').value = existing.property_name || '';
       document.getElementById('expDescription').value = existing.description || '';
       document.getElementById('expCategory').value = existing.experience_category || '';
-      document.getElementById('expHostName').value = existing.host_name || '';
-      document.getElementById('expHostPhone').value = existing.host_phone || '';
       document.getElementById('expPrice').value = existing.nightly_rate || '';
       document.getElementById('expPriceUnit').value = existing.experience_price_unit || 'per_person';
       document.getElementById('expDuration').value = existing.experience_duration_hours || '';
@@ -3323,13 +3535,13 @@
       const confirmEl = document.getElementById('expConfirmMsg');
       errorEl.style.display = 'none';
       confirmEl.style.display = 'none';
+      // The host's name and phone come from their profile: asked for first if missing.
+      if(!(await aervaEnsureListingContact(true))) return;
 
       const name = document.getElementById('expName').value.trim();
       const description = document.getElementById('expDescription').value.trim();
       const hostingListingId = document.getElementById('expHostingListing').value;
       const category = document.getElementById('expCategory').value;
-      const hostName = document.getElementById('expHostName').value.trim();
-      const hostPhone = document.getElementById('expHostPhone').value.trim();
       const expTypeInput = document.querySelector('input[name="expType"]:checked');
       const price = document.getElementById('expPrice').value;
       const priceUnit = document.getElementById('expPriceUnit').value;
@@ -3358,8 +3570,6 @@
       // Same checks the backend enforces (see submit-listing.js).
       if(!name){ errorEl.textContent = 'Please give your experience a name.'; errorEl.style.display = 'block'; return; }
       if(!description){ errorEl.textContent = 'Please add a description.'; errorEl.style.display = 'block'; return; }
-      if(!hostName){ errorEl.textContent = 'Please enter your name.'; errorEl.style.display = 'block'; return; }
-      if(!hostPhone){ errorEl.textContent = 'Please enter your phone number.'; errorEl.style.display = 'block'; return; }
       if(!expTypeInput){ errorEl.textContent = 'Please say whether this experience includes a stay.'; errorEl.style.display = 'block'; return; }
       if(expTypeInput.value === 'with_stay' && !hostingListingId){
         errorEl.textContent = 'Please choose which of your properties hosts the included stay — or choose "No" above if this experience doesn\'t include one.';
@@ -3426,8 +3636,6 @@
             experienceSpecialInstructions: specialInstructions || null,
             experienceAvailableFrom: availableFrom || null,
             experienceAvailableUntil: availableUntil || null,
-            hostName: hostName,
-            hostPhone: hostPhone,
             exteriorPhotoUrls: expPhotoUrls,
             interiorPhotoUrls: [],
             coverPhotoUrl: (expCoverPhotoUrl && expPhotoUrls.includes(expCoverPhotoUrl)) ? expCoverPhotoUrl : (expPhotoUrls[0] || null)
@@ -3525,8 +3733,6 @@
     document.getElementById('listPrice').value = source.nightly_rate || '';
     document.getElementById('listDescription').value = source.description || '';
     if(listSpecialEditor) listSpecialEditor.set(source);
-    document.getElementById('listHostName').value = source.host_name || '';
-    document.getElementById('listHostPhone').value = source.host_phone || '';
     (source.amenities || []).forEach(v => {
       const box = listingForm.querySelector(`input[name="Amenities"][value="${v}"]`);
       if(box) box.checked = true;
@@ -3564,14 +3770,14 @@
     }
     const referencePhotos = cloneWithPhotos ? (source.interior_photo_urls || []) : [...(source.exterior_photo_urls || []), ...(source.interior_photo_urls || [])];
     const referenceHtml = referencePhotos.length
-      ? `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">${referencePhotos.slice(0, 8).map(url => `<img src="${url}" style="width:64px; height:64px; object-fit:cover; border-radius:4px;">`).join('')}</div>`
+      ? `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">${referencePhotos.slice(0, 8).filter(url => /^https:\/\//i.test(String(url))).map(url => `<img src="${escapeMessageHtml(url)}" alt="" style="width:64px; height:64px; object-fit:cover; border-radius:4px;">`).join('')}</div>`
       : '';
 
     const cloneErrorEl = listingForm.querySelector('.listing-error');
     cloneErrorEl.style.color = 'var(--gold-deep)';
     cloneErrorEl.innerHTML = cloneWithPhotos
-      ? `Cloned from "${source.property_name}" — give this configuration its own name below. Exterior photos were carried over and are already in the gallery below (feel free to change them). Interior/room photos still need re-uploading (shown here for reference).${referenceHtml}`
-      : `Cloned from "${source.property_name}" — give this configuration its own name below, and re-upload photos (shown here for reference only; browsers don't allow carrying over previously uploaded files).${referenceHtml}`;
+      ? `Cloned from "${escapeMessageHtml(source.property_name)}" — give this configuration its own name below. Exterior photos were carried over and are already in the gallery below (feel free to change them). Interior/room photos still need re-uploading (shown here for reference).${referenceHtml}`
+      : `Cloned from "${escapeMessageHtml(source.property_name)}" — give this configuration its own name below, and re-upload photos (shown here for reference only; browsers don't allow carrying over previously uploaded files).${referenceHtml}`;
     cloneErrorEl.style.display = 'block';
 
     document.getElementById('listPropertyName').focus();
@@ -4504,7 +4710,7 @@
     return (list || []).map(l => {
       const isExp = l.type === 'experience';
       const href = isExp ? `index.html?experience=${Number(l.id)}` : `index.html?listing=${Number(l.id)}`;
-      const unit = isExp ? (l.priceUnit ? ` / ${esc(String(l.priceUnit).replace(/^per_?/, ''))}` : '') : '/night';
+      const unit = isExp ? (l.priceUnit === 'per_person' ? ' / person' : '') : '/night'; // a flat price has no unit (never "/ flat")
       const price = l.price ? `${isExp ? '' : 'From '}${fmtGuest(Number(l.price))}${unit}` : '';
       return `
         <a class="hp-listing" href="${href}" data-hp-open="${isExp ? 'experience' : 'stay'}" data-hp-id="${Number(l.id)}" data-hp-city="${esc(String(l.city || '').trim().toLowerCase())}">
@@ -5153,7 +5359,9 @@
         window.AervaCohost.start({ hostId: h.hostId, hostName: h.hostName, access: h.access, permissions: h.permissions });
         window.location.href = h.access === 'full' || h.permissions.includes('bookings') ? 'host-dashboard.html'
           : (h.permissions.includes('status') ? 'host-status.html'
-          : (h.permissions.includes('analytics') ? 'host-earnings.html' : 'index.html?view=messages'));
+          // Every co-host has My Collection (manage, calendar, prices) — never
+          // their own empty Messages, which says nothing about the host's listings.
+          : 'host-dashboard.html');
       }));
       body.querySelectorAll('[data-cohost-leave]').forEach(b => b.addEventListener('click', async () => {
         if(!confirm('Stop co-hosting for this host? They would need to invite you again.')) return;
@@ -5888,6 +6096,7 @@
     if(pets > 0) tries.push('a search without pets');
     if(hasPrice) tries.push('a wider price range');
     if(o.badgeName) tries.push('Any badge');
+    { const fcf = document.getElementById('freeCancelFilter'); if(fcf && fcf.checked) tries.push('unticking “Free cancellation available”'); }
     const list = tries.length > 1 ? tries.slice(0, -1).join(', ') + ' or ' + tries[tries.length - 1] : (tries[0] || '');
     let head;
     if(o.unavailableCount) head = `No ${kind} are free${where}${dates} — the booked ones are below.`;
@@ -6106,7 +6315,12 @@
       let message;
       const badgeSel = selectedBadge();
       const badgeName = badgeSel ? (document.getElementById('badgeFilter').selectedOptions[0] || {}).text : '';
-      if(currentCategoryFilter === 'experiences') message = 'No experiences are live yet — check back soon.';
+      // "Free cancellation available" is ticked: experiences never have that
+      // add-on, so the filter (not an empty site) is why nothing shows.
+      const fcfOn = !!(document.getElementById('freeCancelFilter') || {}).checked;
+      if(currentCategoryFilter === 'experiences') message = fcfOn && approvedExperiences.length
+        ? 'Experiences don’t have the free cancellation add-on. Untick “Free cancellation available” in More filters to see them.'
+        : 'No experiences are live yet — check back soon.';
       else {
         // What Recently Viewed (above) already shows decides the wording:
         // free homes there, or the booked ones tagged there, not below.
@@ -7282,7 +7496,7 @@
       <div class="rv-set">${GUEST_REVIEW_FACTORS.map(starRowHtml).join('')}</div>
       <label class="rv-comment-label" for="guestReviewComment">A few words for other hosts</label>
       <textarea id="guestReviewComment" rows="4" maxlength="1000" placeholder="How was it having them stay?"></textarea>
-      ${p.depositHeld ? `<label style="display:flex; gap:10px; align-items:flex-start; margin-top:12px; font-size:14px; cursor:pointer;"><input type="checkbox" id="guestReviewDeposit" style="margin-top:3px; width:18px; height:18px;"> <span>No damage — refund the guest’s ₹${Number(p.depositHeld).toLocaleString('en-IN')} security deposit now, instead of when your 24 hours after check-out end. You can no longer report damage on it.</span></label>` : ''}
+      ${p.depositHeld ? `<label style="display:flex; gap:10px; align-items:flex-start; margin-top:12px; font-size:14px; cursor:pointer;"><input type="checkbox" id="guestReviewDeposit" style="margin-top:3px; width:18px; height:18px;"> <span>No damage — refund the guest’s ₹${Number(p.depositHeld).toLocaleString('en-IN')} security deposit now. It reaches them in 2 bank working days instead of after 7 days, and you can no longer raise a concern about it.</span></label>` : ''}
       <button type="button" class="btn solid" id="guestReviewSend" style="width:100%; margin-top:14px; cursor:pointer;">Send review</button>
       <p class="payout-muted" id="guestReviewMsg" style="margin-top:10px;"></p></div>`;
     const close = () => { ov.remove(); };
@@ -7585,9 +7799,17 @@
         // Gifts and group bookings shared with this account, and groups still
         // collecting: their own cards, never any price or change/cancel action.
         if(b.pending_group || b.shared) return aervaSharedBookingCard(b);
-        const dateLine = b.arrival === b.departure
+        // A payment waiting for this guest's details to be verified (no booking
+        // exists yet), with its steps and countdown; or one that lapsed and
+        // was refunded (aerva-guest-verify.js).
+        if(b.waiting_details) return window.AervaGuestVerify ? window.AervaGuestVerify.heldCardHtml(b) : '';
+        // An experience is stored with the day AFTER its last day as its end
+        // (like a check-out): show its real last day, or one date for a single day.
+        const lastDay = b.listing_type === 'experience' && b.departure && String(b.departure).slice(0, 10) > String(b.arrival).slice(0, 10)
+          ? new Date(new Date(String(b.departure).slice(0, 10) + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10) : b.departure;
+        const dateLine = String(b.arrival).slice(0, 10) === String(lastDay).slice(0, 10)
           ? new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
-          : `${new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} – ${new Date(b.departure).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+          : `${new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} – ${new Date(lastDay).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
         // Messaging only ever unlocks for a confirmed (paid) booking —
         // matches the same rule messages.js/guest-profile.js enforces
         // server-side; this button simply doesn't exist for anything else,
@@ -7686,6 +7908,15 @@
       });
       aervaBindCheckinPromise(container, bookings);
       aervaBindGiftGroupButtons(container, bookings);
+      // "Waiting for your details": the three steps and the countdown; once
+      // verified (or once the deadline passes) the list is loaded again.
+      if(window.AervaGuestVerify){
+        window.AervaGuestVerify.wireCards(container, { onConfirmed: () => setTimeout(loadMyBookings, 700) });
+        if(!loadMyBookings.deadlineBound){
+          loadMyBookings.deadlineBound = true;
+          document.addEventListener('aerva:verify-deadline', () => setTimeout(() => { if(document.querySelector('#myBookingsContainer [data-agv-held-card]')) loadMyBookings(); }, 4000));
+        }
+      }
       container.querySelectorAll('[data-report-problem]').forEach(btn => {
         btn.addEventListener('click', (e) => { e.stopPropagation(); openReportProblem(Number(btn.dataset.reportProblem), btn.dataset.listingName || ''); });
       });
@@ -8649,17 +8880,22 @@
     const place = conv.area_text || '';
     // A guest sees what THEY paid and who is hosting; a host sees what the
     // guest paid and their payout (a co-host acting for a host sees neither).
-    const paid = conv.subtotal != null ? Number(conv.subtotal) + Number(conv.gst || 0) : null;
+    // With the free cancellation add-on the guest paid for it too (it is in
+    // the host's payout): without it "Guest paid" came out lower than "Your
+    // payout". Host: as on the dashboard and My Earnings (the add-on, without
+    // its own GST); guest: with its GST.
+    const paid = conv.subtotal != null ? Number(conv.subtotal) + Number(conv.gst || 0) + (Number(conv.free_cancel_fee) || 0) + (isHostView ? 0 : (Number(conv.free_cancel_gst) || 0)) : null;
     const money = isHostView
       ? [paid != null ? ['Guest paid', fmt(paid), ''] : null, conv.payout_amount != null ? ['Your payout', fmt(conv.payout_amount), 'bd-good'] : null].filter(Boolean)
-      : (paid != null ? [['Total paid', moneyBoth(paid), ''], ...(Number(conv.gst) ? [['Includes GST', moneyBoth(conv.gst), 'bd-muted']] : [])] : []);
+      // The guest's total is everything charged (service fee and deposit included), as My Bookings shows it.
+      : (paid != null ? [['Total paid', moneyBoth(conv.guest_total != null ? Number(conv.guest_total) : paid), ''], ...(Number(conv.gst) ? [['Includes GST', moneyBoth(conv.gst), 'bd-muted']] : [])] : []);
     document.getElementById('inboxBookingDetailsBody').innerHTML = `
       <div class="bd">
         ${photo ? `<div class="bd-photo"><img src="${esc(photo)}" alt=""></div>` : ''}
         <span class="inbox-status-tag ${tag.cls}">${esc(tag.label)}</span>
         <h3 class="bd-title">${esc(conv.property_name || 'Your stay')}</h3>
         <p class="bd-sub">${esc([place, isHostView ? 'Guest: ' + (conv.counterpart_name || conv.guest_email || 'Guest') : 'Hosted by ' + (conv.counterpart_name || 'your host')].filter(Boolean).join(' · '))}</p>
-        ${conv.order_id && conv.confirmation_code ? `<p class="bd-sub" style="margin-top:4px;">Booking code: <strong style="letter-spacing:0.04em;">${esc(conv.confirmation_code)}</strong></p>` : ''}
+        ${conv.order_id && conv.confirmation_code ? `<p class="bd-sub" style="margin-top:4px;">Confirmation code: <strong style="letter-spacing:0.04em;">${esc(conv.confirmation_code)}</strong></p>` : ''}
         ${conv.inquiry && !conv.order_id ? `
         <div class="bd-section">
           <div class="bd-section-title">Asked about</div>
@@ -8690,7 +8926,7 @@
         ${isHostView && conv.order_id && conv.booking_status === 'paid' && conv.host_cancel_state === 'support' ? `
         <div class="bd-section">
           <div class="bd-section-title">Cancel this booking</div>
-          <p class="bd-note">Check-in time has passed, so only Aerva can cancel this booking now. If you truly cannot host this guest, <a href="index.html?view=help&new=1&category=cancellation_refund&order=${encodeURIComponent(conv.order_id)}">raise a request in Aerva Support</a>.</p>
+          <p class="bd-note">Check-in time has passed, so only Aerva can cancel this booking now. If you truly cannot host this guest, <a href="index.html?view=help&new=1&category=cancellation_refund&order=${encodeURIComponent(conv.order_id)}">raise a request in the Resolution Center</a>.</p>
         </div>` : ''}
         ${isHostView && conv.order_id && conv.booking_status === 'paid' && (conv.host_cancel_state === 'open' || conv.host_cancel_state === undefined) ? `
         <div class="bd-section hc-cancel" id="hcCancel">
@@ -8731,7 +8967,7 @@
     if(hosts) groups.push(['Hosts', hosts.points]);
     if(cohosts) groups.push(['Co-hosts', cohosts.points]);
     const ev = section(events, 'What happens');
-    if(ev) groups.push(['Emergencies (floods, government orders, major damage)', ev.points]);
+    if(ev) groups.push(['Natural disasters, government orders and other major events', ev.points]);
     if(!groups.length) return `<p class="hc-policy-link"><a href="index.html?view=policies&doc=${isExperience ? 'cancellation-experiences' : 'cancellation-stays'}" target="_blank" rel="noopener">Read the host cancellation policy →</a></p>`;
     return `<details class="hc-policy"${open ? ' open' : ''}>
         <summary>Review the host cancellation policy</summary>
@@ -8808,7 +9044,7 @@
           <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now sends it to them.`
             : `Your guest gets a ${inr(amount)} Aerva coupon, paid by you now. The booking is cancelled the moment your payment goes through.`}</p>
           ${d.canAskHost ? `<label class="hc-check" for="hcAskHost"><input type="checkbox" id="hcAskHost"> <span><strong>Ask the host to cover this coupon (${inr(amount)})</strong></span></label>
-          <p class="bd-note" style="margin:0 0 10px;">Optional. You still pay it now. Your host has ${Number(d.askHostAnswerDays) || 7} days to accept or decline. If they accept, ${inr(amount)} is added to your next payout; if not, nothing moves through Aerva.</p>
+          <p class="bd-note" style="margin:0 0 10px;">Optional. You still pay it now. Your host has ${Number(d.askHostAnswerDays) || 7} days to accept or decline. If they accept, ${inr(amount)} is paid to you once it has been taken from their payout, less TDS at your own rate (as on your co-host share); if not, nothing moves through Aerva.</p>
           <div id="hcAskNoteWrap" hidden><label class="hc-label" for="hcAskNote">A short note to the host <span class="hc-opt">(optional)</span></label>
           <textarea id="hcAskNote" class="hc-input" rows="2" maxlength="${Number(d.askHostNoteMax) || 300}" placeholder="Why you had to cancel"></textarea></div>` : ''}
           <div class="hc-actions hc-col">
@@ -11279,6 +11515,8 @@
     if(!arrival || !departure){
       summaryEl.style.display = 'none';
       if(actionEl) actionEl.style.display = 'none';
+      // No dates chosen: the general "Free cancellation available" line is true again.
+      document.querySelectorAll('[data-free-cancel-line]').forEach(el => { el.hidden = false; });
       return;
     }
 
@@ -11363,7 +11601,7 @@
     }
     rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee + experienceFee)}</span></div>`);
     if(listing.security_deposit && Number(listing.security_deposit) > 0){
-      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (covers damage and extra cleaning; refunded after check-out unless the host reports damage within 24 hours)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
+      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (covers damage and extra cleaning; held up to 7 days)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
     }
 
     const grandTotalInr = total + stayTax.gst + (listing.security_deposit ? Number(listing.security_deposit) : 0) + experienceTotal + experienceGst + experienceFee;
@@ -11374,7 +11612,8 @@
     // bank/card network that converts INR to their currency after the
     // fact, at their own rate plus possibly their own fees — Aerva has no
     // part in and no control over that conversion.
-    const inrNote = currentCurrency !== 'INR'
+    // Only when prices really are converted (no rates loaded = they are shown in rupees).
+    const inrNote = currentCurrency !== 'INR' && currencyRatesLoaded && currencyRates[currentCurrency]
       ? `<p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Charged as ${fmt(grandTotalInr)} (Indian Rupees) — shown in ${currentCurrency} at today's rate. Your bank or card network sets the actual exchange rate and may apply its own fees; Aerva is not responsible for any difference between this estimate and what your bank charges.</p>`
       : '';
 
@@ -11442,6 +11681,25 @@
     };
   }
 
+  // "Complete your profile" (aerva-guest-verify.js) is asked again when a
+  // booking is started, while the account has no first name, last name or
+  // phone. Saved or "Do it later": the booking then carries on by itself.
+  // Returns true when the pop-up was opened (the caller stops; resume runs after).
+  function aervaProfilePromptFirst(resume){
+    const GV = window.AervaGuestVerify;
+    if(!GV || typeof GV.pending !== 'function') return false;
+    if(aervaProfilePromptFirst.passed){ aervaProfilePromptFirst.passed = false; return false; }
+    if(!GV.pending()) return false;
+    GV.promptIfNeeded({ reason: 'booking', then: () => {
+      aervaProfilePromptFirst.passed = true;
+      // The name just saved goes into "Your details" before the booking
+      // carries on (it used to carry on with the fields still empty).
+      aervaPrefillPromise = null; aervaPrefillBooking();
+      (aervaPrefillPromise || Promise.resolve()).then(resume, resume);
+    } });
+    return true;
+  }
+
   // Checkout for a single stay (and any experience added to it): the
   // create-order → Razorpay → verify-payment sequence, with the Razorpay
   // key taken from the order create-order.js returns.
@@ -11457,6 +11715,7 @@
       requireLoginForBooking(() => handleListingBookNow(listing));
       return;
     }
+    if(aervaProfilePromptFirst(() => handleListingBookNow(listing))) return;
 
     const dates = (renderAvailabilityCalendar._lgDates || {})[listing.id] || {};
     if(!dates.arrival || !dates.departure){
@@ -11582,13 +11841,13 @@
         const errData = await orderRes.json().catch(() => ({}));
         if(errData.priceChanged){
           aervaShowPriceChange(errorEl, errData, btn);
-          btn.disabled = false; btn.textContent = 'Continue to payment';
+          btn.disabled = false; btn.textContent = 'Continue to payment'; aervaSyncBookOptions();
           return;
         }
         if(Array.isArray(errData.needs) && errData.needs.length){
           if(errData.needs.includes('name') || errData.needs.some(n => /^gift/.test(n))){ errorEl.textContent = errData.error; errorEl.style.display = 'block'; }
           else aervaShowNeeds(errorEl, errData, btn);
-          btn.disabled = false; btn.textContent = 'Continue to payment';
+          btn.disabled = false; btn.textContent = 'Continue to payment'; aervaSyncBookOptions();
           return;
         }
         throw new Error(errData.error || 'We could not start your payment. Please try again.');
@@ -11608,14 +11867,14 @@
       }
     } catch(err){
       btn.disabled = false;
-      btn.textContent = 'Continue to payment';
+      btn.textContent = 'Continue to payment'; aervaSyncBookOptions();
       errorEl.textContent = err.message || 'We could not start your payment. Please try again.';
       errorEl.style.display = 'block';
       return;
     }
 
     btn.disabled = false;
-    btn.textContent = 'Continue to payment';
+    btn.textContent = 'Continue to payment'; aervaSyncBookOptions();
 
     if(typeof Razorpay === 'undefined'){
       errorEl.textContent = 'Payment gateway did not load. Please check your connection and try again.';
@@ -11654,7 +11913,7 @@
             body: JSON.stringify(response)
           });
           const verifyData = await verifyRes.json();
-          aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn, suggestFor: listing.id });
+          aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn, suggestFor: listing.id, gift: bookOpts.gift || null });
         } catch(err){
           aervaShowPaymentResult({ pending: true, message: 'Your payment was received, but we could not confirm the booking on this page. We will email you within a few minutes — please do not pay again. Payment ID: ' + response.razorpay_payment_id }, { confirmEl, errorEl, btn });
         }
@@ -11703,6 +11962,14 @@
       renderMonth();
       if(resortArrival && resortDeparture){
         renderResortRooms(listing, resortArrival, resortDeparture);
+      } else {
+        // New dates are being picked: the rooms and total chosen for the
+        // earlier dates go (they would still have been booked for those dates).
+        resortSelectedRooms = {};
+        updateResortPriceSummary();
+        const list = document.getElementById('resortRoomsList'), prompt = document.getElementById('resortDatesPrompt');
+        if(list) list.innerHTML = '';
+        if(prompt) prompt.style.display = '';
       }
     }
 
@@ -11885,6 +12152,7 @@
       requireLoginForBooking(() => handleResortBookNow(listing));
       return;
     }
+    if(aervaProfilePromptFirst(() => handleResortBookNow(listing))) return;
     const selected = Object.values(resortSelectedRooms);
     if(!selected.length){
       errorEl.textContent = 'Please select at least one room.';
@@ -12025,7 +12293,16 @@
     // just expressed as native min/max rather than a custom calendar.
     // Today on the experience's own clock is the earliest day (as for
     // stays and resorts; the server checks the same, api/_pricing.js).
-    const todayIso = aervaEarliestArrival(exp.timezone || 'Asia/Kolkata');
+    let todayIso = aervaEarliestArrival(exp.timezone || 'Asia/Kolkata');
+    // Today is gone once the start time has passed (server: priceExperience).
+    try{
+      const st = /^(\d{1,2}):(\d{2})/.exec(String(exp.experience_start_time || ''));
+      if(st){
+        const now = {};
+        new Intl.DateTimeFormat('en-US', { timeZone: exp.timezone || 'Asia/Kolkata', hourCycle: 'h23', hour: '2-digit', minute: '2-digit' }).formatToParts(new Date()).forEach(p => { now[p.type] = p.value; });
+        if(Number(now.hour) * 60 + Number(now.minute) >= Number(st[1]) * 60 + Number(st[2])) todayIso = aervaAddDays(todayIso, 1);
+      }
+    }catch(e){}
     const availableFromIso = exp.experience_available_from ? String(exp.experience_available_from).slice(0, 10) : null;
     const availableUntilIso = exp.experience_available_until ? String(exp.experience_available_until).slice(0, 10) : null;
     const bookDateMin = (availableFromIso && availableFromIso > todayIso) ? availableFromIso : todayIso;
@@ -12283,6 +12560,19 @@
       }
     }
 
+    // Days the host has closed on the experience itself (the server refuses
+    // them, api/_pricing.js priceExperience): greyed out like any taken day.
+    // Other guests' bookings do not close a day.
+    try{
+      const res = await fetch(SUITES_API_BASE + '/api/get-listings?availabilityFor=' + encodeURIComponent(exp.id));
+      if(res.ok){
+        const data = await res.json();
+        (Array.isArray(data.blockedRanges) ? data.blockedRanges : []).forEach(r => {
+          if(r.arrival && r.departure) getNightsInRangeClient(r.arrival, r.departure).forEach(n => occupiedNights.add(n));
+        });
+      }
+    } catch(err){ /* the price check still refuses a closed day */ }
+
     let expStart = '';
     const minDateObj = new Date(minIso + 'T00:00:00');
     let viewYear = minDateObj.getFullYear();
@@ -12411,6 +12701,7 @@
       requireLoginForBooking(() => handleExperienceBookNow(exp));
       return;
     }
+    if(aervaProfilePromptFirst(() => handleExperienceBookNow(exp))) return;
 
     // One date: the day it starts. The end comes from the host's own
     // duration, on the server as on this page.
@@ -12672,7 +12963,7 @@
     const inrExact = (v) => '₹' + Math.round(Number(v) || 0).toLocaleString('en-IN');
     const num = (v) => Math.max(0, Math.round(Number(v) || 0));
     const isCompleted = b.status === 'paid' && b.local_today && String(b.departure).slice(0, 10) < String(b.local_today).slice(0, 10);
-    const place = b.listing_city ? (b.listing_area ? `${b.listing_area}, ${b.listing_city}` : b.listing_city) : (listing ? formatCityArea(listing) : '');
+    const place = b.listing_city ? (b.listing_area && b.listing_area !== b.listing_city ? `${b.listing_area}, ${b.listing_city}` : b.listing_city) : (listing ? formatCityArea(listing) : '');
 
     // ---- Price details (adds up to what was charged) ----
     const subtotal = num(b.subtotal), gst = num(b.gst), fee = num(b.guest_service_fee), deposit = num(b.deposit_amount);
@@ -12697,8 +12988,9 @@
     // ---- Booking details ----
     const guestName = [b.guest_first_name, b.guest_last_name].filter(Boolean).join(' ');
     const policy = b.cancellation_policy || b.listing_cancellation_policy;
-    const policyName = isExp ? 'Experience policy' : policy === 'firm' ? 'Firm' : policy === 'flexible' ? 'Flexible' : '';
-    const policyDoc = isExp ? 'cancellation-experiences' : 'cancellation-stays';
+    // A confirmed group booking is non-refundable, whatever the listing's policy (_cancellations.js groupNoRefund).
+    const policyName = b.group ? 'Non-refundable group booking' : isExp ? 'Experience policy' : policy === 'firm' ? 'Firm' : policy === 'flexible' ? 'Flexible' : '';
+    const policyDoc = b.group ? 'gift-group-bookings' : isExp ? 'cancellation-experiences' : 'cancellation-stays';
     const bookedOn = b.created_at ? new Date(b.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '';
     const pets = Array.isArray(b.pet_types) ? b.pet_types.length : 0;
     const address = b.listing_address || (listing && listing.formatted_address) || '';
@@ -12707,7 +12999,7 @@
       b.guest_email ? ['Confirmation sent to', esc(b.guest_email)] : null,
       b.host_name ? ['Host', esc(b.host_name)] : null,
       bookedOn ? ['Booked on', esc(bookedOn)] : null,
-      policyName ? ['Cancellation policy', `${esc(policyName)} · <a href="index.html?view=policies&doc=${policyDoc}" target="_blank" rel="noopener">Read it</a>`] : null,
+      policyName ? ['Refund policy', `${esc(policyName)} · <a href="index.html?view=policies&doc=${policyDoc}" target="_blank" rel="noopener">Read it</a>`] : null,
       b.razorpay_payment_id ? ['Payment ID', `<code>${esc(b.razorpay_payment_id)}</code>`] : null,
       b.razorpay_order_id ? ['Booking reference', `<code>${esc(b.razorpay_order_id)}</code>`] : null
     ].filter(Boolean);
@@ -12734,7 +13026,7 @@
       <p class="bk-eyebrow">Booking summary</p>
       <h2 class="bk-title">${esc(b.suite_name || 'Your booking')}</h2>
       <p class="bk-sub"><span class="bk-status is-${esc(isCompleted ? 'completed' : b.status)}">${esc(statusWordGuest(isCompleted ? 'completed' : b.status))}</span>${place ? `<span class="bk-place">${esc(place)}</span>` : ''}</p>
-      ${b.status === 'cancelled' || b.status === 'refunded' ? `<div class="bk-cancelled">This booking was cancelled${b.cancelled_at ? ` on ${esc(new Date(b.cancelled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}.${b.cancellation_reason ? ` Reason: ${esc(b.cancellation_reason)}.` : ''}${refund ? ` ${inr(refund.amount)} ${refund.pending ? 'is being refunded' : 'was refunded'} to your original payment method.` : ''}</div>` : ''}
+      ${b.status === 'cancelled' || b.status === 'refunded' ? `<div class="bk-cancelled">This booking was cancelled${b.cancelled_at ? ` on ${esc(new Date(b.cancelled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}.${b.cancellation_reason ? ` Reason: ${esc(b.cancellation_reason)}.` : ''}${refund ? ` ${inr(refund.amount)} ${refund.pending ? 'is being refunded' : 'was refunded'} ${b.group ? 'to the people who paid, each to their own payment method' : 'to your original payment method'}.` : ''}</div>` : ''}
       ${b.confirmation_code && b.status === 'paid' ? `<div class="confirm-code bk-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${esc(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" id="bkCopyCode">Copy</button><span class="bk-code-hint">Show this to your host at ${isExp ? 'the start' : 'check-in'}</span></div>` : ''}
       <div class="bk-facts">${facts.filter(Boolean).map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`).join('')}</div>
       ${isExp && (b.meeting_point_address || b.meeting_point_details) ? `<p class="bk-note bk-meet"><strong>Meeting point:</strong> ${esc(b.meeting_point_address || '')}${b.meeting_point_details ? ` — ${esc(b.meeting_point_details)}` : ''}</p>` : ''}
@@ -12744,8 +13036,9 @@
         <div class="bk-card">
           <h3>Price details</h3>
           ${priceRows.map(([k, v]) => `<div class="bk-row"><span>${k}</span><span>${v}</span></div>`).join('')}
-          <div class="bk-row bk-total"><span>Total paid${b.charge_currency && b.charge_currency !== 'INR' ? ` <em>(charged in ${esc(b.charge_currency)})</em>` : ''}</span><span>${inr(paid)}</span></div>
-          ${refund ? `<div class="bk-row bk-refund"><span>${refund.pending ? 'Refund in progress' : 'Refunded'}</span><span>−${inr(refund.amount)}</span></div>` : ''}
+          <div class="bk-row bk-total"><span>${b.group ? 'Total paid by the group' : 'Total paid'}${b.charge_currency && b.charge_currency !== 'INR' ? ` <em>(charged in ${esc(b.charge_currency)})</em>` : ''}</span><span>${inr(paid)}</span></div>
+          ${b.group && b.group.myPaid ? `<div class="bk-row"><span>Your own share (${Number(b.group.myPlaces) || 0} of ${Number(b.group.places) || 0} places)</span><span>${inr(b.group.myPaid)}</span></div>` : ''}
+          ${refund ? `<div class="bk-row bk-refund"><span>${refund.pending ? 'Refund in progress' : 'Refunded'}${b.group ? ' (to each payer)' : ''}</span><span>−${inr(refund.amount)}</span></div>` : ''}
           ${currentCurrency !== 'INR' && fmtGuest(paid) !== inrExact(paid) ? `<p class="bk-fx-note" style="font-size:12px; opacity:0.65; margin:10px 0 0;">Charged in Indian Rupees: ${inrExact(paid)}${refund ? `; ${refund.pending ? 'being refunded' : 'refunded'}: ${inrExact(refund.amount)}` : ''}. Amounts above are shown in ${esc(currentCurrency)} at today's rate.</p>` : ''}
         </div>
         <div class="bk-card">
@@ -12934,7 +13227,7 @@
             <h2>${esc(sec.title)}</h2>
             <ul>${sec.points.map(p => `<li>${esc(p)}</li>`).join('')}</ul>
           </div>`).join('')
-        + `<p class="policy-note">Questions? <a href="index.html?view=help&amp;new=1">Raise a request in Aerva Support</a></p>`;
+        + `<p class="policy-note">Questions? <a href="index.html?view=help&amp;new=1">Raise a request in the Resolution Center</a></p>`;
       return;
     }
     document.getElementById('policiesTitle').textContent = 'Policies';
@@ -13121,6 +13414,14 @@
       if(el) el.classList.remove('active');
     });
     window.scrollTo({ top: 0 });
+    // Signed out (an old link, or the session ended): a way to log in, not a
+    // form that cannot be saved.
+    if(!guestAuthToken()){
+      document.getElementById('profileFields').innerHTML = '<p class="profile-empty">Log in to see your profile.</p><a class="btn" href="guest-login.html?next=index.html%3Fview%3Dprofile">Log in</a>';
+      ['profileSave', 'profileChangePhoto', 'profileNameSection', 'profileVerifySection'].forEach(id => { const el = document.getElementById(id); if(el) el.style.display = 'none'; });
+      return;
+    }
+    ['profileSave', 'profileChangePhoto', 'profileNameSection'].forEach(id => { const el = document.getElementById(id); if(el) el.style.display = ''; });
     try{
       const res = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=profile', {
         headers: { 'Authorization': 'Bearer ' + guestAuthToken() }
@@ -13132,6 +13433,7 @@
         const parts = String(data.profile.name || '').trim().split(/\s+/).filter(Boolean);
         renderProfileNameRow(data.profile.firstName, data.profile.lastName, false,
           { first: data.profile.firstName || (parts.length > 1 ? parts[0] : ''), last: data.profile.lastName || (parts.length > 1 ? parts.slice(1).join(' ') : '') }); }
+      aervaMountProfileVerify();
       // "Complete your account" (My Bookings) links here to confirm the
       // email and add a phone number: offer that same panel checkout uses,
       // only while one of them is missing (aervaIdPanel checks).
@@ -13203,6 +13505,40 @@
       + (asHost ? `<div class="profile-section-title" style="margin-top:18px;">From guests who stayed with you</div><div class="rv-list">${asHost}</div>` : '');
   }
 
+  // ---- Verify your details (owner, 10 Nov 2026; aerva-guest-verify.js) ----
+  // Name, phone code and photo ID: optional steps, or — while Aerva requires
+  // them — what a booking needs to be confirmed. Hidden before the feature's
+  // database update. The setup steps link here with ?verify=phone | id.
+  function aervaMountProfileVerify(){
+    const sec = document.getElementById('profileVerifySection');
+    const box = document.getElementById('profileVerifyBox');
+    if(!sec || !box || !window.AervaGuestVerify || !guestAuthToken()){ if(sec) sec.style.display = 'none'; return; }
+    let focusStep = null;
+    try{ const v = new URLSearchParams(window.location.search).get('verify'); if(v === 'phone' || v === 'id') focusStep = v; }catch(e){}
+    if(aervaMountProfileVerify.focused) focusStep = null;
+    aervaMountProfileVerify.focused = true;
+    sec.style.display = '';
+    window.AervaGuestVerify.mountSteps(box, {
+      focusStep,
+      onUnavailable: () => { sec.style.display = 'none'; },
+      onChange: (st) => {
+        const hint = document.getElementById('profileVerifyHint');
+        if(hint) hint.textContent = st.verified ? 'Your details are verified: your bookings are confirmed as soon as you pay.'
+          : st.required ? 'A booking is confirmed once these three are done. Do them now and your next booking is confirmed as soon as you pay.'
+          : 'Optional. Your host still checks a photo ID at check-in.';
+        // The name saved from here shows in "Your name" above.
+        if(st.name.done && !document.getElementById('profileNameValue')){
+          renderProfileNameRow(st.name.firstName, st.name.lastName, false);
+          const full = st.name.firstName + ' ' + st.name.lastName;
+          const n = document.getElementById('profileName'); if(n) n.textContent = full;
+          safeStorage.set('aerva_guest_name', full);
+          try{ if(window.aervaRefreshIdentity) window.aervaRefreshIdentity(); }catch(e){}
+        }
+      },
+      onConfirmed: () => { try{ if(window.aervaRefreshIdentity) window.aervaRefreshIdentity(); }catch(e){} }
+    });
+  }
+
   // ---- Your name (owner, 9 Nov 2026) ----
   // First and last name as on the government ID — the host checks it at
   // check-in. Shown with Edit, or as the form while either is missing
@@ -13266,8 +13602,11 @@
         if(!res.ok) throw new Error(data.error || 'Could not save your name. Please try again.');
         renderProfileNameRow(data.firstName, data.lastName, false);
         const done = document.createElement('p');
-        done.className = 'profile-msg'; done.style.color = '#2f5c2a'; done.textContent = 'Saved.';
+        done.className = 'profile-msg'; done.style.color = '#2f5c2a';
+        // An ID verified for the old name is not verified for the new one.
+        done.textContent = data.idVerificationCleared ? 'Saved. Your ID was verified for your previous name, so it needs to be verified again (below).' : 'Saved.';
         box.appendChild(done);
+        aervaMountProfileVerify();
         document.getElementById('profileName').textContent = data.name;
         const circle = document.getElementById('profilePhotoCircle');
         if(circle && !circle.querySelector('img')) circle.textContent = data.name.charAt(0).toUpperCase();
@@ -14985,11 +15324,16 @@
         return;
       }
       try{
-        const res = await fetch(SUITES_API_BASE + '/api/guest-auth' + (isNewSignIn(token) ? '?signin=1' : ''), {
+        const freshSignIn = isNewSignIn(token);
+        const res = await fetch(SUITES_API_BASE + '/api/guest-auth' + (freshSignIn ? '?signin=1' : ''), {
           headers: { 'Authorization': 'Bearer ' + token }
         });
         if(res.ok){
           const data = await res.json();
+          // "Complete your profile" (aerva-guest-verify.js): at a new sign-in,
+          // before anything else, while the first name, last name or phone is
+          // missing. "Do it later" closes it until the next sign-in (or a booking).
+          try{ if(window.AervaGuestVerify) window.AervaGuestVerify.sessionSeen(data.guest, token, freshSignIn); }catch(e){ /* never blocks the page */ }
           // Bind Recently Viewed to this account before anything renders
           // with it, so a fresh login never shows the previous person's
           // browsing on this device.
@@ -15334,7 +15678,8 @@ function aervaQuoteRowsHtml(q){
 }
 // Rows, the total, and (in another currency) what is actually charged.
 function aervaQuoteBodyHtml(q){
-  const inrNote = currentCurrency !== 'INR'
+  // Only when prices really are converted (no rates loaded = they are shown in rupees).
+  const inrNote = currentCurrency !== 'INR' && currencyRatesLoaded && currencyRates[currentCurrency]
     ? `<p style="font-size:11.5px; opacity:0.6; margin-top:4px;">Charged as ₹${Number(q.total).toLocaleString('en-IN')} (Indian Rupees) — shown in ${currentCurrency} at today's rate. Your bank or card network sets the actual exchange rate and may apply its own fees; Aerva is not responsible for any difference between this estimate and what your bank charges.</p>`
     : '';
   return `${aervaQuoteRowsHtml(q)}
@@ -15411,7 +15756,7 @@ function aervaShowBookingSuccess(summary, codes, opts){
       <div class="bs-tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7"/></svg></div>
       <p class="bs-eyebrow">Payment received</p>
       <h2 id="bsTitle">Your booking is confirmed</h2>
-      <p class="bs-lead">${summary && summary.email ? `We have sent the confirmation to <strong>${esc(summary.email)}</strong>.` : 'We have emailed you the confirmation.'} Show your confirmation code at check-in.</p>
+      <p class="bs-lead">${summary && summary.email ? `We have sent the confirmation to <strong>${esc(summary.email)}</strong>.` : 'We have emailed you the confirmation.'} ${opts && opts.gift ? `This stay is a gift for <strong>${esc([opts.gift.firstName, opts.gift.lastName].filter(Boolean).join(' '))}</strong>: we have emailed them the stay details (never the price) and a link to accept it.` : 'Show your confirmation code at check-in.'}</p>
       ${itemHtml}
       ${paid || payId ? `<div class="bs-pay">${paid}${payId}</div>` : ''}
       ${opts && opts.suggestFor ? `<div class="sx-slot" data-suggest-exp-for="${Number(opts.suggestFor)}"></div>` : ''}
@@ -15439,11 +15784,32 @@ function aervaShowBookingSuccess(summary, codes, opts){
 
 // ---- After payment: what the guest is told ----
 // verify-payment.js answers with the booking's confirmation code(s).
-function aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn, suggestFor = null }){
+function aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn, suggestFor = null, gift = null }){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // A payment for places in a group booking: back to the group's live status.
   if(verifyData && verifyData.group && verifyData.group.token && typeof aervaAfterGroupPayment === 'function'){ aervaAfterGroupPayment(verifyData); return; }
   errorEl.style.display = 'none';
+  // Paid, but the guest's details are not verified yet (api/_guest-verify.js):
+  // the payment is held, and the booking is confirmed once the three steps
+  // are done. The screen has no skip; it turns into the confirmation itself.
+  if(verifyData && verifyData.held && window.AervaGuestVerify){
+    confirmEl.innerHTML = `<strong>Payment received.</strong> ${esc(verifyData.held.message || window.AervaGuestVerify.HELD_TEXT)}`;
+    confirmEl.style.color = '#1c1b19';
+    confirmEl.style.display = 'block';
+    // Paid: the button stays off, so the same booking is never paid twice.
+    if(btn){ btn.disabled = true; btn.textContent = 'Payment received'; }
+    window.AervaGuestVerify.showHeld(verifyData.held, {
+      onConfirmed: (list) => {
+        const ok = (list || []).some(c => c.status === 'confirmed');
+        const codes = (list || []).flatMap(c => c.codes || []);
+        confirmEl.innerHTML = ok ? `<strong>Booking confirmed.</strong>${codes.length ? ' Your confirmation code is ' + codes.map(c => `<strong>${esc(c.code)}</strong>`).join(', ') + ' — show it at check-in.' : ''} We have emailed you the details.`
+          : 'The booking could not be completed, and your payment is being refunded in full — we have emailed you the details.';
+        if(btn && ok) btn.textContent = 'Booked';
+        if(typeof loadMyBookings === 'function' && document.getElementById('myBookingsContainer')) setTimeout(loadMyBookings, 800);
+      }
+    });
+    return;
+  }
   if(verifyData && verifyData.verified){
     const codes = Array.isArray(verifyData.confirmationCodes) ? verifyData.confirmationCodes : [];
     const codeHtml = codes.length === 1
@@ -15453,7 +15819,7 @@ function aervaShowPaymentResult(verifyData, { confirmEl, errorEl, btn, suggestFo
     confirmEl.style.display = 'block';
     // Paid: the button stays off, so the same booking is never paid twice.
     if(btn){ btn.disabled = true; btn.textContent = 'Booked'; }
-    aervaShowBookingSuccess(verifyData.summary, codes, { suggestFor });
+    aervaShowBookingSuccess(verifyData.summary, codes, { suggestFor, gift });
     return;
   }
   const pending = verifyData && verifyData.pending;
@@ -15575,7 +15941,7 @@ function aervaFollowUpPayment(orderId, msgEl, { seconds = 180, announce = false 
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() }, body: JSON.stringify({ checkOrder: orderId }) });
       const d = await r.json().catch(() => ({}));
       if(aervaFollowUp !== state) return;
-      if(r.ok && (d.verified || d.refunded || d.pending)){
+      if(r.ok && (d.verified || d.refunded || d.pending || d.held)){
         aervaStopFollowUp();
         aervaShowPaymentResult(d, { confirmEl: msgEl, errorEl: msgEl, btn: null });
         if(d.verified && typeof loadMyBookings === 'function') setTimeout(loadMyBookings, 1000);
@@ -15734,12 +16100,24 @@ async function aervaUploadFiles(files, payload){
   return out;
 }
 
-// ---- Confirmed email and phone number, required to book (api/_guest-id.js) ----
-// No ID proof is asked for: the host checks photo ID at check-in.
+// ---- Confirmed email and phone number, required to start a checkout (api/_guest-id.js) ----
+// What a booking needs to be CONFIRMED — name, phone code, photo ID — is in
+// aerva-guest-verify.js (api/_guest-verify.js); the host still checks a
+// photo ID at check-in.
 // Opens where the booking message shows, asks only for what is missing,
 // then continues to payment by pressing the same button again.
 function aervaShowNeeds(msgEl, data, btn){
   const needs = data.needs || [];
+  // A gift's buyer and a group's organiser verify their details first (api/_guest-verify.js).
+  if(needs.includes('verification')){
+    const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    msgEl.style.display = 'block';
+    msgEl.style.color = '#1c1b19';
+    msgEl.innerHTML = `<div class="price-changed"><p class="price-changed-title">Verify your details first</p>
+      <p style="margin:0 0 10px;">${esc(data.error || 'Please verify your details in your profile first.')}</p>
+      <a class="btn solid" href="index.html?view=profile&verify=phone" style="width:100%;">Verify my details</a></div>`;
+    return;
+  }
   if(needs.includes('login')){
     msgEl.style.display = 'block';
     msgEl.style.color = '#1c1b19';
@@ -15751,9 +16129,10 @@ function aervaShowNeeds(msgEl, data, btn){
   // The number typed in the booking form is filled in here for the guest.
   const col = btn && btn.closest ? btn.closest('.listing-col-booking') : null;
   const typed = col && col.querySelector('input[type="tel"]') ? col.querySelector('input[type="tel"]').value.trim() : '';
-  aervaIdPanel(msgEl, { needs, message: data.error, phone: typed, onDone: () => { msgEl.style.display = 'none'; msgEl.innerHTML = ''; if(btn) btn.click(); } });
+  const typedEmail = col && col.querySelector('input[type="email"]') ? col.querySelector('input[type="email"]').value.trim() : '';
+  aervaIdPanel(msgEl, { needs, message: data.error, phone: typed, email: typedEmail, onDone: () => { msgEl.style.display = 'none'; msgEl.innerHTML = ''; if(btn) btn.click(); } });
 }
-async function aervaIdPanel(host, { needs = ['email'], message = '', onDone, phone = '' } = {}){
+async function aervaIdPanel(host, { needs = ['email'], message = '', onDone, phone = '', email = '' } = {}){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   // An account is ONE email address and ONE phone number. The email is
   // confirmed by a code sent to it (api/_email-otp.js) — email costs
@@ -15767,24 +16146,13 @@ async function aervaIdPanel(host, { needs = ['email'], message = '', onDone, pho
   const askEmail = needs.includes('email') && !have.emailConfirmed;
   const askPhone = needs.includes('phone') && !have.hasPhone;
   if(!askEmail && !askPhone){ if(typeof onDone === 'function') onDone(); return; }
-  // The number is confirmed by a code on WhatsApp while that is switched on
-  // (api/guest-phone-auth.js, api/_phone-otp.js). Without WhatsApp — or for
-  // someone not on it — the number is saved as typed, as before.
-  let waOn = false;
-  if(askPhone){
-    try{
-      const r = await fetch(SUITES_API_BASE + '/api/guest-phone-auth?status=1', { cache: 'no-store' });
-      const d = await r.json();
-      waOn = !!(r.ok && d && d.available);
-    }catch(e){}
-  }
 
   host.style.display = 'block';
   host.style.color = '#1c1b19';
   host.innerHTML = `<div class="price-changed">
     <p class="price-changed-title">${esc(message || 'Confirm your details to book')}</p>
     ${askEmail ? `<label class="payout-label" for="otpEmail">Email address</label>
-      <input id="otpEmail" type="email" inputmode="email" autocomplete="email" value="${esc(have.email || '')}" placeholder="you@email.com" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 6px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">
+      <input id="otpEmail" type="email" inputmode="email" autocomplete="email" value="${esc(have.email || email || '')}" placeholder="you@email.com" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 6px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">
       <p class="id-note">We send a one-time code here. Your booking confirmation comes to this address too.</p>
       <button type="button" class="btn solid" id="otpSend" style="width:100%;">Email me a code</button>
       <div id="otpStep2" hidden>
@@ -15800,16 +16168,8 @@ async function aervaIdPanel(host, { needs = ['email'], message = '', onDone, pho
     ${askPhone ? `<div id="phoneStep"${askEmail ? ' hidden' : ''}>
       <label class="payout-label" for="needPhone"${askEmail ? ' style="margin-top:14px; display:block;"' : ''}>Mobile number</label>
       <input id="needPhone" type="tel" inputmode="tel" autocomplete="tel" value="${esc(phone || '')}" placeholder="10-digit mobile number" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 6px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">
-      <p class="id-note">Your host uses this to reach you about your stay.${waOn ? ' We send a code to this number on WhatsApp to confirm it.' : ''}</p>
-      ${waOn ? `<button type="button" class="btn solid" id="waSend" style="width:100%;">Send code on WhatsApp</button>
-      <div id="waStep2" hidden>
-        <label class="payout-label" for="waCode" style="margin-top:12px; display:block;">Enter the code from WhatsApp</label>
-        <input id="waCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 8px; border:1px solid #d9cfc2; border-radius:8px; font-size:18px; letter-spacing:0.18em;">
-        <button type="button" class="btn solid" id="waConfirm" style="width:100%;">Confirm number</button>
-        <button type="button" class="filter-clear" id="waAgain" style="margin-top:8px;" disabled>Send it again</button>
-      </div>
-      <button type="button" class="filter-clear" id="phoneSave" style="margin-top:8px;">Not on WhatsApp? Save the number without a code</button>`
-      : `<button type="button" class="btn solid" id="phoneSave" style="width:100%;">Save and continue</button>`}
+      <p class="id-note">Your host uses this to reach you about your stay.</p>
+      <button type="button" class="btn solid" id="phoneSave" style="width:100%;">Save and continue</button>
     </div>` : ''}
     <p id="needMsg" class="id-note" style="margin:8px 0 0;"></p></div>`;
 
@@ -15894,69 +16254,11 @@ async function aervaIdPanel(host, { needs = ['email'], message = '', onDone, pho
   const phoneBtn = host.querySelector('#phoneSave');
   if(phoneBtn) phoneBtn.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
-    const label = btn.textContent;
     btn.disabled = true; btn.textContent = 'Saving…'; say('');
     const { ok, d } = await post({ mode: 'savePhone', phone: host.querySelector('#needPhone').value });
-    if(!ok){ btn.disabled = false; btn.textContent = label; return say(d.error || 'Could not save your number.', true); }
+    if(!ok){ btn.disabled = false; btn.textContent = 'Save and continue'; return say(d.error || 'Could not save your number.', true); }
     if(typeof onDone === 'function') onDone();
   });
-
-  // Confirming the number by a code on WhatsApp ('link': the proved number
-  // joins this account and is marked confirmed).
-  const waSendBtn = host.querySelector('#waSend');
-  if(waSendBtn){
-    const waPost = (body) => fetch(SUITES_API_BASE + '/api/guest-phone-auth', { method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() }, body: JSON.stringify(body) })
-      .then(async r => ({ ok: r.ok, d: await r.json().catch(() => ({})) }));
-    const againBtn = host.querySelector('#waAgain');
-    let timer = null, sentTo = '';
-    const waitThenAllow = (seconds) => {
-      let left = Math.max(1, Math.round(seconds || 45));
-      clearInterval(timer);
-      againBtn.disabled = true;
-      const tick = () => {
-        if(left <= 0){ clearInterval(timer); againBtn.disabled = false; againBtn.textContent = 'Send it again'; return; }
-        againBtn.textContent = `Send it again (${left}s)`; left--;
-      };
-      tick(); timer = setInterval(tick, 1000);
-    };
-    const send = async (btn) => {
-      const phone = host.querySelector('#needPhone').value.trim();
-      if(!phone) return say('Enter your mobile number.', true);
-      const label = btn.textContent;
-      btn.disabled = true; btn.textContent = 'Sending…'; say('');
-      const { ok, d } = await waPost({ mode: 'request', phone });
-      btn.disabled = false; btn.textContent = btn.id === 'waSend' ? 'Send code on WhatsApp' : label;
-      if(!ok){
-        if(btn.id === 'waAgain') waitThenAllow(d.waitSeconds || 45);
-        return say(d.error || 'Could not send the code. Please try again.', true);
-      }
-      sentTo = phone;
-      waSendBtn.style.display = 'none';           // "Send it again" takes over
-      host.querySelector('#waStep2').hidden = false;
-      host.querySelector('#waCode').value = '';
-      host.querySelector('#waCode').focus();
-      waitThenAllow(d.resendAfterSeconds);
-      say(`Code sent on WhatsApp. It is good for ${d.expiresInMinutes || 10} minutes.`);
-    };
-    waSendBtn.addEventListener('click', (e) => send(e.currentTarget));
-    againBtn.addEventListener('click', (e) => send(e.currentTarget));
-    // A different number needs its own code.
-    host.querySelector('#needPhone').addEventListener('input', () => {
-      if(sentTo && host.querySelector('#needPhone').value.trim() !== sentTo){ host.querySelector('#waStep2').hidden = true; waSendBtn.style.display = ''; sentTo = ''; clearInterval(timer); }
-    });
-    host.querySelector('#waConfirm').addEventListener('click', async (e) => {
-      const btn = e.currentTarget;
-      const code = host.querySelector('#waCode').value.trim();
-      if(!/^\d{6}$/.test(code)) return say('Enter the 6-digit code from WhatsApp.', true);
-      btn.disabled = true; btn.textContent = 'Checking…'; say('');
-      const { ok, d } = await waPost({ mode: 'link', phone: sentTo || host.querySelector('#needPhone').value.trim(), code });
-      if(!ok){ btn.disabled = false; btn.textContent = 'Confirm number'; return say(d.error || 'That code did not match.', true); }
-      clearInterval(timer);
-      btn.textContent = 'Confirmed';
-      if(typeof onDone === 'function') onDone();
-    });
-  }
 }
 
 // ---- Guest: report a problem during the stay (api/_stay-disputes.js) ----
@@ -16069,7 +16371,7 @@ async function openChangeBooking(orderId, listingName, chose){
   body.innerHTML = `
     ${bookStep(1, isStay ? 'New dates' : 'New date')}
     ${o.kind === 'pair' ? '<p class="step-help">This experience includes a stay. Both move together.</p>' : ''}
-    ${o.started ? `<p class="step-help">${isStay ? `You have checked in, so check-in stays ${esc(new Date(o.current.arrival + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }))}. You can bring check-out forward: the check-in night stays part of your stay. <strong>Leaving early: you won’t get anything back for the nights you don’t stay.</strong>` : 'This has already started, so the date cannot move. You can change the number of guests.'}${o.windowEndsLabel ? ` Changes during a stay can be asked for until ${esc(o.windowEndsLabel)} (the property’s local time).` : ''}</p>` : ''}
+    ${o.started ? `<p class="step-help">${isStay ? `You have checked in, so check-in stays ${esc(new Date(o.current.arrival + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }))}. You can bring check-out forward: the check-in night stays part of your stay. <strong>Leaving early: you won’t get anything back for the nights you don’t stay.</strong>` : 'This has already started, so the date cannot move. You can change the number of guests.'}${o.windowEndsLabel ? ` Changes during a stay can be asked for until ${esc(o.windowEndsLabel)} (the property’s time).` : ''}</p>` : ''}
     <label class="payout-label" for="chIn">${isStay ? 'Check-in' : 'Date'}</label>
     <input id="chIn" type="date" value="${esc(o.current.arrival)}" min="${esc(o.today)}" ${o.started ? 'disabled' : ''} style="${field}">
     ${isStay ? `<label class="payout-label" for="chOut">Check-out</label>
@@ -16203,9 +16505,9 @@ function aervaTransferForm(body, o, orderId, { esc, inr, field, auth }){
             <li><strong>What is charged:</strong> Aerva’s transfer fee of ${inr(q.transfer.transferFee)} (5% of the moved nights at the current property) is already counted in the new total. ${q.difference > 0 ? `You pay ${inr(q.difference)} more.` : q.difference < 0 ? `After it, ${inr(-q.difference - kept)} comes back to you as Aerva credit${kept > 0 ? ` (${inr(kept)} paid by coupon is not returned)` : ''}.` : 'You pay nothing more and get nothing back.'} Nothing else is added.</li>
             <li><strong>If your host declines</strong>, or you do not complete it within 24 hours of their acceptance: nothing changes and nothing is charged.</li>
             <li><strong>Once completed, it is final.</strong> The transfer cannot be undone, and no part of the booking can be changed, moved, split again, shortened <strong>or cancelled</strong> — even if your plans change.</li>
-            <li>Each part gets its own booking code. Your check-in and check-out dates stay the same.</li>
+            <li>Each part gets its own confirmation code. Your check-in and check-out dates stay the same.</li>
             ${q.difference < 0 ? '<li>Aerva credit can be used on any booking, or refunded to your original payment method at any time from My Bookings; whatever is left when it ends is refunded automatically.</li>' : ''}
-            <li>If something is not working after the transfer, contact Aerva Support. Aerva will look at it and make the final decision.</li>
+            <li>If something is not working after the transfer, raise a request in the Resolution Center. Aerva will look at it and make the final decision.</li>
           </ul>
           <label style="display:flex; gap:8px; align-items:flex-start; margin-top:10px; font-size:14px;"><input type="checkbox" id="trAgree" style="margin-top:3px;"> I understand: once completed, this transfer is final and the booking cannot be changed or cancelled.</label>
         </div>
@@ -16239,7 +16541,7 @@ async function aervaGuestSetupBanner(container, token){
     const esc = escapeMessageHtml;
     box.style.cssText = 'margin:0 0 18px; padding:14px 16px; border:1px solid #e3d6c1; border-radius:12px; background:#fbf8f3;';
     box.innerHTML = `<strong>Complete your account</strong> <span style="opacity:0.7; font-size:13.5px;">· ${left.length} step${left.length === 1 ? '' : 's'} left, about 2 minutes</span>
-      <ol style="margin:8px 0 0; padding-left:20px; font-size:14px; line-height:1.8;">${items.map(i => `<li>${i.done ? `<span style="opacity:0.6;">✅ ${esc(i.label)}</span>` : `<a href="${esc(i.href)}" style="color:var(--gold-text);">${esc(i.label)}</a>${i.optional ? ' <span style="opacity:0.6;">(optional)</span>' : ''} <span style="opacity:0.65; font-size:13px;">— ${esc(i.why)}</span>`}</li>`).join('')}</ol>`;
+      <ol style="margin:8px 0 0; padding-left:20px; font-size:14px; line-height:1.8;">${items.map(i => `<li>${i.done ? `<span style="opacity:0.6;">✅ ${esc(i.label)}</span>` : `<a href="${esc(i.href)}" style="color:var(--gold-text);">${esc(i.label)}</a>${i.optional ? ' <span style="opacity:0.6;">(optional)</span>' : ''} <span style="opacity:0.65; font-size:13px;">— ${esc(i.optional ? String(i.why || '').replace(/^Optional\s*[—–-]\s*/i, '') : i.why)}</span>`}</li>`).join('')}</ol>`;
   }catch(e){ /* the bookings still load */ }
 }
 
@@ -16343,15 +16645,19 @@ function aervaBookingGlance(b){
   const policy = (b.cancellation_policy || b.listing_cancellation_policy || 'flexible') === 'firm' ? 'firm' : 'flexible';
   const items = [];
   if(b.transferred){
-    items.push('This booking was transferred: it can no longer be changed or cancelled. For any problem, contact Aerva Support; Aerva decides.');
+    items.push('This booking was transferred: it can no longer be changed or cancelled. For any problem, raise a request in the Resolution Center; Aerva decides.');
   } else {
     // The free cancellation add-on: a full refund until 48 hours before check-in.
     if(Number(b.free_cancel_fee) > 0 && b.free_cancel_until_label && b.can_cancel_request !== false){
       items.push(b.free_cancel_active
-        ? `Full refund until ${b.free_cancel_until_label} (property’s time): you added free cancellation. Cancel before then and the booking price, GST and deposit come back at once — no wait for your host. The add-on and the service fee are not refunded. After that, the refund policy below applies.`
-        : `Free cancellation ended ${b.free_cancel_until_label} (property’s time); the refund policy below applies. The add-on is not refunded.`);
+        ? `Full refund until ${b.free_cancel_until_label} (the property’s time): you added free cancellation. Cancel before then and the booking price, GST and deposit come back at once — no wait for your host. The add-on and the service fee are not refunded. After that, the refund policy below applies.`
+        : `Free cancellation ended ${b.free_cancel_until_label} (the property’s time); the refund policy below applies. The add-on is not refunded.`);
     }
-    if(b.can_cancel_request !== false){
+    if(b.can_cancel_request !== false && b.group){
+      // A confirmed group booking is non-refundable (_cancellations.js groupNoRefund), whatever the listing's policy.
+      items.push('Cancel: this is a non-refundable group booking. If plans change, nothing is refunded for the stay, its GST or the service fee, whatever the listing’s policy; any deposit goes back to each payer.');
+      items.push('Natural disaster or government order (with proof), any time before check-in: Aerva decides. If approved, each payer gets their own share as Aerva credit (use it for new dates, or have it refunded to their own payment any time). If not, the booking stands.');
+    } else if(b.can_cancel_request !== false){
       items.push(policy === 'firm'
         ? `Cancel (Firm): full refund of the price and GST until ${minus(30)}; 50% until ${minus(5)}; after that your host decides. Service fee not refunded; deposit always refunded.`
         : `Cancel (Flexible): full refund until ${minus(30)}; 80% until ${minus(10)}; 50% until ${minus(5)}; 30% until ${minus(2)}; after that your host decides. Service fee not refunded; deposit always refunded.`);
@@ -16362,7 +16668,7 @@ function aervaBookingGlance(b){
     } else {
       items.push('Your stay has started: it can no longer be cancelled.');
     }
-    if(b.can_change !== false) items.push(`Change dates, guests or add-ons, or move nights to another property of this host: until 10 AM on ${next} (the property’s time). Before check-in a cheaper change refunds the difference; leaving early after check-in gives nothing back for the nights you don’t stay.`);
+    if(b.can_change !== false) items.push(`Change dates, guests or add-ons${b.group ? ' (guests can only be added)' : ', or move nights to another property of this host'}: until 10 AM on ${next} (the property’s time). Before check-in a cheaper change refunds the difference; leaving early after check-in gives nothing back for the nights you don’t stay.`);
     if(!b.stay_window_closed) items.push(`Report a problem during the stay: by 10 AM on ${next}, with photos.`);
     items.push('Aerva’s check-in promise: if on arrival the place does not exist, or is not as listed or not available, report it on your check-in day, no later than 10 AM the next day (with a photo) — waiting can cost you your booking payment. Aerva moves you to another place (you pay only any difference) or refunds everything, including the service fee.');
   }
@@ -16546,7 +16852,7 @@ function aervaLoadSuggestedExperiences(root){
 
 // ---- Guest: complete an accepted transfer that costs the same or less ----
 async function aervaConfirmTransfer(changeId, btn){
-  if(!confirm('Complete this transfer? Your booking will be split as shown and this is final: no part can be changed, moved, split again, shortened or cancelled afterwards. For any problem, contact Aerva Support; Aerva decides. Any difference (after Aerva’s transfer fee) is held for you as Aerva credit, which you can have refunded to your original payment at any time from My Bookings.')) return;
+  if(!confirm('Complete this transfer? Your booking will be split as shown and this is final: no part can be changed, moved, split again, shortened or cancelled afterwards. For any problem, raise a request in the Resolution Center; Aerva decides. Any difference (after Aerva’s transfer fee) is held for you as Aerva credit, which you can have refunded to your original payment at any time from My Bookings.')) return;
   const label = btn ? btn.textContent : '';
   if(btn){ btn.disabled = true; btn.textContent = 'Confirming…'; }
   const note = document.createElement('p');
@@ -16571,7 +16877,7 @@ function aervaHelpMessage(el, text, qs){
   el.textContent = text + ' ';
   const a = document.createElement('a');
   a.href = 'index.html?view=help&new=1' + (qs ? '&' + qs : '');
-  a.textContent = 'Raise a request in Aerva Support';
+  a.textContent = 'Raise a request in the Resolution Center';
   el.appendChild(a);
 }
 
@@ -16653,10 +16959,12 @@ async function openPolicyCancel(orderId, listingName){
       // A natural disaster or government order: Aerva decides (owner, 10 Nov 2026).
       const nd = q.naturalDisaster || {};
       return '<p class="payout-muted" style="margin:8px 0;">Aerva checks your proof and decides \u2014 your host can\u2019t decline it. If Aerva approves, what you paid (booking price, GST and Aerva\u2019s service fee' + (q.freeCancel ? ', and the free cancellation add-on' : '') + ') becomes <strong>Aerva credit</strong>, and any security deposit is refunded to your original payment: use it for new dates, or have it refunded to your original payment any time from My Bookings. If not, nothing changes and your booking stands. Aerva\u2019s decision is final.</p>'
-        + (nd.credit ? line('Aerva credit if approved', '<strong>' + inr(nd.credit) + '</strong>') : '') + (nd.coupon ? line('Back as a coupon (the part paid by coupon)', inr(nd.coupon)) : '') + (nd.cash ? line('Refunded to each payer (a group booking)', inr(nd.cash)) : '');
+        + (nd.credit ? line('Aerva credit if approved', '<strong>' + inr(nd.credit) + '</strong>') : '') + (nd.coupon ? line('Back as a coupon (the part paid by coupon)', inr(nd.coupon)) : '') + (nd.cash ? line(q.groupNoRefund ? 'Security deposit, refunded to each payer' : 'Security deposit, refunded to your original payment', inr(nd.cash)) : '');
     }
     if(!q.allowed) return `<p class="payout-muted" style="margin:8px 0;">${esc(q.error || '')}</p>`;
     if(q.hostDecides) return `<p class="payout-muted" style="margin:8px 0;">Your host decides the refund.</p>${line('Deposit refunded', inr(q.ifNoRefund.deposit))}${line('Aerva service fee (non-refundable)', inr(q.ifNoRefund.feeKept))}${q.ifNoRefund.addOnKept ? line('Free cancellation add-on (not refunded; its window has passed)', inr(q.ifNoRefund.addOnKept)) : ''}`;
+    // A confirmed group booking is non-refundable: cancelled at once, only the deposit comes back (_cancellations.js groupNoRefund).
+    if(q.groupNoRefund) return `<p class="payout-muted" style="margin:8px 0;"><strong>This is a non-refundable group booking.</strong> If you cancel, the booking is cancelled at once for everyone, with no wait for your host, and nothing is refunded for the stay, its GST or Aerva’s service fee, whatever the listing’s policy.</p>${line('Refunded for the stay', '<strong>' + inr(q.refundBooking || 0) + '</strong>')}${q.deposit ? line('Security deposit, refunded to each payer', inr(q.deposit)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}`;
     // Free cancellation add-on, still in its window: cancelled at once, no host answer.
     if(q.instant) return `<p class="payout-muted" style="margin:8px 0;">You added free cancellation, and it is still before ${esc((q.freeCancel || {}).untilLabel || '')} (the property’s time): your booking is cancelled at once, with no wait for your host.</p>${line('You get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}${q.addOnKept ? line('Free cancellation add-on (non-refundable)', inr(q.addOnKept)) : ''}`;
     return `${line('If your host accepts, you get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponBack ? line('Plus, as a coupon', inr(q.couponBack)) : ''}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}${q.addOnKept ? line('Free cancellation add-on (not refunded; its window has passed)', inr(q.addOnKept)) : ''}`;
@@ -16683,7 +16991,7 @@ async function openPolicyCancel(orderId, listingName){
     const cop = overlay.querySelector('#pcReason').value === 'change_of_plans';
     overlay.querySelector('#pcProofWrap').style.display = cop ? 'none' : '';
     const go = overlay.querySelector('#pcGo');
-    if(go && !go.disabled) go.textContent = cop && q.instant ? 'Cancel now (free cancellation)' : cop ? 'Send request to host' : 'Send to Aerva with proof';
+    if(go && !go.disabled) go.textContent = cop && q.groupNoRefund ? 'Cancel now (nothing refunded for the stay)' : cop && q.instant ? 'Cancel now (free cancellation)' : cop ? 'Send request to host' : 'Send to Aerva with proof';
     const nl = overlay.querySelector('#pcNoteLabel'); if(nl) nl.textContent = cop ? 'Message to your host (optional)' : 'What happened (optional — your host and Aerva see it)';
   };
   overlay.querySelector('#pcReason').addEventListener('change', refresh);
@@ -16701,7 +17009,9 @@ async function openPolicyCancel(orderId, listingName){
         body: JSON.stringify({ mode: 'requestCancellation', orderId, reasonCode, details: overlay.querySelector('#pcNote').value.trim(), evidence }) });
       const d = await r.json().catch(() => ({}));
       if(!r.ok){ msg.textContent = d.error || 'Could not send the request.'; btn.disabled = false; return; }
-      body.innerHTML = d.cancelled
+      body.innerHTML = d.cancelled && q.groupNoRefund
+        ? `<p>The group booking is cancelled. Nothing is refunded for the stay${d.refundCash ? `; the security deposit (${inr(d.refundCash)}) goes back to each payer’s own payment, usually in 5–7 working days` : ''}. Everyone in the group has been told.</p>`
+        : d.cancelled
         ? `<p>Your booking is cancelled. ${inr(d.refundCash || 0)} is refunded to your original payment method${d.creditBack ? `, and ${inr(d.creditBack)} goes back on your Aerva credit` : ''}. Refunds usually arrive in 5–7 working days.</p>`
         : reasonCode !== 'change_of_plans' ? '<p>Your request and proof have been sent to Aerva. Aerva checks the proof and decides; we will email you. Your host has been told.</p>'
         : '<p>Your request has been sent to your host in Messages. We will email you when they answer.</p>';
@@ -16760,6 +17070,7 @@ function aervaBookOptionsHtml(){
     </div>
     <label class="ag-opt"><input type="checkbox" id="listingSplitToggle">
       <span><strong>Split the payment with friends</strong><em>Everyone pays for their own place. You pay for yours now; your friends have 2 hours. The place is not held until the last payment, and a confirmed group booking is non-refundable.</em></span></label>
+    <p class="ag-help" id="splitNeedsTwo" hidden>Splitting needs at least 2 guests — add a guest under “Who is coming” to use it.</p>
     <div class="ag-sub" id="listingSplitFields" hidden>
       <div class="field"><label for="splitPayNow">Places you pay for now</label><select id="splitPayNow"></select></div>
       <p class="ag-help" id="splitSummary">Choose your dates and guests to see each place’s share.</p>
@@ -16767,7 +17078,7 @@ function aervaBookOptionsHtml(){
       <label class="ag-opt ag-tick" id="splitCommitOpt"><input type="checkbox" id="splitCommit">
         <span><strong>I’ll pay for any places my friends don’t pay within 2 hours.</strong><em>If places are unpaid at 2 hours, you have 30 minutes to pay the rest. If you don’t, nothing is booked, everyone is refunded in full, and the unpaid amount is recorded on your account.</em></span></label>
       <label class="ag-opt ag-tick" id="splitNonRefOpt"><input type="checkbox" id="splitNonRef" class="ag-nonref">
-        <span><strong>${'I understand'}: once the booking is confirmed it is non-refundable.</strong><em>If plans change, nothing is refunded, whatever the listing’s cancellation policy (any deposit is still refunded). Only a natural disaster or government order approved by Aerva, a cancellation by the host, or Aerva’s check-in promise changes that.</em></span></label>
+        <span><strong>${'I understand'}: once the booking is confirmed it is non-refundable.</strong><em>If plans change, nothing is refunded, whatever the listing’s refund policy (any deposit is still refunded). Only a natural disaster or government order approved by Aerva, a cancellation by the host, or Aerva’s check-in promise changes that.</em></span></label>
       <p class="ag-help">Coupons, Aerva credit and free cancellation cannot be used on a split payment.</p>
     </div>
   </div>`;
@@ -16783,6 +17094,7 @@ function aervaRefreshSplit(q){
   if(toggle){
     toggle.disabled = n < 2;
     toggle.closest('.ag-opt').classList.toggle('is-off', n < 2);
+    const why = document.getElementById('splitNeedsTwo'); if(why) why.hidden = !(n < 2);
     if(n < 2 && toggle.checked){ toggle.checked = false; aervaSyncBookOptions(); }
   }
   const keep = Number(sel.value) || 1;
@@ -16836,6 +17148,8 @@ function aervaShowFreeCancelOffer(q){
   // these dates can't have it (check-in within 48 hours).
   const avail = document.getElementById('listingFreeCancelAvail');
   if(avail) avail.hidden = !(fc && fc.offered);
+  // The same line above the calendar (it would otherwise still promise it).
+  document.querySelectorAll('[data-free-cancel-line]').forEach(el => { el.hidden = !(fc && fc.offered); });
   if(!fc || !fc.offered){ opt.hidden = true; if(t.checked){ t.checked = false; } return; }
   opt.hidden = false;
   document.getElementById('listingFreeCancelTitle').textContent = `Free cancellation (until ${fc.untilLabel}) — ${fmtGuest(fc.fee)} + GST`;
@@ -16894,7 +17208,7 @@ function agStayHead(st, sub){
   return `<div class="ag-stay">
     ${st.photo ? `<img class="ag-stay-photo" src="${AG_ESC(st.photo)}" alt="">` : ''}
     <div class="ag-stay-text"><h2 class="ag-title">${AG_ESC(st.name || 'Your stay')}</h2>
-      <p class="ag-meta">${AG_ESC([st.area, st.city].filter(Boolean).join(', '))}</p>
+      <p class="ag-meta">${AG_ESC([st.area, st.city].filter((x, i, a) => x && a.indexOf(x) === i).join(', '))}</p>
       <p class="ag-dates">${AG_ESC(AG_DAY(st.arrival))} → ${AG_ESC(AG_DAY(st.departure))}${st.nights ? ` · ${st.nights} night${st.nights === 1 ? '' : 's'}` : ''}${st.guests ? ` · ${st.guests} guest${st.guests === 1 ? '' : 's'}` : ''}</p>
       ${sub || ''}</div></div>`;
 }
@@ -16970,7 +17284,7 @@ function agGroupHtml(g, note){
     awaiting_confirm: `<span class="ag-pill ag-wait">Waiting for ${g.isOrganiser ? 'you' : AG_ESC(g.organiserFirstName || 'the organiser')}</span> <span class="ag-count-big" data-ag-countdown="${g.confirmSecondsLeft || 0}">${agClock(g.confirmSecondsLeft)} left</span>`,
     awaiting_gap: `<span class="ag-pill ag-wait">${g.isOrganiser ? 'Pay the rest' : `Waiting for ${AG_ESC(g.organiserFirstName || 'the organiser')} to pay the rest`}</span> <span class="ag-count-big" data-ag-countdown="${g.confirmSecondsLeft || 0}">${agClock(g.confirmSecondsLeft)} left</span>`,
     confirming: '<span class="ag-pill ag-wait">Being confirmed…</span>',
-    confirmed: '<span class="ag-pill ag-done">Confirmed</span>',
+    confirmed: g.bookingCancelled ? '<span class="ag-pill ag-off">Booking cancelled</span>' : '<span class="ag-pill ag-done">Confirmed</span>',
     cancelled: `<span class="ag-pill ag-off">${g.outcomeKind === 'booked' ? 'Booked by someone else' : g.outcomeKind === 'not_completed' ? 'Not completed' : 'Did not go ahead'}</span>`,
     failed: '<span class="ag-pill ag-off">Not opened</span>',
     starting: '<span class="ag-pill ag-wait">Starting…</span>'
@@ -17043,7 +17357,9 @@ function agGroupHtml(g, note){
   } else if(!g.isOrganiser && (g.status === 'awaiting_confirm' || g.status === 'awaiting_gap')){
     decide = `<div class="ag-card"><p>Not every place was paid in 2 hours. ${AG_ESC(g.organiserFirstName || 'The organiser')} is paying the rest${g.rest ? ` (${AG_INR(g.rest.amount)})` : ''} to confirm the booking. If it isn’t paid in time, you are refunded in full. We email you either way.</p></div>`;
   }
-  const outcome = g.status === 'confirmed'
+  const outcome = g.status === 'confirmed' && g.bookingCancelled
+    ? `<div class="ag-card ag-outcome"><p><strong>This group booking was confirmed and has since been cancelled.</strong></p>${g.myPlaces || g.isOrganiser ? '<p>See <a href="index.html?view=my-bookings">My Bookings</a> and the updates below for what happens to your share.</p>' : ''}</div>`
+    : g.status === 'confirmed'
     ? `<div class="ag-card"><p><strong>${AG_ESC(g.outcome || 'Confirmed.')}</strong></p>${g.myPlaces || g.isOrganiser ? '<p>It is in your <a href="index.html?view=my-bookings">My Bookings</a>, with the check-in details and the group’s messages with the host.</p>' : ''}</div>`
     : g.status === 'cancelled' || g.status === 'failed' ? `<div class="ag-card ag-outcome" id="agOutcome">${g.outcomeKind === 'booked' || g.outcomeKind === 'unavailable'
         ? `<h3 class="ag-h3">${g.outcomeKind === 'booked' ? 'This place got booked by someone else' : 'This place is no longer available'}</h3><p>${AG_ESC(g.outcome)}</p>`
@@ -17323,7 +17639,7 @@ function aervaOpenGiftForm(b){
   wrap.querySelector('#agMSend').addEventListener('click', async () => {
     const v = (id) => wrap.querySelector('#' + id).value.trim();
     const err = wrap.querySelector('#agMErr');
-    if(!AG_NAME_OK(v('agMFirst')) || !AG_NAME_OK(v('agMLast'))){ err.textContent = 'Please enter their first and last name as on their government ID: letters only.'; err.hidden = false; return; }
+    if(!AG_NAME_OK(v('agMFirst')) || !AG_NAME_OK(v('agMLast'))){ err.textContent = 'Please enter their first and last name as on their government ID: letters, spaces, dots, apostrophes and hyphens only.'; err.hidden = false; return; }
     const btn = wrap.querySelector('#agMSend'); btn.disabled = true;
     const r = await agFetch('/api/guest-profile', { method: 'POST', body: JSON.stringify({ mode: 'sendGift', orderId: b.id,
       recipient: { firstName: v('agMFirst'), lastName: v('agMLast'), email: v('agMEmail'), phone: v('agMPhone') || undefined, message: v('agMMsg') || undefined } }) });

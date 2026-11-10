@@ -222,6 +222,13 @@ async function razorpayOrderFor(razorpay, claim, g, assertNotesFit) {
 async function placeTaken(sql, g) {
   const detail = g.stay && g.stay.detail ? g.stay.detail : {};
   const s = { listingId: g.listing_id, roomId: g.room_id || null, arrival: dateStr(g.arrival), departure: dateStr(g.departure), suite: detail.suite };
+  // The listing itself is no longer bookable (deactivated or removed by its
+  // host, hidden or blocked by Aerva): a normal checkout is refused there, so
+  // the group cannot be completed either.
+  try {
+    const l = (await sql`SELECT status FROM listings WHERE id = ${s.listingId}`)[0];
+    if (!l || l.status !== 'approved') return UNAVAILABLE;
+  } catch (e) { /* checked again when the booking row is written */ }
   const booked = s.roomId
     ? await sql`SELECT 1 FROM orders WHERE room_id = ${s.roomId} AND status = 'paid' AND COALESCE(order_type, 'stay') = 'stay'
                   AND arrival < ${s.departure}::date AND departure > ${s.arrival}::date AND (group_booking_id IS NULL OR group_booking_id <> ${g.id}) LIMIT 1`
@@ -330,7 +337,7 @@ async function startPayment(sql, razorpay, { token, guestId, places, firstName, 
   if (k > left) throw userError(left <= 0 ? 'All places are paid for, or being paid for right now. If a payment does not go through, places open again in a few minutes.' : `Only ${left} place${left === 1 ? ' is' : 's are'} left. Please choose ${left} or fewer.`, 409, { placesLeft: Math.max(0, left) });
   const mine = await sql`SELECT status, expires_at FROM group_claims WHERE group_id = ${g.id} AND guest_id = ${guestId}`;
   if (mine.some(c => c.status === 'open')) throw userError('Your payment for this group is already open. Finish it there, or wait 3 minutes and try again.', 409);
-  if (mine.length >= MAX_CLAIMS_PER_PERSON) throw userError('Too many payment attempts for this group from your account. Please raise a request in Aerva Support (Help → Raise a request).', 429);
+  if (mine.length >= MAX_CLAIMS_PER_PERSON) throw userError('Too many payment attempts for this group from your account. Please raise a request in the Resolution Center (Help → Raise a request).', 429);
   // amount is set from the places actually taken, below.
   const claim = (await sql`
     INSERT INTO group_claims (group_id, guest_id, first_name, last_name, email, phone, kind, places, amount, expires_at, nonrefundable_ack_at)
@@ -842,7 +849,7 @@ async function addGuests(sql, razorpay, { token, guestId, places }) {
   const paidSeats = (await sql`SELECT s.seat FROM group_seats s JOIN group_claims c ON c.id = s.claim_id WHERE s.group_id = ${g.id} AND c.status = 'paid' AND c.kind = 'places' ORDER BY s.seat`).map(r => Number(r.seat));
   const paid = sum(claims.filter(c => c.status === 'paid' && (c.kind === 'places' || c.kind === 'topup')).map(c => c.amount));
   const r = repriceShares(g, { total, newPlaces: N, paidSeats, paid });
-  if (!r) throw userError('The stay could not be priced for that many guests. Please raise a request in Aerva Support (Help → Raise a request).');
+  if (!r) throw userError('The stay could not be priced for that many guests. Please raise a request in the Resolution Center (Help → Raise a request).');
   const text = `Guest${k === 1 ? '' : 's'} added — now ${N} places, ${inr(r.perPlace)} each${r.lastPlace !== r.perPlace ? ` (last place ${inr(r.lastPlace)})` : ''}. The whole stay is ${inr(total)} for ${N} guests.${r.topup ? ` The places already paid now owe a balance of ${inr(r.topup)}, which anyone in the group can pay.` : ''}`;
   const notice = JSON.stringify([{ at: new Date().toISOString(), text }]);
   const stay = JSON.stringify({ input, detail: d });
@@ -926,7 +933,7 @@ async function startAddedPayment(sql, razorpay, { g, guestId, firstName, lastNam
   }
   const mine = await sql`SELECT status FROM group_claims WHERE group_id = ${g.id} AND guest_id = ${guestId}`;
   if (mine.some(x => x.status === 'open')) throw userError('Your payment for this group is already open. Finish it there, or wait 3 minutes and try again.', 409);
-  if (mine.length >= MAX_CLAIMS_PER_PERSON) throw userError('Too many payment attempts for this group from your account. Please raise a request in Aerva Support (Help → Raise a request).', 429);
+  if (mine.length >= MAX_CLAIMS_PER_PERSON) throw userError('Too many payment attempts for this group from your account. Please raise a request in the Resolution Center (Help → Raise a request).', 429);
   let claim;
   try {
     claim = (await sql`
@@ -994,7 +1001,7 @@ async function startTopupPayment(sql, razorpay, { token, guestId, firstName, las
   if (!(owed > 0)) throw userError('There is no balance to pay.', 409);
   const mine = await sql`SELECT status FROM group_claims WHERE group_id = ${g.id} AND guest_id = ${guestId}`;
   if (mine.some(x => x.status === 'open')) throw userError('Your payment for this group is already open. Finish it there, or wait 3 minutes and try again.', 409);
-  if (mine.length >= MAX_CLAIMS_PER_PERSON) throw userError('Too many payment attempts for this group from your account. Please raise a request in Aerva Support (Help → Raise a request).', 429);
+  if (mine.length >= MAX_CLAIMS_PER_PERSON) throw userError('Too many payment attempts for this group from your account. Please raise a request in the Resolution Center (Help → Raise a request).', 429);
   let claim;
   try {
     claim = (await sql`
@@ -1142,6 +1149,14 @@ async function status(sql, razorpay, token, viewerGuestId = null) {
     const p = payers.find(x => x.guestId === c.guest_id);
     if (p) p.places += c.places; else payers.push({ guestId: c.guest_id, firstName: c.first_name || 'Guest', places: c.places, organiser: Number(c.guest_id) === Number(g.organiser_guest_id) });
   });
+  // The organiser paid the rest at 2 hours (a 'gap' payment has no places of its
+  // own): once confirmed, the places nobody else paid are the organiser's.
+  const covered = g.status === 'confirmed' && claims.some(c => c.kind === 'gap' && c.status === 'paid')
+    ? Math.max(0, Number(g.places) - sum(payers.map(p => p.places))) : 0;
+  if (covered > 0) {
+    const org = payers.find(p => p.organiser);
+    if (org) org.places += covered; else payers.unshift({ guestId: g.organiser_guest_id, firstName: g.organiser_first_name || 'Organiser', places: covered, organiser: true });
+  }
   const failed = claims.filter(c => (c.status === 'failed' || (c.status === 'released' && c.failed_reason && !/cancelled/.test(c.failed_reason))) && c.kind === 'places' && c.razorpay_order_id)
     .slice(-5).map(c => ({ firstName: c.first_name || 'Someone', places: c.places, note: c.status === 'failed' ? 'Payment didn’t go through — place still open' : 'Payment not completed in time — place still open', at: c.created_at }));
   const rejected = claims.filter(c => c.status === 'rejected').map(c => ({ firstName: c.first_name || 'Someone', note: 'Payment not counted — refunded in full', reason: c.failed_reason }));
@@ -1152,7 +1167,7 @@ async function status(sql, razorpay, token, viewerGuestId = null) {
     places: g.places, total: g.total, shares: g.shares, freeShares,
     // What a place still to pay costs now (paid places keep what they paid).
     perPlace: freeShares.length ? freeShares[0] : g.shares[0], lastPlace: freeShares.length ? freeShares[freeShares.length - 1] : g.shares[g.shares.length - 1],
-    paidPlaces: P, placesLeft: Math.max(0, g.places - seatsTaken), beingPaid: Math.max(0, seatsTaken - P),
+    paidPlaces: g.status === 'confirmed' ? Math.max(P + covered, sum(payers.map(p => p.places))) : P, placesLeft: Math.max(0, g.places - seatsTaken), beingPaid: Math.max(0, seatsTaken - P),
     payers: payers.map(p => ({ firstName: p.firstName, places: p.places, organiser: p.organiser })), failed, rejected,
     secondsLeft: g.status === 'open' ? secs(g.closes_at) : null, closesAt: g.closes_at, confirmSecondsLeft: ['awaiting_confirm', 'awaiting_gap'].includes(g.status) ? secs(g.confirm_by) : null,
     // The final rules (10 Nov 2026): not held until the last payment; non-refundable once confirmed.
@@ -1161,13 +1176,17 @@ async function status(sql, razorpay, token, viewerGuestId = null) {
     outcomeKind: g.outcome === BOOKED ? 'booked' : g.outcome === UNAVAILABLE ? 'unavailable' : g.outcome === NOT_COMPLETED ? 'not_completed' : null,
     paidSoFar: paidToward(claims), restNow: ['open', 'awaiting_gap', 'awaiting_confirm'].includes(g.status) ? restOf(g, claims) : 0,
     organiserFirstName: g.organiser_first_name || null, isOrganiser: isOrg, signedIn: viewerGuestId != null,
-    myPlaces: sum(mineClaims.filter(c => c.status === 'paid' && (c.kind === 'places' || c.kind === 'change')).map(c => c.places)),
+    myPlaces: sum(mineClaims.filter(c => c.status === 'paid' && (c.kind === 'places' || c.kind === 'change')).map(c => c.places)) + (isOrg ? covered : 0),
     myPaid: sum(mineClaims.filter(c => c.status === 'paid').map(c => c.amount)),
     myRefunded: sum(mineClaims.filter(c => c.status === 'paid' && c.refund_status && c.refund_status !== 'failed').map(c => Math.round(Number(c.refund_amount || 0) / 100))),
     myOpenPayment: mineClaims.some(c => c.status === 'open'),
     policy: 'Non-refundable group booking: no refund if plans change, whatever the listing’s policy (any deposit is refunded).',
     orderId: g.order_id && (isOrg || mineClaims.some(c => c.status === 'paid')) ? g.order_id : null
   };
+  // A confirmed booking that was cancelled afterwards (by the organiser, the host or Aerva): the page must not go on saying "Confirmed".
+  if (g.status === 'confirmed' && g.order_id) {
+    try { out.bookingCancelled = !(await sql`SELECT 1 FROM orders WHERE (id = ${g.order_id} OR group_booking_id = ${g.id}) AND status = 'paid' LIMIT 1`).length; } catch (e) { /* shown as confirmed */ }
+  }
   // Add a guest.
   out.addOn = v2;
   out.notices = v2 && Array.isArray(g.notices) ? g.notices.slice(-10).map(n => ({ at: n.at || null, text: String(n.text || '') })) : [];
@@ -1225,13 +1244,16 @@ async function decorateBookings(sql, guestId, bookings) {
     const mine = await sql`
       SELECT g.*, (SELECT COALESCE(sum(c.places), 0)::int FROM group_claims c WHERE c.group_id = g.id AND c.guest_id = ${guestId} AND c.status = 'paid' AND c.kind IN ('places', 'change')) AS my_places,
              (SELECT COALESCE(sum(c.amount), 0)::int FROM group_claims c WHERE c.group_id = g.id AND c.guest_id = ${guestId} AND c.status = 'paid') AS my_paid,
-             (SELECT COALESCE(sum(c.places), 0)::int FROM group_claims c WHERE c.group_id = g.id AND c.status = 'paid' AND c.kind IN ('places', 'change')) AS paid_total
+             (SELECT COALESCE(sum(c.places), 0)::int FROM group_claims c WHERE c.group_id = g.id AND c.status = 'paid' AND c.kind IN ('places', 'change')) AS paid_total,
+             EXISTS (SELECT 1 FROM group_claims c WHERE c.group_id = g.id AND c.status = 'paid' AND c.kind = 'gap') AS gap_paid
       FROM group_bookings g
       WHERE g.status <> 'starting' AND (g.organiser_guest_id = ${guestId} OR EXISTS (SELECT 1 FROM group_claims c WHERE c.group_id = g.id AND c.guest_id = ${guestId} AND c.status IN ('paid', 'rejected')))
         AND (g.status IN ('open', 'awaiting_confirm', 'awaiting_gap', 'confirming', 'confirmed') OR g.decided_at > now() - interval '14 days')
       ORDER BY g.id DESC LIMIT 30`;
     for (const g of mine) {
       const isOrg = Number(g.organiser_guest_id) === Number(guestId);
+      // The organiser paid the rest at 2 hours: the places nobody else paid are theirs.
+      if (g.status === 'confirmed' && g.gap_paid && Number(g.paid_total) < Number(g.places)) { if (isOrg) g.my_places += Number(g.places) - Number(g.paid_total); g.paid_total = Number(g.places); }
       const b = g.order_id ? bookings.find(x => Number(x.id) === Number(g.order_id)) : null;
       // Non-refundable group booking: each person's own share is shown.
       if (b) { b.group = { token: g.token, places: g.places, paidPlaces: g.paid_total, organiser: isOrg, myPlaces: g.my_places, myPaid: g.my_paid, nonRefundable: true, label: 'Non-refundable group booking' }; continue; }

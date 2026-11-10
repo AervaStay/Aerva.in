@@ -35,7 +35,7 @@ const { markIdDeadlineIfMissing } = require('./_guest-id');
 // Fallback only for orders placed before the split commission existed.
 const crypto = require('crypto');
 const FALLBACK_COMMISSION_RATE = 5;
-const DEPOSIT_HOLD_DAYS = 1;   // deposit_release_at = the day after departure (the host has 24 hours from check-out to report damage — _deposits.js)
+const DEPOSIT_HOLD_DAYS = 7;   // a deposit is held for 7 days after departure
 
 // ---- The booking's confirmation code ----
 // RANDOM only: eight digits, carrying nothing about the booking, the
@@ -198,7 +198,7 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
     }
 
     doc.moveDown(3);
-    doc.fontSize(9).font('Helvetica').fillColor('#888').text('Thank you for booking with Aerva. For any questions, raise a request in Aerva Support: aerva.in/index.html?view=help', { align: 'center' });
+    doc.fontSize(9).font('Helvetica').fillColor('#888').text('Thank you for booking with Aerva. For any questions, raise a request in the Resolution Center: aerva.in/index.html?view=help', { align: 'center' });
 
     doc.end();
   });
@@ -213,12 +213,17 @@ function generateBookingConfirmationPdf(stays, experiences, razorpayOrderId, cha
 async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, confirmationCodes = null, guest = null) {
   if (!process.env.RESEND_API_KEY) return;
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  // Plain calendar dates, written out ("Fri, 20 Nov 2026") — never the raw 2026-11-20.
+  const dayText = (v) => { const d = new Date(String(v || '').slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? String(v || '') : d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };
+  // An experience ends the day before its stored end date (as in the PDF above).
+  const expWhen = (e) => { const last = e.endDate ? new Date(new Date(String(e.endDate).slice(0, 10) + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10) : null;
+    return last && last > String(e.date).slice(0, 10) ? `${dayText(e.date)} → ${dayText(last)}` : dayText(e.date); };
   const items = [
-    ...stays.map(s => ({ listingId: s.listingId, name: s.suite, when: `${s.arrival} → ${s.departure}`, guests: s.guests,
+    ...stays.map(s => ({ isStay: true, listingId: s.listingId, name: s.suite, when: `${dayText(s.arrival)} → ${dayText(s.departure)}`, guests: s.guests,
                          pets: (s.petTypes || []).length, service: (s.serviceAnimals || []).length,
                          freeCancel: Math.round(Number(s.freeCancelFee) || 0), freeCancelNet: Math.round(Number(s.freeCancelFee) || 0) - Math.round(Number(s.freeCancelCommission) || 0),
                          freeCancelUntil: (s.freeCancelOffer || {}).untilLabel || '' })),
-    ...experiences.map(e => ({ listingId: e.listingId, name: e.suite, when: e.date, guests: e.guests, pets: 0, service: 0 }))
+    ...experiences.map(e => ({ listingId: e.listingId, name: e.suite, when: expWhen(e), guests: e.guests, pets: 0, service: 0 }))
   ].filter(i => i.listingId);
   if (!items.length) return;
   let rows = [];
@@ -245,7 +250,7 @@ async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, 
           <ul>
             <li>Provide the home or experience as listed, safe and clean.</li>
             <li>Check a government photo ID for every adult guest${guest && guest.gift ? ` — for this gift, the ID of ${esc([guest.firstName, guest.lastName].filter(Boolean).join(' '))}` : ''}.</li>
-            <li>Foreign guests: file Form III at indianfrro.gov.in within 24 hours of arrival and of departure.</li>
+            ${list.some(i => i.isStay) ? '<li>Foreign guests: file Form III at indianfrro.gov.in within 24 hours of arrival and of departure.</li>' : ''}
             <li>Share check-in details in Aerva Messages before arrival.</li>
             <li>Keep all communication and payments on Aerva.</li>
           </ul>
@@ -563,7 +568,7 @@ async function afterPaidRow(sql, ctx, row, orderId) {
 async function sendConflictEmail(ctx, reasonText, refundedInr, refundFailed) {
   if (!process.env.RESEND_API_KEY || !ctx.email) return;
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
-  const items = [...ctx.stays.map(s => `${s.suite} (${s.arrival} → ${s.departure})`), ...ctx.experiences.map(e => `${e.suite} (${e.date})`)];
+  const items = [...ctx.stays.map(s => `${s.suite} (${require('./_booking-rules').niceDay(s.arrival)} → ${require('./_booking-rules').niceDay(s.departure)})`), ...ctx.experiences.map(e => `${e.suite} (${require('./_booking-rules').niceDay(e.date)})`)];
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
       <h2 style="font-family:Georgia,serif;">We could not complete your booking</h2>
@@ -715,6 +720,7 @@ async function processScheduledRefunds(sql, razorpay, { deadlineMs = 4000 } = {}
 // The one entry point. Returns:
 //   { status: 'confirmed', confirmationCodes } booking written as paid
 //   { status: 'duplicate' }                  already handled earlier
+//   { status: 'held', held }                 paid, waiting for the guest's details (_guest-verify.js)
 //   { status: 'conflict', message }          written cancelled, refunded
 //   { status: 'pending', message }           payment not settled yet; retried later
 //   { status: 'error', message }             nothing written; retried later
@@ -878,6 +884,48 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
       if (!creditClaimed) conflictReason = 'The Aerva credit on this booking had already been used or refunded.';
     } catch (err) { conflictReason = 'The Aerva credit on this booking could not be applied.'; }
   }
+  // 4c. The guest's details are not submitted and verified yet (owner, 10 Nov
+  // 2026; _guest-verify.js; only once its database update has run AND
+  // GUEST_VERIFICATION_REQUIRED is on): the payment is kept, the dates stay
+  // held for this guest and the coupon / credit stay claimed — but NO booking
+  // row, code, host email or payout exists until the details are verified.
+  // finishBooking below then writes it exactly as a normal booking; if the
+  // deadline passes instead, everything is refunded and given back.
+  if (!conflictReason) {
+    let held = null;
+    try { held = await require('./_guest-verify').holdIfUnverified(sql, razorpay, ctx, { couponClaimed, creditClaimed, payment: check.payment }); }
+    catch (err) {
+      console.error('confirmBooking: could not hold the booking for verification:', razorpayOrderId, err);
+      await giveBackClaims(sql, ctx, { couponClaimed, creditClaimed });
+      await release();
+      return { status: 'error', message: 'Could not save the booking right now.' };
+    }
+    if (held && held.conflict) conflictReason = held.conflict;
+    else if (held) return { status: 'held', held: held.view };
+  }
+  return finishBooking(sql, razorpay, ctx, rows, { conflictReason, couponClaimed, creditClaimed, release });
+}
+
+// The coupon and Aerva credit a payment claimed, given back (a conflict, or
+// a held payment that was not verified in time). Never throws.
+async function giveBackClaims(sql, ctx, { couponClaimed = false, creditClaimed = false } = {}) {
+  if (creditClaimed && Array.isArray(ctx.feeCredits) && ctx.feeCredits.length) {
+    try { await require('./_fee-credits').unclaim(sql, ctx.feeCredits); } catch (err) { console.error('could not return Aerva credit:', err.message); }
+  }
+  if (couponClaimed && ctx.couponId) {
+    try { await sql`UPDATE coupons SET status = 'active', redeemed_at = NULL WHERE id = ${ctx.couponId} AND status = 'redeemed' AND redeemed_order_id IS NULL`; }
+    catch (err) { console.error('could not return coupon:', ctx.couponId, err.message); }
+  }
+}
+
+// Steps 5 onwards: write the rows and do everything a confirmed booking
+// needs. Called at once for a verified guest, and later — from
+// _guest-verify.js, with fromHold — for a payment that was held until the
+// guest's details were verified (same rows, code, emails and steps).
+//   release()  gives the payment's claim back so a retry can run (normal path)
+//   fromHold   the hold keeps the coupon / credit claims when nothing could be written
+async function finishBooking(sql, razorpay, ctx, rows, { conflictReason = null, couponClaimed = false, creditClaimed = false, release = async () => {}, fromHold = false } = {}) {
+  const { razorpayOrderId, source } = ctx;
   const unclaimCredit = async () => {
     if (!creditClaimed) return;
     await require('./_fee-credits').unclaim(sql, ctx.feeCredits);
@@ -909,8 +957,7 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
     } else {
       console.error('confirmBooking: could not write the booking:', razorpayOrderId, err);
       if (!written.length) {
-        await unclaimCoupon();
-        await unclaimCredit();
+        if (!fromHold) { await unclaimCoupon(); await unclaimCredit(); }
         await release();
         return { status: 'error', message: 'Could not save the booking right now.' };
       }
@@ -918,7 +965,7 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
       // surface it loudly for a person to finish.
       await logAudit(sql, { action: 'booking_partly_recorded', success: false, actorType: 'system', targetType: 'order', targetId: written[0].id,
         metadata: { razorpayOrderId, written: written.length, of: rows.length, error: String(err.message || err).slice(0, 300) } });
-      return { status: 'error', message: 'Booking partly saved.', userMessage: 'Your payment was received but the booking was only partly saved. Our team has been alerted and will confirm by email. Please do not pay again.' };
+      return { status: 'error', partly: true, message: 'Booking partly saved.', userMessage: 'Your payment was received but the booking was only partly saved. Our team has been alerted and will confirm by email. Please do not pay again.' };
     }
   }
 
@@ -937,7 +984,7 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
       metadata: { razorpayOrderId, orderIds: ids, reason: conflictReason, refundedInr: refund.totalInr, refundFailed: refund.failed, source } });
     await sendConflictEmail(ctx, conflictReason, refund.totalInr, refund.failed);
     await releaseHolds(sql, { razorpayOrderId, reason: 'conflict' });
-    return { status: 'conflict', message: `${conflictReason} The booking was not made, and your payment is being refunded in full — we have emailed you the details.` };
+    return { status: 'conflict', orderIds: ids, message: `${conflictReason} The booking was not made, and your payment is being refunded in full — we have emailed you the details.` };
   }
 
   // 6b. Confirmed. Every booking gets its confirmation code.
@@ -1036,7 +1083,7 @@ async function confirmBooking(sql, razorpay, { razorpayOrderId, razorpayPaymentI
   // Paid without a valid ID on the account (removed or rejected while
   // paying): the guest gets a short deadline to add one (_guest-id.js).
   await markIdDeadlineIfMissing(sql, written.map(w => w.id), ctx.guestId);
-  return { status: 'confirmed', confirmationCodes: ctx.confirmationCodes || [] };
+  return { status: 'confirmed', confirmationCodes: ctx.confirmationCodes || [], orderIds: written.map(w => w.id) };
 }
 
 // ---------------------------------------------------------------------
@@ -1079,4 +1126,6 @@ async function reconcilePayments(sql, razorpay, { deadlineMs = 4000, limit = 25 
 module.exports = { confirmBooking, reconcilePayments, processScheduledRefunds, findDateConflicts, planRows, checkPayment,
   loadCart, refundWholePayment, sendHostBookingEmails, issueConfirmationCode,
   // for group bookings (_group-bookings.js): the same row, emails and steps as any booking
-  insertRow, afterPaidRow, sendBookingConfirmationEmail, generateBookingConfirmationPdf };
+  insertRow, afterPaidRow, sendBookingConfirmationEmail, generateBookingConfirmationPdf,
+  // for payments held until the guest's details are verified (_guest-verify.js)
+  finishBooking, giveBackClaims };

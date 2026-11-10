@@ -575,6 +575,9 @@ module.exports = async (req, res) => {
         (await require('./_cohost-coupon').bellNotifications(sql, { hostId: guest.host_id, guestId: guest.id })).forEach(n => notifications.push(n));
         // Payouts sent in the last 30 days (as host, or as a co-host).
         (await recentPayoutNotifications(sql, { hostId: guest.host_id, guestId: guest.id })).forEach(n => notifications.push(n));
+        // A payment waiting for the guest's details to be verified (a new item at
+        // each reminder), one that lapsed; for a host, a hold that went (_guest-verify.js).
+        (await require('./_guest-verify').bellNotifications(sql, { guestId: guest.id, hostId: guest.host_id })).reverse().forEach(n => notifications.unshift(n));
       } catch (err) {
         console.error('notifications failed (non-fatal):', err);
       }
@@ -591,8 +594,17 @@ module.exports = async (req, res) => {
           wallet.remindCredit = await require('./_fee-credits').remindOnSignIn(sql, guest.id);
         }
       } catch (err) { /* non-fatal */ }
+      // "Complete your profile" (owner, 10 Nov 2026): what the pop-up needs to
+      // decide — first name, last name and phone, whichever is missing; shown
+      // at each sign-in and when a booking is started, until done. Hosts get
+      // it before their own setup steps. Never the reason a session check fails.
+      let profilePrompt = { needed: false, missing: [] };
+      try {
+        const n = (await sql`SELECT to_jsonb(guests)->>'first_name' AS first_name, to_jsonb(guests)->>'last_name' AS last_name FROM guests WHERE id = ${guest.id}`)[0] || {};
+        profilePrompt = require('./_guest-verify').profilePrompt({ ...guest, first_name: n.first_name, last_name: n.last_name });
+      } catch (err) { /* no pop-up */ }
       return res.status(200).json({ guest: { ...safeGuest(guest), profile_photo_url: guest.profile_photo_url || null,
-        hasActiveListing, isCohost, tier, pendingReviews, notifications, wallet } });
+        hasActiveListing, isCohost, tier, pendingReviews, notifications, wallet, profilePrompt } });
     } catch (err) {
       console.error('guest-auth (GET) error:', err);
       return res.status(500).json({ error: 'Could not verify your session.' });

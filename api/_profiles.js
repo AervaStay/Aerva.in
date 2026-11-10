@@ -244,7 +244,7 @@ async function liveListingsForHost(sql, hostId) {
     return rows.map(l => ({
       id: l.id,
       name: l.property_name,
-      place: [l.area, l.city].filter(Boolean).join(', '),
+      place: [l.area, l.city].filter((v, i, arr) => v && !(i === 0 && arr[1] && String(v).trim().toLowerCase() === String(arr[1]).trim().toLowerCase())).join(', '),
       type: l.listing_type === 'experience' ? 'experience' : 'stay',
       propertyType: l.property_type || null,
       price: Number(l.nightly_rate) || null,

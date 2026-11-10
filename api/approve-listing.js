@@ -218,9 +218,14 @@ async function sendHostApprovalEmail(listing, { needsRoomSetup = false } = {}) {
       <p><strong>${esc(listing.property_name)}</strong> is now approved and visible to guests.</p>
       ${badgeAnnouncement}
       ${resortRoomsReminder}
+      ${listing.listing_type === 'experience' ? `
+      <p>To change its price, dates or details, or set up an offer, open it from My Collection in your host dashboard:</p>
+      <p><a href="${SITE_BASE}/host-dashboard.html" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Open My Collection</a></p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Need help? ${helpLink({ listing: listing.id }, 'Raise a request in the Resolution Center')}.</p>` : `
       <p>${listing.property_type === 'Resort' ? 'Use this link to update room pricing, add more rooms, or set up an offer' : "Whenever you'd like to change your nightly rate or set up an offer, use this link"} — it's yours to keep and reuse anytime:</p>
       <p><a href="${manageLink}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">${needsRoomSetup ? 'Add Your Rooms' : (listing.property_type === 'Resort' ? 'Manage Your Rooms' : 'Manage listing')}</a></p>
-      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Keep this email — this link doesn't expire for two years. If you ever lose it, open Manage from My Collection in your host dashboard, or ${helpLink({ category: 'listing_photos', listing: listing.id }, 'raise a request in Aerva Support')}.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">Keep this email — this link doesn't expire for two years. If you ever lose it, open Manage from My Collection in your host dashboard, or ${helpLink({ category: 'listing_photos', listing: listing.id }, 'raise a request in the Resolution Center')}.</p>
+`}
     </div>
   `;
 

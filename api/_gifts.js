@@ -115,10 +115,12 @@ async function stayFor(sql, orderId) {
            l.id AS listing_id, l.property_name, l.city, to_jsonb(l)->>'area' AS area, l.formatted_address, l.host_id,
            l.check_in_time, l.check_out_time, l.timezone, l.host_email, l.cover_photo_url,
            COALESCE(l.listing_type, 'stay') AS listing_type,
+           -- A transferred booking is several rows on this payment: the gift lasts until the last part still booked ends.
+           (SELECT max(p.departure) FROM orders p WHERE p.razorpay_order_id = o.razorpay_order_id AND p.status = 'paid') AS last_departure,
            (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date AS local_today
     FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0] || null;
 }
-const beforeCheckout = (s) => s && s.status === 'paid' && dateStr(s.departure) > dateStr(s.local_today);
+const beforeCheckout = (s) => !!s && (s.last_departure ? dateStr(s.last_departure) > dateStr(s.local_today) : (s.status === 'paid' && dateStr(s.departure) > dateStr(s.local_today)));
 const beforeCheckin = (s) => s && s.status === 'paid' && Date.now() < checkInMomentMs(s.arrival, s.timezone, s.check_in_time);
 
 function stayBlock(s, { address = true, code = true } = {}) {
@@ -203,7 +205,12 @@ async function sendGift(sql, { orderId, guestId, input }) {
   if (String(me.email || '').toLowerCase() === recipient.email) throw userError('That is your own email. A gift goes to someone else.');
   const current = await giftForOrder(sql, orderId);
   const buyerFirst = await buyerFirstName(sql, guestId, null);
+  // A booking split by a transfer is final (it cannot be changed in any way):
+  // it cannot be made a gift afterwards. A gift made before the transfer stays one.
+  if (!current && s.transfer_change_id) throw userError('This booking was transferred, so it can no longer be sent as a gift.');
   if (!current) {
+    // As My Bookings shows (can_gift): a booking split by a transfer cannot be made a gift.
+    if (s.transfer_change_id) throw userError('A transferred booking cannot be sent as a gift.');
     const out = await createGift(sql, { orderId: s.id, buyerGuestId: guestId, buyerFirst, recipient, source: 'my_bookings' });
     return { gift: buyerView(out.gift) };
   }
@@ -421,9 +428,20 @@ async function decorateBookings(sql, guestId, bookings) {
       WHERE g.status <> 'withdrawn' AND o.guest_id <> ${guestId}
         AND (g.accepted_guest_id = ${guestId} OR (g.status = 'sent' AND ${!!(acct && acct.email_ok)} AND lower(g.recipient_email) = ${String((acct && acct.email) || '').toLowerCase()}))`;
     for (const g of theirs) {
-      const s = await stayFor(sql, g.oid);
-      if (!s) continue;
+      // Every booking of the purchase: a gifted booking split by a transfer
+      // (_booking-transfers.js) is several linked bookings, each with its own
+      // property, address and code — the guest staying needs them all.
+      const first = await stayFor(sql, g.oid);
+      if (!first) continue;
+      let rowIds = [first.id];
+      try { if (first.razorpay_order_id) rowIds = (await sql`SELECT id FROM orders WHERE razorpay_order_id = ${first.razorpay_order_id} AND guest_id = ${first.guest_id} ORDER BY arrival, id`).map(r => r.id); } catch (e) { /* the gifted booking alone */ }
       const accepted = g.status === 'accepted';
+      const rowsOf = [];
+      for (const rid of rowIds) { const s = Number(rid) === Number(first.id) ? first : await stayFor(sql, rid); if (s) rowsOf.push(s); }
+      // A booking Aerva moved (check-in promise) leaves a closed original: only the live booking is shown, as the buyer sees it.
+      const live = rowsOf.some(s => s.status === 'paid');
+      for (const s of rowsOf) {
+      if (live && rowsOf.length > 1 && s.status !== 'paid') continue;
       bookings.push({
         id: s.id, shared: 'gift', gifted_to_you: true, gift_from: g.buyer_first_name || 'Someone', gift_message: g.message || null,
         gift_id: g.id, gift_accepted: accepted, suite_name: s.property_name, listing_id: s.listing_id, listing_type: s.listing_type,
@@ -432,6 +450,7 @@ async function decorateBookings(sql, guestId, bookings) {
         listing_address: accepted ? s.formatted_address : null, check_in_time: s.check_in_time, check_out_time: s.check_out_time,
         local_today: dateStr(s.local_today), can_change: false, can_cancel_request: false, can_report: false, review_state: null
       });
+      }
     }
   } catch (err) { console.error('gift bookings not added:', err.message); }
   return bookings;

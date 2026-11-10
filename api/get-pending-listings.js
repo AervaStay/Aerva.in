@@ -25,6 +25,8 @@
 //          admin straight in.
 //
 //   GET  — pending listings for review, as before.
+//   POST { guestIdDecision: { reviewId, action, docType?, last4?, reason? } } — a guest's
+//     ID sent to Aerva to check (_guest-verify.js); listed in ?verifications=1 as guestIds
 //   GET ?verifications=1 — hosts with an Aadhaar or bank submission
 //          awaiting review (pending_review), instead of pending listings.
 //   GET ?disputes=1 — disputed security deposits awaiting an admin
@@ -46,7 +48,7 @@
 //          (see get-listings.js's ?siteBackground=1 mode, which is what
 //          the homepage actually reads from).
 //   POST { processDeposits: true }
-//        — finds every security deposit past the host's 24 hours after check-out with no
+//        — finds every security deposit past its 7-day hold with no
 //          dispute raised, and refunds each one in full to the guest's
 //          original payment method via Razorpay. Admin-triggered by
 //          design (a button in admin.html), not an unattended cron job —
@@ -444,7 +446,7 @@ module.exports = async (req, res) => {
       const rows = await sql`SELECT id, email FROM admins WHERE email = ${cleanEmail}`;
       const admin = rows[0];
       if (admin) {
-        const resetTok = createToken(admin.id, 'admin-password-reset', ADMIN_RESET_LINK_LIFETIME_MS);
+        const resetTok = createToken(admin.id, 'admin-password-reset', ADMIN_RESET_LINK_LIFETIME_MS, await sessionExtra(sql, admin.id));
         await sendAdminPasswordResetEmail(admin, resetTok);
         await logAudit(sql, {
           action: 'admin_password_reset_requested', success: true, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
@@ -470,6 +472,15 @@ module.exports = async (req, res) => {
       }
       const payload = verifyToken(resetToken);
       if (!payload || payload.action !== 'admin-password-reset') {
+        return res.status(400).json({ error: 'This reset link is invalid or has expired. Please request a new one.' });
+      }
+      // A link works once: choosing a password raises the account's session
+      // version (below), and a link carries the version it was made under.
+      // Without this an invite or reset email stayed usable for its whole
+      // lifetime (3 days / 1 hour) by anyone who came across it later.
+      let linkVersionNow = null;
+      try { linkVersionNow = await require('./_admin-auth').adminSessionVersion(sql, payload.listingId); } catch (e) { linkVersionNow = null; }
+      if (linkVersionNow !== null && (Number(payload.sv) || 0) !== linkVersionNow) {
         return res.status(400).json({ error: 'This reset link is invalid or has expired. Please request a new one.' });
       }
       const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
@@ -682,7 +693,7 @@ module.exports = async (req, res) => {
       const name = String(x.name || '').trim().slice(0, 80) || null;
       const row = (await sql`INSERT INTO admins (email, password_hash, name) VALUES (${cleanEmail}, ${unusable}, ${name}) RETURNING id, email, name`)[0];
       try { await sql`UPDATE admins SET role = ${role} WHERE id = ${row.id}`; } catch (e) { /* before the roles update: everyone is an admin */ }
-      const tok = createToken(row.id, 'admin-password-reset', 72 * 3600 * 1000);
+      const tok = createToken(row.id, 'admin-password-reset', 72 * 3600 * 1000, await sessionExtra(sql, row.id));
       let emailed = true;
       try { await sendAdminPasswordResetEmail(row, tok, { role: actions.ROLES[role] || role, by: ADMIN_ACTOR }); } catch (e) { emailed = false; }
       await logAudit(sql, { action: 'admin_account_created', success: true, actorType: 'admin', ...ADMIN_AUDIT, targetType: 'admin', targetId: row.id, metadata: { role, email: cleanEmail, invited: true } });
@@ -1042,11 +1053,15 @@ module.exports = async (req, res) => {
       count('listings', sql`SELECT (SELECT count(*) FROM listings WHERE status = 'pending')
                                  + (SELECT count(*) FROM listing_rooms lr JOIN listings l ON l.id = lr.listing_id WHERE lr.pending_review = TRUE) AS n`),
       count('verifications', sql`SELECT (SELECT count(*) FROM hosts WHERE aadhaar_status = 'pending_review' OR pan_status = 'pending_review' OR bank_status = 'pending_review')
-                                      + (SELECT count(*) FROM cohost_payout_profiles WHERE status = 'pending_review') AS n`),
+                                      + (SELECT count(*) FROM cohost_payout_profiles WHERE status = 'pending_review') AS n`)
+        // Guest IDs sent to Aerva to check (_guest-verify.js); none before its database update.
+        .then(async () => { const n = Number((await sql`SELECT count(*)::int AS n FROM guest_id_reviews WHERE status = 'pending'`)[0].n) || 0; if (n) counts.verifications = (counts.verifications || 0) + n; })
+        .catch(() => { /* not available yet */ }),
       count('deposits', sql`SELECT count(*)::int AS n FROM orders WHERE deposit_status = 'disputed'`),
       count('compliance', sql`SELECT count(*)::int AS n FROM compliance_flags WHERE resolved_at IS NULL`),
       count('payouts', sql`SELECT (SELECT count(*) FROM payouts WHERE status = 'failed') + (SELECT count(*) FROM refunds WHERE status = 'failed') AS n`),
-      count('trust', sql`SELECT count(*)::int AS n FROM stay_disputes WHERE status IN ('open', 'host_responded')`),
+      // Reports made on arrival are decided in Approvals → Check-in promise (counted there, below), not in Guest Safety.
+      count('trust', sql`SELECT count(*)::int AS n FROM stay_disputes WHERE status IN ('open', 'host_responded') AND reason NOT IN ('arrival_fake', 'arrival_failed')`),
       count('support', sql`SELECT count(*)::int AS n FROM support_tickets WHERE status IN ('open', 'in_progress')
                              AND last_user_message_at IS NOT NULL AND (last_support_message_at IS NULL OR last_user_message_at > last_support_message_at)`),
       count('batch', sql`SELECT count(*)::int AS n FROM job_runs WHERE last_ok IS FALSE`),
@@ -1063,6 +1078,12 @@ module.exports = async (req, res) => {
               OR (r.status = 'pending' AND r.decided_at IS NULL AND r.reason_code = ANY(${Object.keys(C.RETIRED_REASONS)})
                 AND (to_jsonb(r)->>'escalated_at' IS NOT NULL OR r.created_at < now() - interval '24 hours'))
               OR (to_jsonb(r)->>'review_requested_at' IS NOT NULL AND to_jsonb(r)->>'review_decided_at' IS NULL))`)[0].n) || 0;
+          if (n) counts.approvals = (counts.approvals || 0) + n;
+        }).catch(() => { /* not available yet */ })
+        // Check-in promise: reports on arrival waiting for Aerva (to decide, or to move / refund the guest).
+        .then(async () => {
+          const n = (Number((await sql`SELECT count(*)::int AS n FROM checkin_reports WHERE status IN ('open', 'confirmed')`)[0].n) || 0)
+            + ((await require('./_checkin-promise').adminView(sql)).listingBookings || []).length;   // future bookings of a listing blocked as fake
           if (n) counts.approvals = (counts.approvals || 0) + n;
         }).catch(() => { /* not available yet */ })
     ]);
@@ -1254,7 +1275,7 @@ module.exports = async (req, res) => {
     const fy = Number(req.query.fy) || T.financialYear(new Date());
     try {
       const rows = await sql`
-        SELECT p.id, p.order_id, p.payee_type, p.host_id, p.payee_guest_id, p.status, p.created_at, p.sent_at, p.net,
+        SELECT p.id, p.order_id, p.payee_type, p.host_id, p.payee_guest_id, p.status, p.created_at, p.sent_at, p.net, COALESCE(to_jsonb(p)->>'kind', 'booking') AS kind,
                p.tds, p.tds_rate, p.tds_reason, p.tds_base, p.tds_catchup_base, p.pan_furnished,
                -- The name as per PAN (a company's name for a company PAN): what the TDS return and certificates carry.
                CASE WHEN p.payee_type = 'host' THEN COALESCE(NULLIF(to_jsonb(h)->>'pan_name', ''), h.name)
@@ -1265,7 +1286,7 @@ module.exports = async (req, res) => {
         LEFT JOIN hosts h ON h.id = p.host_id
         LEFT JOIN guests g ON g.id = p.payee_guest_id
         LEFT JOIN cohost_payout_profiles cp ON cp.guest_id = p.payee_guest_id
-        WHERE p.tds_fy = ${fy}          -- booking payouts and deposit compensation (both carry TDS)
+        WHERE p.tds_fy = ${fy}          -- every payout that carries TDS: booking payouts, deposit compensation, later adjustments, and coupons reimbursed to co-hosts (_cohost-coupon.js)
         ORDER BY p.created_at, p.id`;
       const months = new Map(), quarters = new Map(), payees = new Map();
       const out = rows.map(r => {
@@ -1273,6 +1294,8 @@ module.exports = async (req, res) => {
         const d = T.dueDates(r.created_at);
         const row = {
           payoutId: r.id, bookingId: r.order_id, payeeType: r.payee_type, payeeName: r.payee_name || '',
+          // What the payment is for (the CSV's "Payment" column).
+          kind: r.kind === 'deposit' ? 'deposit' : r.kind === 'cohost-coupon' ? 'cohost-coupon' : /^adjustment/.test(r.kind) ? 'adjustment' : /^rest/.test(r.kind) ? 'rest' : 'booking',
           pan: pan || null, panKind: pan && T.panKind(pan) ? T.PAN_KINDS[T.panKind(pan)] : null,
           creditedOn: r.created_at, paidOn: r.sent_at, status: r.status,
           amount: Number(r.tds_base) || 0, catchupAmount: Number(r.tds_catchup_base) || 0, rate: Number(r.tds_rate) || 0,
@@ -1404,8 +1427,9 @@ module.exports = async (req, res) => {
           SELECT id, at, admin_id, admin_email, action, success, target_type, target_id, details, ip, user_agent
           FROM admin_audit_log
           WHERE (${q}::text IS NULL OR action ILIKE ${q} OR admin_email ILIKE ${q} OR ip ILIKE ${q} OR details::text ILIKE ${q})
-            AND (${from}::date IS NULL OR at >= ${from}::date)
-            AND (${to}::date IS NULL OR at < (${to}::date + 1))
+            -- The page shows India time, so the From / To days are India days (not the database's UTC days).
+            AND (${from}::date IS NULL OR at >= (${from}::date::timestamp AT TIME ZONE 'Asia/Kolkata'))
+            AND (${to}::date IS NULL OR at < ((${to}::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata'))
             AND (${before}::bigint IS NULL OR id < ${before})
           ORDER BY id DESC
           LIMIT 101
@@ -1437,8 +1461,8 @@ module.exports = async (req, res) => {
         FROM audit_log
         WHERE (${who}::text IS NULL OR actor_type = ${who})
           AND (${q}::text IS NULL OR action ILIKE ${q} OR actor_identifier ILIKE ${q} OR target_type ILIKE ${q} OR metadata::text ILIKE ${q})
-          AND (${from}::date IS NULL OR created_at >= ${from}::date)
-          AND (${to}::date IS NULL OR created_at < (${to}::date + 1))
+          AND (${from}::date IS NULL OR created_at >= (${from}::date::timestamp AT TIME ZONE 'Asia/Kolkata'))
+          AND (${to}::date IS NULL OR created_at < ((${to}::date + 1)::timestamp AT TIME ZONE 'Asia/Kolkata'))
           AND (${before}::int IS NULL OR id < ${before})
         ORDER BY id DESC
         LIMIT 101
@@ -2024,7 +2048,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    // ---- Auto-refund every held deposit past the host's 24 hours after check-out ----
+    // ---- Auto-refund every held deposit past its 7-day release date ----
     // Admin-triggered rather than a blind cron job — this endpoint does
     // real money movement via Razorpay, so a human clicking "Process" in
     // admin.html is the safety check before it runs, at least until this
@@ -2264,7 +2288,8 @@ module.exports = async (req, res) => {
         if (razorpayxReady() && row.auto_eligible) return res.status(409).json({ error: 'Automatic payouts are on. Use Retry instead of paying by hand.' });
         // TDS as the rules give it today (a PAN added since, or marked
         // inoperative) — unless the admin typed the amount.
-        if (!isDeposit && (b.tds === undefined || b.tds === null || b.tds === '')) row = await refreshTds(sql, row);
+        // A coupon reimbursed to a co-host (_cohost-coupon.js) carries TDS like their share: always as the rules give it today.
+        if (row.kind === 'cohost-coupon' || (!isDeposit && (b.tds === undefined || b.tds === null || b.tds === ''))) row = await refreshTds(sql, row);
         let tds = Number(row.tds), deductions = Number(row.deductions), ids = row.deducted_penalty_ids || [];
         // What the host owes Aerva (paid out, then no longer owed) always comes off.
         if (!isCohost && !b.deductCoupons && (await require('./_checkin-promise').balances(sql, row.host_id)).length) b.deductCoupons = true;
@@ -2489,6 +2514,24 @@ module.exports = async (req, res) => {
       } catch (err) {
         console.error('purgeReviewedIdDocuments failed:', err);
         return res.status(500).json({ error: 'Could not erase reviewed documents right now.' });
+      }
+    }
+
+    // ---- A guest's ID sent to Aerva to check (_guest-verify.js) ----
+    // POST { guestIdDecision: { reviewId, action: 'approve' | 'reject', docType?, last4?, reason? } }
+    // Approve needs the type of ID and the last 4 characters of its number
+    // (all that is kept); reject needs the reason (the guest is told). The
+    // image is deleted either way, the guest emailed, and a payment waiting
+    // on it becomes a booking — or, with no time left, is refunded.
+    if (req.body && req.body.guestIdDecision) {
+      try {
+        const d = req.body.guestIdDecision || {};
+        const out = await require('./_guest-verify').adminDecide(sql, razorpay, { reviewId: d.reviewId, action: d.action, docType: d.docType, last4: d.last4, reason: d.reason, adminLabel: ADMIN_ACTOR });
+        return res.status(200).json(out);
+      } catch (err) {
+        if (err.isUserFacing) return res.status(err.status || 400).json({ error: err.message });
+        console.error('get-pending-listings (guestIdDecision) error:', err);
+        return res.status(500).json({ error: 'Could not record this decision right now.' });
       }
     }
 
@@ -2806,9 +2849,13 @@ module.exports = async (req, res) => {
         ORDER BY id DESC LIMIT 100
       `;
       // Viewing PAN and bank numbers is itself recorded.
+      // Guest IDs sent to Aerva to check: urgent ones (a paid booking is
+      // waiting on them) first, soonest deadline first (_guest-verify.js).
+      let guestIds = [];
+      try { guestIds = await require('./_guest-verify').adminList(sql); } catch (err) { console.error('guest IDs not listed:', err.message); }
       await logAudit(sql, { action: 'admin_viewed_id_verifications', success: true, actorType: 'admin', ...ADMIN_AUDIT,
-        metadata: { pending: verifications.length, rejected: rejected.length } });
-      return res.status(200).json({ verifications, rejected });
+        metadata: { pending: verifications.length, rejected: rejected.length, guestIds: guestIds.length } });
+      return res.status(200).json({ verifications, rejected, guestIds });
     } catch (err) {
       console.error('get-pending-listings (verifications) error:', err);
       return res.status(500).json({ error: 'Could not fetch verifications' });

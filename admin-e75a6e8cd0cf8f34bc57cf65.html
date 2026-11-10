@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-11c"></script>
+<script src="aerva-policies.js?v=2026-11-11f"></script>
 </head>
 <body>
 
@@ -534,7 +534,7 @@
 
   <div id="teamView" style="display:none;">
     <h2>Team</h2>
-    <p style="font-size:13.5px; opacity:0.75; max-width:820px; margin-top:-6px;"><strong>Admin</strong>: everything. <strong>Reviewer</strong>: Support, Lookup and Approvals — approves or rejects proposed actions. <strong>Customer representative</strong>: Support and Lookup — answers requests, calls customers back and proposes actions.</p>
+    <p style="font-size:13.5px; opacity:0.75; max-width:820px; margin-top:-6px;"><strong>Admin</strong>: everything. <strong>Reviewer</strong>: Support, Lookup and Approvals — approves or rejects proposed actions, price changes and cancellation requests (natural disaster, old emergency requests). <strong>Customer representative</strong>: Support, Lookup and Approvals (to see, not to decide) — answers requests, calls customers back and proposes actions. The check-in promise, calls to hosts on old emergency requests and everything else are for admins.</p>
     <div class="lk-item" style="cursor:default; display:flex; gap:8px; flex-wrap:wrap; align-items:center; margin:10px 0 16px;">
       <strong style="margin-right:6px;">Add a team member</strong>
       <input id="tmName" placeholder="Name" style="padding:8px 10px; border:1px solid #ccc; border-radius:6px; min-width:140px;">
@@ -614,7 +614,7 @@
   <div id="depositsView" style="display:none;">
     <div class="deposit-section">
       <h3>Auto-Refund Eligible Deposits</h3>
-      <p>Refunds every held deposit whose host has had 24 hours after check-out with no dispute raised, in full, to each guest's original payment method. Nothing is refunded for a deposit still within its window or currently disputed.</p>
+      <p>Refunds every held deposit past its 7-day window with no dispute raised, in full, to each guest's original payment method. Nothing is refunded for a deposit still within its window or currently disputed.</p>
       <button type="button" class="process-btn" id="processDepositsBtn" onclick="processDeposits()">Process Eligible Refunds</button>
       <div class="process-results" id="processResults"></div>
     </div>
@@ -751,7 +751,7 @@
     <div id="refundsList"><p style="opacity:0.6;">Loading…</p></div>
     <p id="couponForfeitLine" style="margin-top:8px; font-size:14.5px;"></p>
     <h2 style="margin-top:40px;">TDS</h2>
-    <p style="opacity:0.7; font-size:14px;">What Aerva deducted from host and co-host payouts (security deposit compensation included) as the e-commerce operator: 0.1% with a PAN, 5% without one or with an inoperative PAN, on the amount due after Aerva’s commission, from the first rupee (company policy, on the CA’s advice). Deposit each month's TDS by the date shown, file the quarter's return and issue certificates by the dates shown. Confirm figures with your CA.</p>
+    <p style="opacity:0.7; font-size:14px;">What Aerva deducted from host and co-host payouts (security deposit compensation, and cancellation coupons reimbursed to co-hosts by their hosts, included) as the e-commerce operator: 0.1% with a PAN, 5% without one or with an inoperative PAN, on the amount due after Aerva’s commission, from the first rupee (company policy, on the CA’s advice). Deposit each month's TDS by the date shown, file the quarter's return and issue certificates by the dates shown. Confirm figures with your CA.</p>
     <div class="tds-bar"><label>Financial year <select id="tdsYear"></select></label><button type="button" class="approve-btn" id="tdsCsvAll">Download year (CSV)</button></div>
     <div id="tdsReport"><p style="opacity:0.6;">Loading…</p></div>
     <h2 style="margin-top:40px;">Other payouts</h2>
@@ -761,7 +761,7 @@
     <p style="opacity:0.7; font-size:14px;">Amounts a host or co-host owes Aerva: money recovered after a refund or a check-in promise decision, and older cancellation coupons from before 10 Nov 2026 (since then the host pays the 10% coupon before any cancellation, so no new coupon amounts appear here). They are taken from the host’s next payout, or from the co-host’s own share; mark each one recovered. Over 6 months unrecovered: decide whether to chase it or write it off.</p>
     <div id="penaltiesList"><p style="opacity:0.6;">Loading…</p></div>
     <h2 style="margin-top:40px;">Co-host coupon requests</h2>
-    <p style="opacity:0.7; font-size:14px;">A co-host who cancels within 48 hours of check-in pays the guest’s 10% coupon themselves, and may ask the host to cover it (within 30 days; the host has 7 days to answer). If the host accepts, the amount is deducted from the host’s next payout and paid to the co-host once that payout is sent — Aerva only moves it between the two: no commission, no fee, no TDS. Declined or unanswered: nothing moves. For information only; nothing to do here.</p>
+    <p style="opacity:0.7; font-size:14px;">A co-host who cancels within 48 hours of check-in pays the guest’s 10% coupon themselves, and may ask the host to cover it (within 30 days; the host has 7 days to answer). If the host accepts, the amount is deducted from the host’s next payout and paid to the co-host once that payout is sent — Aerva only moves it between the two: no commission and no fee. The host is charged the full coupon amount after their own TDS (unchanged); TDS is deducted from the co-host’s reimbursement at the co-host’s own rate, like their share, and is in the TDS report above. Declined or unanswered: nothing moves. For information only; nothing to do here.</p>
     <div id="cohostCouponList"><p style="opacity:0.6;">Loading…</p></div>
     <h2 style="margin-top:40px;">Booking payouts</h2>
     <p style="opacity:0.7; font-size:14px;">The 200 most recent paid bookings: the host payout (after Aerva’s commission), each co-host’s share, and what the host keeps, with where each is paid. “Hold” means that person’s bank details are not approved yet.</p>
@@ -2131,10 +2131,14 @@
   function downloadTdsCsv(quarter){
     if(!tdsData) return;
     const rows = tdsData.rows.filter(r => !quarter || r.quarter === quarter);
-    const head = ['Payout ID', 'Booking ID', 'Payee type', 'Payee name', 'PAN', 'PAN holder', 'Credited on', 'Paid on', 'Amount credited (INR)', 'Earlier amount caught up (INR)', 'TDS rate %', 'TDS (INR)', 'Reason', 'Quarter', 'Deposit by', 'Status'];
-    const cell = (v) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const TDS_KIND = { booking: 'Booking payout', deposit: 'Deposit compensation', 'cohost-coupon': 'Coupon reimbursed by host', adjustment: 'Booking changed after payout', rest: 'Rest of booking payout' };
+    const head = ['Payout ID', 'Booking ID', 'Payment', 'Payee type', 'Payee name', 'PAN', 'PAN holder', 'Credited on', 'Paid on', 'Amount credited (INR)', 'Earlier amount caught up (INR)', 'TDS rate %', 'TDS (INR)', 'Reason', 'Quarter', 'Deposit by', 'Status'];
+    const cell = (v) => { let t = v == null ? '' : String(v);
+      // Text a guest or host typed (a name, a listing) must never run as a spreadsheet formula; numbers stay numbers.
+      if(typeof v !== 'number' && /^[=+\-@\t\r]/.test(t) && !/^-?\d+(\.\d+)?$/.test(t)) t = "'" + t;
+      return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
     const date = (d) => d ? new Date(d).toISOString().slice(0, 10) : '';
-    const lines = [head.join(',')].concat(rows.map(r => [r.payoutId, r.bookingId, r.payeeType, r.payeeName, r.pan, r.panKind, date(r.creditedOn), date(r.paidOn), r.amount, r.catchupAmount, r.rate, r.tds,
+    const lines = [head.join(',')].concat(rows.map(r => [r.payoutId, r.bookingId, TDS_KIND[r.kind] || r.kind || '', r.payeeType, r.payeeName, r.pan, r.panKind, date(r.creditedOn), date(r.paidOn), r.amount, r.catchupAmount, r.rate, r.tds,
       TDS_REASON[r.reason] || r.reason || '', r.quarter, r.depositBy, r.status].map(cell).join(',')));
     const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
@@ -2176,7 +2180,10 @@
     }catch(e){ el.innerHTML = `<p class="error">${escAdmin(e.message)}</p>`; }
   }
   function accCsv(name, head, rows){
-    const cell = (v) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
+    const cell = (v) => { let t = v == null ? '' : String(v);
+      // Text a guest or host typed (a name, a listing) must never run as a spreadsheet formula; numbers stay numbers.
+      if(typeof v !== 'number' && /^[=+\-@\t\r]/.test(t) && !/^-?\d+(\.\d+)?$/.test(t)) t = "'" + t;
+      return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
     const lines = [head.map(h => h[0]).join(',')].concat(rows.map(r => head.map(h => cell(typeof h[1] === 'function' ? h[1](r) : r[h[1]])).join(',')));
     const blob = new Blob(['\ufeff' + lines.join('\n')], { type: 'text/csv;charset=utf-8' });
     const a = document.createElement('a');
@@ -2186,9 +2193,9 @@
   document.getElementById('accMonth').addEventListener('change', loadAccounts);
   document.getElementById('accCsvBookings').addEventListener('click', () => { if(accData) accCsv('bookings', [
     ['Booking ID', 'bookingId'], ['Reference', 'reference'], ['Event', 'event'], ['Recognised on', 'recognisedOn'], ['Type', 'type'], ['Guest', 'guest'], ['Listing', 'listing'], ['Host', 'host'],
-    ['Arrival', 'arrival'], ['Departure', 'departure'], ['Paid on', 'paidOn'], ['Booking price (INR)', 'bookingPrice'], ['Paid by coupon (INR)', 'paidByCoupon'], ['Paid with Aerva credit (INR)', 'paidByCredit'], ['Credit came from (booking, Razorpay payment)', 'creditFrom'], ['GST on stay charged (INR)', 'gstOnStay'],
+    ['Arrival', 'arrival'], ['Departure', 'departure'], ['Paid on', 'paidOn'], ['Booking price (INR)', 'bookingPrice'], ['of which free cancellation add-on (INR)', 'freeCancellation'], ['Paid by coupon (INR)', 'paidByCoupon'], ['Paid with Aerva credit (INR)', 'paidByCredit'], ['Credit came from (booking, Razorpay payment)', 'creditFrom'], ['GST on stay charged (INR)', 'gstOnStay'],
     ['Guest service fee (INR)', 'serviceFee'], ['Security deposit (INR)', 'deposit'], ['Charged to guest (INR)', 'charged'], ['Refunded to guest (INR)', 'refundedToGuest'],
-    ['Income: commission (INR)', 'commissionIncome'], ['Income: guest service fee (INR)', 'serviceFeeIncome'], ['Payable to host incl. co-hosts (INR)', 'hostPayable'], ['of which co-hosts (INR)', 'cohostShares'], ['GST payable s.9(5) (INR)', 'gstPayable'], ['Transfer (split from, fee, difference)', 'transfer'], ['Difference to check (INR)', 'difference']
+    ['Income: commission (INR)', 'commissionIncome'], ['Income: guest service fee (INR)', 'serviceFeeIncome'], ['Payable to host incl. co-hosts (INR)', 'hostPayable'], ['of which co-hosts (INR)', 'cohostShares'], ['GST payable s.9(5) (INR)', 'gstPayable'], ['Moved to the guest’s Aerva credit (INR)', 'feeCreditHeld'], ['Transfer (split from, fee, difference)', 'transfer'], ['Difference to check (INR)', 'difference']
   ], accData.bookings); });
   document.getElementById('accCsvCash').addEventListener('click', () => { if(accData) accCsv('money-in-out', [
     ['Date', 'date'], ['Type', 'type'], ['Booking ID', 'bookingId'], ['Reference', 'reference'], ['Razorpay payment', 'payment'], ['Payee', 'payee'], ['In through Razorpay (INR)', 'amountIn'], ['Out (INR)', 'amountOut'],
@@ -2201,7 +2208,7 @@
   ], accData.credits || []); });
   document.getElementById('accCsvSummary').addEventListener('click', () => { if(!accData) return; const S = accData.summary, B = S.balances;
     const rows = [];
-    ((S.statement && S.statement.sections) || []).forEach(sec => sec.lines.forEach(l => rows.push({ s: sec.title, k: (l.sign ? l.sign + ' ' : '') + l.k, v: l.head ? '' : l.v, g: l.g || '', m: l.m || '' })));
+    ((S.statement && S.statement.sections) || []).forEach(sec => sec.lines.forEach(l => rows.push({ s: sec.title, k: (l.sign ? '(' + l.sign + ') ' : '') + l.k, v: l.head ? '' : l.v, g: l.g || '', m: l.m || '' })));
     accCsv('summary', [['Section', 's'], ['Line', 'k'], ['Amount (INR)', 'v'], ['Tally ledger', 'g'], ['What it means', 'm']], rows); });
 
   async function setPanInoperative(hostId, cohostGuestId, box){
@@ -2262,7 +2269,7 @@
       const dps = data.depositPayouts || [];
       document.getElementById('depositPayoutsList').innerHTML = dps.length ? dps.map(p => `
         <div class="listing" style="padding:12px 16px; margin-bottom:8px; font-size:14px;${p.status === 'failed' || p.status === 'due' ? ' border-left:3px solid #a3402f;' : ''}">
-          <strong>${escAdmin(p.listing || '')}</strong> · booking #${Number(p.orderId)} · ${p.kind === 'deposit' ? 'deposit compensation' : p.kind === 'cohost-coupon' ? 'cancellation coupon reimbursed by the host (no commission, no TDS)' : p.kind === 'rest' ? 'rest of the booking payout (held while a guest’s request was open)' : 'booking changed after payout'} · ${p.payeeType === 'cohost' ? 'co-host' : 'host'} <strong>${escAdmin(p.payeeName || p.hostName || '')}</strong> · <strong>${payInr(p.net)}</strong>
+          <strong>${escAdmin(p.listing || '')}</strong> · booking #${Number(p.orderId)} · ${p.kind === 'deposit' ? 'deposit compensation' : p.kind === 'cohost-coupon' ? 'cancellation coupon reimbursed by the host (no commission; after TDS at the co-host’s rate)' : p.kind === 'rest' ? 'rest of the booking payout (held while a guest’s request was open)' : 'booking changed after payout'} · ${p.payeeType === 'cohost' ? 'co-host' : 'host'} <strong>${escAdmin(p.payeeName || p.hostName || '')}</strong> · <strong>${payInr(p.net)}</strong>
           ${depositPayoutControl(p)}
         </div>`).join('') : '<p style="opacity:0.6;">No other payouts.</p>';
       const ccs = data.cohostCouponRequests || [];
@@ -2466,7 +2473,8 @@
   }
   function exportAudit(){
     if(!auditRows.length){ alert('Search first, then export.'); return; }
-    const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const cell = (v) => { let t = String(v == null ? '' : v); if(typeof v !== 'number' && /^[=+\-@\t\r]/.test(t) && !/^-?\d+(\.\d+)?$/.test(t)) t = "'" + t;   // never a spreadsheet formula (device names and details are typed by outsiders)
+      return '"' + t.replace(/"/g, '""') + '"'; };
     const lines = [['id', 'when', 'who', 'by', 'action', 'success', 'on', 'ip', 'device', 'details'].join(',')]
       .concat(auditRows.map(r => [r.id, r.at, r.who, r.by, r.action, r.success, r.target, r.ip || '', r.device || '', r.details ? JSON.stringify(r.details) : ''].map(cell).join(',')));
     const a = document.createElement('a');
@@ -2505,7 +2513,7 @@
   // ---- What each section is for: the "i" beside every tab ----
   const TAB_INFO = {
     approvals: ['Approvals', 'Unusual price changes from hosts (a sharp drop, a very low price or a very large discount), held until approved. And actions a customer representative proposed — refunds, cancellations, deposit refunds, reports, blocks — each with a summary of the conversation and what it would do. A reviewer or admin approves (it is carried out at once) or rejects with a note. Nobody approves their own proposal.'],
-    team: ['Team', 'Who has access to Admin and their role: Admin (everything), Reviewer (approves proposed actions; Support, Lookup) or Customer representative (Support, Lookup, proposes actions). A changed role signs that person out so it applies at once.'],
+    team: ['Team', 'Who has access to Admin and their role: Admin (everything), Reviewer (Support, Lookup, Approvals: decides proposed actions, price changes and cancellation requests) or Customer representative (Support, Lookup, sees Approvals; proposes actions). A changed role signs that person out so it applies at once.'],
     safety: ['Data safety', 'Super admin only. Daily backups of the whole database (and one before every clear or restore), restore from a backup, clear dummy data or everything, and the go-live switch. Every risky step needs a PIN emailed to the owner.'],
     db: ['Database updates', 'Changes to the database ship as .sql files in the migrations/ folder with the code. Apply them here — first on UAT, then on production after the release — instead of running SQL in Neon. Each file runs in one transaction: all of it or none of it.'],
     lookup: ['Lookup', 'Find a booking, guest or listing by confirmation code, booking ID, Razorpay order or payment ID, email, phone number, listing name, city or ID. Open it to cancel a booking with a refund, refund an amount without cancelling, suspend or sign out an account, or block a listing. Every action needs a reason and is kept in the Audit Log.'],
@@ -2518,7 +2526,7 @@
     insights: ['Business Insights', 'What happened under each rate — bookings, booking value, Aerva’s fees, new guests and listings, cancellations, ratings and hosts who declined — per day and compared with the rate before; the last 12 months; ratings by part of the stay; support satisfaction; and the latest reviews and feedback. Real bookings only.'],
     accounts: ['Accounts', 'Each month in the shape your CA books it: Aerva’s income (commission and guest service fee only), money received, refunded and paid out, GST on stays and TDS payable, and what Aerva still holds for hosts and guests at month end. Three CSVs for Tally or Zoho Books. Razorpay’s charges come from Razorpay’s own settlement report.'],
     payouts: ['Payouts', 'What each host and co-host is owed per booking, and Mark paid for payouts sent by hand. Also: refunds that need a retry, deposit compensation, cancellation coupons owed by hosts, co-host payout details to review, and the TDS report.'],
-    deposits: ['Security Deposits', 'Deposits are refunded automatically every 15 minutes once the host’s 24 hours after check-out to report damage have ended; the button runs that now. Below: damage claims hosts raised. Set the host’s share; the rest goes back to the guest, and both are emailed.'],
+    deposits: ['Security Deposits', 'Deposits are refunded automatically every 15 minutes once the 7-day damage window has ended; the button runs that now. Below: damage claims hosts raised. Set the host’s share; the rest goes back to the guest, and both are emailed.'],
     support: ['Support', 'Requests from the Resolution Center. Reply within 48 hours; safety requests are listed first. Keep the case record (issue as understood, outcome, how each side behaved) — a request cannot be resolved without it, and every version is kept. Once resolved, the person confirms and rates it, or it reopens; with no answer it closes by itself after 48 hours.'],
     trust: ['Guest Safety', 'Problems guests reported during a stay, with the host’s reply. Decide refund or no refund; the host’s payout for the booking is held until you do. Also: feedback hosts sent from their dashboard.'],
     policy: ['Review Policy', 'Internal rules for reviews, badges and standing, with every threshold. Never shown to guests or hosts.'],
@@ -3368,7 +3376,7 @@
     const panel = document.createElement('div');
     panel.id = 'idPurgePanel';
     panel.style.cssText = 'margin:0 0 20px; padding:14px 16px; border:1px solid #e6dccd; border-left:3px solid #a9884f; border-radius:10px; font-size:14px;';
-    panel.innerHTML = 'Aadhaar documents and PAN card images are erased as soon as you approve or reject them. Guest ID proofs are no longer collected; any uploaded earlier are erased by this button too. PAN and bank account numbers are kept, encrypted. '
+    panel.innerHTML = 'Aadhaar documents and PAN card images are erased as soon as you approve or reject them. A guest ID sent for checking (Guest ID, when one is waiting) is deleted the same way, as soon as you approve or reject it; guest ID proofs uploaded before September 2026 are erased by this button too. PAN and bank account numbers are kept, encrypted. '
       + '<button type="button" class="approve-btn" id="idPurgeBtn" style="margin-left:8px;">Erase reviewed documents &amp; encrypt stored numbers</button> <span id="idPurgeResult"></span>';
     container.parentNode.insertBefore(panel, container);
     document.getElementById('idPurgeBtn').addEventListener('click', async () => {
@@ -3393,10 +3401,78 @@
         headers: authHeaders()
       });
       const data = await res.json();
+      renderGuestIds(data.guestIds || []);
       renderVerifications(data.verifications || []);
       renderRejectedIds(data.rejected || []);
     } catch(err){
       container.innerHTML = '<p class="error">Could not load verifications. Please refresh.</p>';
+    }
+  }
+
+  // ---- Guest ID (api/_guest-verify.js): a guest's photo ID sent for Aerva
+  // to check by hand. Urgent ones — a paid booking is waiting on them — come
+  // first, soonest deadline first (the server's order). Approve needs the
+  // type of ID and the last 4 characters of its number (all that is kept);
+  // Reject needs the reason (the guest is told). The image is deleted either way.
+  function renderGuestIds(list){
+    const host = document.getElementById('verificationsContainer');
+    if(!host || !host.parentNode) return;
+    let box = document.getElementById('guestIdsContainer');
+    if(!list.length){ if(box) box.remove(); return; }
+    if(!box){ box = document.createElement('div'); box.id = 'guestIdsContainer'; host.parentNode.insertBefore(box, host); }
+    const types = (g) => (g.accepted || []).map(t => `<option value="${escAdmin(t.key)}">${escAdmin(t.label)}</option>`).join('');
+    box.innerHTML = `<h3 style="margin:0 0 4px;">Guest ID <span style="font-weight:400; opacity:0.7;">· ${list.length} waiting</span></h3>
+      <p class="dispute-meta" style="margin:0 0 10px;">Approve only a real, valid Aadhaar, passport, driving licence or voter ID, in the guest’s profile name, of someone 18 or over. A PAN card is not accepted.</p>`
+      + list.map(g => {
+        const id = Number(g.reviewId);
+        return `<div class="dispute-card" id="guestId-${id}"${g.urgent ? ' style="border-color:#b4532a; box-shadow:inset 4px 0 0 #b4532a;"' : ''}>
+          <h4>${escAdmin(g.profileName || g.email || 'Guest')} — Guest ID${g.urgent ? ' <span style="display:inline-block; font-size:11.5px; letter-spacing:0.06em; text-transform:uppercase; background:#b4532a; color:#fff; border-radius:999px; padding:2px 9px; margin-left:6px; vertical-align:middle;">Urgent</span>' : ''}</h4>
+          <div class="dispute-meta">${escAdmin(g.email || '')} · sent ${escAdmin(fmtDate(g.submittedAt))}</div>
+          ${g.urgent ? `<p style="margin:8px 0; padding:8px 10px; background:#fbefe9; border:1px solid #e6c2b1; border-radius:8px; font-size:13.5px;"><strong>${Number(g.holds) === 1 ? 'A paid booking is' : Number(g.holds) + ' paid bookings are'} waiting on this ID.</strong> Deadline: ${escAdmin(g.deadlineText || '—')}${g.latestText && g.latestText !== g.deadlineText ? ` — while it is with Aerva the booking waits, at the latest until ${escAdmin(g.latestText)}` : ''}. After that the guest is refunded in full.</p>` : ''}
+          <p>Profile name to check the ID against: <strong>${escAdmin(g.profileName || 'not given')}</strong><br>
+             ${g.documentUrl ? `<a href="${safeUrl(g.documentUrl)}" target="_blank" rel="noopener noreferrer">Open the uploaded ID ↗</a>` : '<span style="opacity:0.6;">No image on file</span>'}</p>
+          <div class="resolve-row" style="flex-wrap:wrap; gap:8px; align-items:center;">
+            <select id="guestIdType-${id}" aria-label="Type of ID" style="padding:9px 10px; min-height:40px; max-width:100%;"><option value="">Type of ID…</option>${types(g)}</select>
+            <input id="guestIdLast4-${id}" maxlength="4" autocomplete="off" aria-label="Last 4 characters of the ID number" placeholder="Last 4 of the number" style="padding:9px 10px; min-height:40px; width:170px; max-width:100%; text-transform:uppercase; box-sizing:border-box;">
+            <button type="button" class="approve-btn" onclick="decideGuestId(${id}, 'approve')">Approve</button>
+          </div>
+          <div class="resolve-row" style="flex-wrap:wrap; gap:8px; align-items:center; margin-top:8px;">
+            <input id="guestIdReason-${id}" maxlength="300" aria-label="Reason for rejecting (the guest is told)" placeholder="Reason for rejecting (the guest is told)" style="padding:9px 10px; min-height:40px; flex:1 1 220px; min-width:0; box-sizing:border-box;">
+            <button type="button" class="reject-btn" onclick="decideGuestId(${id}, 'reject')">Reject</button>
+          </div>
+          <span id="guestIdError-${id}" class="error" role="alert"></span>
+        </div>`;
+      }).join('');
+  }
+  async function decideGuestId(reviewId, action){
+    const errorEl = document.getElementById(`guestIdError-${reviewId}`);
+    const val = (id) => { const el = document.getElementById(id); return el ? el.value.trim() : ''; };
+    if(errorEl) errorEl.textContent = '';
+    const body = { reviewId, action };
+    if(action === 'approve'){
+      body.docType = val(`guestIdType-${reviewId}`); body.last4 = val(`guestIdLast4-${reviewId}`);
+      if(!body.docType){ if(errorEl) errorEl.textContent = 'Choose which ID this is.'; return; }
+      if(body.last4.replace(/[^A-Za-z0-9]/g, '').length !== 4){ if(errorEl) errorEl.textContent = 'Enter the last 4 characters of the ID number.'; return; }
+    } else {
+      body.reason = val(`guestIdReason-${reviewId}`);
+      if(!body.reason){ if(errorEl) errorEl.textContent = 'Give the reason — the guest is told.'; return; }
+    }
+    const card = document.getElementById(`guestId-${reviewId}`);
+    const buttons = card ? card.querySelectorAll('button') : [];
+    buttons.forEach(b => { b.disabled = true; });
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ guestIdDecision: body }) });
+      const data = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(data.error || 'Could not record this decision.');
+      if(card){
+        const what = action === 'approve'
+          ? 'Approved.' + ((data.confirmed || []).length ? ' The guest’s booking is now confirmed.' : '')
+          : 'Rejected.' + ((data.lapsed || []).length ? ' The time had run out: the guest’s payment is refunded in full.' : ' The guest can try again.');
+        card.innerHTML = `<p style="margin:0;">${escAdmin(what)} The guest has been emailed${data.documentErased === false ? '; the image could not be deleted yet and is tried again automatically' : ' and the image deleted'}.</p>`;
+      }
+    }catch(err){
+      buttons.forEach(b => { b.disabled = false; });
+      if(errorEl) errorEl.textContent = err.message;
     }
   }
 
@@ -3928,7 +4004,7 @@ async function lkCancel(id){
   if(reason.length < 5){ msg.textContent = 'Write the reason first — the guest and host are told it.'; msg.className = 'lk-msg is-err'; return; }
   const p = await lkCancelPreview(id); if(!p) return;
   const forHost = !!(document.getElementById('lkForHost') || {}).checked;
-  if(!confirm(forHost ? `Ask the host to confirm this cancellation? Nothing is cancelled until they confirm in the support request raised for them; then the guest gets ${lkInr((p.heldAsCredit || 0) + (p.refundCash || 0))} back as Aerva credit (deposit to their card)${p.couponForGuest ? `, after the host pays the guest’s ${lkInr(p.couponForGuest)} coupon (Aerva does not pay it)` : ''}.` : `Cancel this booking and refund ${lkInr(p.refundCash)} to the guest${p.couponBack ? ` (+ ${lkInr(p.couponBack)} coupon)` : ''}? This cannot be undone.`)) return;
+  if(!confirm(forHost ? `Ask the host to confirm this cancellation? Nothing is cancelled until they confirm in the support request raised for them; then the guest gets ${lkInr(p.heldAsCredit || 0)} as Aerva credit${p.refundCash ? ` and the ${lkInr(p.refundCash)} deposit back to their payment method` : ''}${p.couponForGuest ? `, after the host pays the guest’s ${lkInr(p.couponForGuest)} coupon (Aerva does not pay it)` : ''}.` : `Cancel this booking and refund ${lkInr(p.refundCash)} to the guest${p.couponBack ? ` (+ ${lkInr(p.couponBack)} coupon)` : ''}? This cannot be undone.`)) return;
   const btn = document.getElementById('lkCancelBtn'); btn.disabled = true; btn.textContent = forHost ? 'Asking the host…' : 'Cancelling…';
   try{
     const d = await lkPost(lkCancelBody(id, false));
@@ -4405,8 +4481,8 @@ async function loadCancelRequests(){
         ${x.review ? `<p style="margin:8px 0; padding:8px 10px; background:#eef3fb; border-radius:6px; font-size:13px;"><strong>Review asked for:</strong> the host declined${x.hostNote ? ' (“' + lkEsc(x.hostNote) + '”)' : ''}; the guest sent proof and asks Aerva to review.${x.reviewNote ? ' Guest: “' + lkEsc(x.reviewNote) + '”' : ''} Approving overturns the decline; your decision is final.</p>` : ''}
         <small>Asked ${lkEsc(when(x.askedAt))} · ${stage}</small>
         ${x.escalatedAt ? `<div style="margin-top:10px; padding:10px; background:#f8f5ef; border-radius:8px;">
-          <strong style="font-size:13px;">Reach the host</strong> — call, then log it:
-          <div style="display:flex; gap:6px; flex-wrap:wrap; margin-top:6px;">
+          <strong style="font-size:13px;">Reach the host</strong>${isAdminRole() ? ' — call, then log it:' : ' — an admin calls the host and logs it here.'}
+          <div style="display:${isAdminRole() ? 'flex' : 'none'}; gap:6px; flex-wrap:wrap; margin-top:6px;">
             <select id="crOut-${id}" style="padding:6px; border:1px solid #ddd; border-radius:6px;">${Object.keys(OUT).map(k => `<option value="${k}">${OUT[k]}</option>`).join('')}</select>
             <input id="crCall-${id}" placeholder="Note (optional)" style="flex:1; min-width:160px; padding:6px; border:1px solid #ddd; border-radius:6px;">
             <button type="button" class="lk-btn is-ghost" onclick="logHostContact(${id})">Log call</button>
@@ -4425,7 +4501,7 @@ async function decideCancelRequest(id, accept, refundPercent){
   if(!confirm((accept ? (disaster ? 'Cancel this booking and hold everything the guest paid as Aerva credit (refundable by the guest at any time; no host payout)?' : 'Cancel this booking and refund the price, GST and deposit in full?') : 'Reject the request? The booking stands.') + ' This decision is final for the guest and the host.')) return;
   try{
     await lkPost({ decideCancellationRequest: { requestId: id, accept, note } });
-    loadCancelRequests();
+    loadCancelRequests(); loadAdminSummary(true);
   }catch(e){ if(err) err.textContent = e.message || 'Could not decide.'; }
 }
 async function remindHostNow(id){
@@ -4494,7 +4570,7 @@ async function cpDecide(id, upheld){
   const err = document.getElementById('cpErr-' + id);
   if(!upheld && note.trim().length < 5){ if(err) err.textContent = 'Write why it is not upheld — the guest is told.'; return; }
   if(!confirm(upheld ? 'Confirm the report? The host is not paid for this booking; a fake listing stays blocked. Then move or refund the guest.' : 'Clear the report? The booking stands and any hidden listing goes back live.')) return;
-  try{ await lkPost({ checkinDecide: { reportId: id, upheld, note } }); loadCheckinPromise(); }
+  try{ await lkPost({ checkinDecide: { reportId: id, upheld, note } }); loadCheckinPromise(); loadAdminSummary(true); }
   catch(e){ if(err) err.textContent = e.message; }
 }
 async function cpFind(id){
@@ -4523,7 +4599,7 @@ async function cpSend(id){
 async function cpRefund(id){
   const err = document.getElementById('cpErr-' + id);
   if(!confirm('Refund the guest in full — price, GST, deposit and Aerva’s service fee? The booking is closed and the host is not paid for it.')) return;
-  try{ const d = await lkPost({ checkinRefund: { reportId: id } }); alert('Refunded ₹' + Number(d.refunded).toLocaleString('en-IN') + (d.recovered ? '. ₹' + Number(d.recovered).toLocaleString('en-IN') + ' will be deducted from the host’s later payouts.' : '.')); loadCheckinPromise(); }
+  try{ const d = await lkPost({ checkinRefund: { reportId: id } }); alert('Refunded ₹' + Number(d.refunded).toLocaleString('en-IN') + (d.recovered ? '. ₹' + Number(d.recovered).toLocaleString('en-IN') + ' will be deducted from the host’s later payouts.' : '.')); loadCheckinPromise(); loadAdminSummary(true); }
   catch(e){ if(err) err.textContent = e.message; }
 }
 async function cpReview(orderId){

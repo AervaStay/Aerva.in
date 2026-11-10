@@ -255,11 +255,13 @@ async function validateAndPriceAmenities(sql, listingId, arrival, departure, req
 // they've already passed their own eligibility checks (min nights, date
 // range). Shared so both sources price identically.
 function discountAmountFor(discountType, discountValue, subtotalBeforeDiscount) {
+  // Never negative (a negative value saved on a listing must not raise the
+  // price) and never more than the price itself.
   if (discountType === 'percentage') {
-    return Math.round(subtotalBeforeDiscount * (Number(discountValue) / 100));
+    return Math.max(0, Math.min(subtotalBeforeDiscount, Math.round(subtotalBeforeDiscount * (Number(discountValue) / 100)))) || 0;
   }
   if (discountType === 'flat') {
-    return Math.min(Number(discountValue), subtotalBeforeDiscount);
+    return Math.max(0, Math.min(Number(discountValue), subtotalBeforeDiscount)) || 0;
   }
   return 0;
 }
@@ -324,7 +326,9 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
         WHERE id = ${s.listingId} AND status = 'approved'
       `;
       const listing = rows[0];
-      if (!listing) {
+      // An experience is never booked as a stay (its price is per person or
+      // per group, with its own GST): only a tampered request asks for that.
+      if (!listing || listing.listing_type === 'experience') {
         return { error: `Stay ${i + 1}: this home is no longer available to book.` };
       }
 
@@ -466,6 +470,12 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
       if (overlapRows[0]) {
         return { error: `Stay ${i + 1}: ${room ? (room.room_name || 'This room') : listing.property_name} was just booked for those dates. Please choose different dates.` };
       }
+      // Dates held for a guest who has paid and whose details are being
+      // verified (_guest-verify.js): not available to anyone else, nor to a
+      // change of another booking.
+      if (await require('./_guest-verify').datesHeld(sql, { listingId: listing.id, roomId: room ? room.id : null, arrival: s.arrival, departure: s.departure })) {
+        return { error: `Stay ${i + 1}: ${room ? (room.room_name || 'This room') : listing.property_name} isn't available for those dates.` };
+      }
 
       // Rounded, because Aerva deals in whole rupees: every money column
       // on orders (subtotal, gst, total, commission_amount, payout_amount)
@@ -499,6 +509,10 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
       // matter how many), validated against the listing's own policy the
       // same way amenities are: never trusted from the browser alone.
       const requestedPets = Number(s.pets) || 0;
+      // Whole pets only (1.5 pets used to be charged 1.5 fees and written as "1 pet").
+      if (requestedPets < 0 || !Number.isInteger(requestedPets)) {
+        return { error: `Stay ${i + 1}: please choose a whole number of pets.` };
+      }
       if (requestedPets > 0 && !listing.pet_friendly) {
         return { error: `Stay ${i + 1}: ${listing.property_name} doesn't allow pets.` };
       }
@@ -511,9 +525,18 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
       // has to be one the listing actually allows.
       const requestedPetTypes = Array.isArray(s.petTypes) ? s.petTypes.filter(t => typeof t === 'string') : [];
       if (requestedPets > 0) {
-        const allowedTypes = Array.isArray(listing.allowed_pet_types) ? listing.allowed_pet_types : [];
+        // A pet-friendly listing saved with no types ticked is shown to guests
+        // as "Dogs & Cats welcome" (aerva.js) and offers those two to pick:
+        // the same here, or every pet booking on it would be refused.
+        const listedTypes = Array.isArray(listing.allowed_pet_types) ? listing.allowed_pet_types : [];
+        const allowedTypes = listedTypes.length ? listedTypes : ['Dog', 'Cat'];
         if (!requestedPetTypes.length) {
           return { error: `Stay ${i + 1}: please specify what kind of pet(s) you're bringing.` };
+        }
+        // Never more kinds than pets: the fee and the home's pet limit are
+        // counted on the number, the host is told the kinds.
+        if (requestedPetTypes.length > requestedPets) {
+          return { error: `Stay ${i + 1}: ${requestedPetTypes.length} kinds of pet were chosen for ${requestedPets} pet${requestedPets === 1 ? '' : 's'}. Please choose one kind for each pet.` };
         }
         const disallowed = requestedPetTypes.filter(t => !allowedTypes.includes(t));
         if (disallowed.length) {
@@ -563,7 +586,7 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
       // charged in full on top of everything else. Never discounted,
       // never commissioned, never counted as Aerva revenue: it's held,
       // not earned, and normally goes straight back to the guest (see
-      // verify-payment.js for how the deposit is held and released: 24 hours after check-out).
+      // verify-payment.js for how the 7-day hold and release works).
       const depositAmount = listing.security_deposit ? Number(listing.security_deposit) : 0;
 
       // GST for this stay: rate from the per-night value of the room
@@ -672,7 +695,7 @@ async function priceExperience(sql, ex, i, { at = null } = {}) {
   const rows = await sql`
     SELECT id, property_name, nightly_rate, experience_price_unit, commission_rate, timezone,
            experience_available_from, experience_available_until, experience_duration_days,
-           discount_type, discount_value, discount_min_nights, max_guests
+           discount_type, discount_value, discount_min_nights, max_guests, experience_start_time
     FROM listings
     WHERE id = ${ex.listingId} AND status = 'approved' AND listing_type = 'experience'
   `;
@@ -681,6 +704,18 @@ async function priceExperience(sql, ex, i, { at = null } = {}) {
   if (!experience.nightly_rate) return { error: `Experience ${i + 1}: ${experience.property_name} doesn't have a price set yet.` };
   if (!ex.keepDate && String(ex.date) < earliestArrival(experience.timezone)) {
     return { error: `Experience ${i + 1}: the date cannot be in the past.` };
+  }
+  // Today, after its start time: it has already begun (it used to be sold all day).
+  if (!ex.keepDate && String(ex.date) === earliestArrival(experience.timezone)) {
+    const st = /^(\d{1,2}):(\d{2})/.exec(String(experience.experience_start_time || ''));
+    if (st) {
+      const now = {};
+      new Intl.DateTimeFormat('en-US', { timeZone: safeZone(experience.timezone), hourCycle: 'h23', hour: '2-digit', minute: '2-digit' })
+        .formatToParts(new Date()).forEach(p => { now[p.type] = p.value; });
+      if (Number(now.hour) * 60 + Number(now.minute) >= Number(st[1]) * 60 + Number(st[2])) {
+        return { error: `Experience ${i + 1}: ${experience.property_name} has already started today. Please choose another day.` };
+      }
+    }
   }
   const durationDays = experience.experience_duration_days && experience.experience_duration_days >= 1 ? experience.experience_duration_days : 1;
   const endDateExclusive = addDaysToDateStr(ex.date, durationDays);

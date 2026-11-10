@@ -117,12 +117,27 @@ async function resolveManageAccess(req) {
   const token = req.method === 'GET' ? req.query.token : (req.body || {}).token;
   const payload = token ? verifyToken(token) : null;
   if (!payload) return null;
-  if (payload.action === 'manage-pricing') return { listingId: payload.listingId, isCohost: false };
+  if (payload.action === 'manage-pricing') return manageAccountCheck({ listingId: payload.listingId, isCohost: false });
   if (payload.action === 'manage-cohost') {
     const c = await readCohostManageToken(sql, payload);
-    return c ? { listingId: c.listingId, isCohost: true, cohostId: c.cohostId } : null;
+    return c ? manageAccountCheck({ listingId: c.listingId, isCohost: true, cohostId: c.cohostId }) : null;
   }
   return null;
+}
+// A Manage link lasts two years and is not a sign-in, so the account behind
+// it is checked on every use: a host (or co-host) Aerva has suspended, or
+// whose account was deleted, cannot keep managing the listing with a saved
+// link. Fails open on a database error, like the link itself always has.
+async function manageAccountCheck(access) {
+  try {
+    const rows = access.isCohost
+      ? await sql`SELECT to_jsonb(g)->>'account_status' AS s, to_jsonb(g)->>'deleted_at' AS d FROM cohosts c JOIN guests g ON g.id = c.cohost_guest_id WHERE c.id = ${Number(access.cohostId) || 0}`
+      : await sql`SELECT to_jsonb(g)->>'account_status' AS s, to_jsonb(g)->>'deleted_at' AS d FROM listings l JOIN guests g ON g.host_id = l.host_id WHERE l.id = ${Number(access.listingId) || 0} ORDER BY g.id LIMIT 1`;
+    const a = rows[0];
+    if (a && a.d) return null;
+    if (a && a.s === 'suspended') return Object.assign(access, { suspended: true });
+  } catch (err) { console.error('manage link: account check skipped:', err.message); }
+  return access;
 }
 
 module.exports = async (req, res) => {
@@ -137,6 +152,7 @@ module.exports = async (req, res) => {
   if (req.method === 'OPTIONS') return res.status(200).end();
 
   const access = await resolveManageAccess(req);
+  if (access && access.suspended) return res.status(403).json({ error: require('./_accounts').SUSPENDED_MESSAGE, suspended: true });
   const listingId = access ? access.listingId : null;
   if (!listingId) {
     return res.status(400).json({ error: 'This link is no longer valid. Open Manage from My Collection in your host dashboard to get a new one.' });
@@ -559,7 +575,7 @@ module.exports = async (req, res) => {
       if (before[0].status !== 'approved' && !isComplianceBlocked) {
         return res.status(403).json({
           error: before[0].status === 'rejected'
-            ? 'This listing was not approved and needs to be resubmitted before it can be managed here. If you have questions about the rejection, raise a request in Aerva Support (Help → Raise a request).'
+            ? 'This listing was not approved and needs to be resubmitted before it can be managed here. If you have questions about the rejection, raise a request in the Resolution Center (Help → Raise a request).'
             : 'Your listing is still awaiting review — you\'ll be able to manage your rooms and pricing here once it\'s approved.'
         });
       }
@@ -662,6 +678,12 @@ module.exports = async (req, res) => {
       const finalPetFee = petFriendlyProvided
         ? (petFriendly === true && petFee ? Number(petFee) : null)
         : before[0].pet_fee;
+      // A negative pet fee was saved as it came and LOWERED the guest's
+      // total (and the payout) per pet; a negative pet limit was kept too.
+      if (petFriendlyProvided && petFriendly === true) {
+        if (finalMaxPets != null && !(Number.isInteger(finalMaxPets) && finalMaxPets >= 1 && finalMaxPets <= 10)) return res.status(400).json({ error: 'Maximum pets must be a whole number from 1 to 10.' });
+        if (finalPetFee != null && !(Number.isFinite(finalPetFee) && finalPetFee >= 0)) return res.status(400).json({ error: 'The pet fee cannot be negative.' });
+      }
 
       // Security deposit and the listing-wide discount: changed only when
       // the save sends them. Sent empty/0/null clears them (the Manage
@@ -670,6 +692,16 @@ module.exports = async (req, res) => {
         ? (securityDeposit && Number(securityDeposit) > 0 ? Number(securityDeposit) : null)
         : before[0].security_deposit;
       let discountSent = sent('discountType') || sent('discountValue') || sent('discountMinNights') || sent('discountDescription');
+      // A standing discount must be a real discount: a negative amount was
+      // saved as it came and ADDED to the guest's price at checkout
+      // (_pricing.js discountAmountFor), and a percentage could exceed 100.
+      if (discountSent && discountType && discountValue !== undefined && discountValue !== null && String(discountValue).trim() !== '') {
+        const dv = Number(discountValue);
+        if (discountType !== 'flat' && discountType !== 'percentage') return res.status(400).json({ error: 'Invalid discount type.' });
+        if (!Number.isFinite(dv) || dv <= 0) return res.status(400).json({ error: 'Please enter a discount amount greater than 0.' });
+        if (discountType === 'percentage' && dv > 100) return res.status(400).json({ error: "A percentage discount can't be more than 100." });
+        if (discountMinNights !== undefined && discountMinNights !== null && String(discountMinNights).trim() !== '' && !(Number(discountMinNights) >= 1)) return res.status(400).json({ error: 'Minimum nights must be 1 or more.' });
+      }
       if (discountSent && isLive) {
         const newDisc = { type: discountType || null, value: discountValue ? Number(discountValue) : null, minNights: discountMinNights ? Number(discountMinNights) : null, description: discountDescription || null };
         const changed = (newDisc.type || null) !== (before[0].discount_type || null) || Number(newDisc.value || 0) !== Number(before[0].discount_value || 0);
@@ -1335,7 +1367,7 @@ module.exports = async (req, res) => {
             const discValue = Number(p.discountValue);
             const startDate = typeof p.startDate === 'string' ? p.startDate : null;
             const endDate = typeof p.endDate === 'string' ? p.endDate : null;
-            if (!name || !discType || !discValue || discValue <= 0 || !startDate || !endDate || endDate <= startDate) continue;
+            if (!name || !discType || !discValue || discValue <= 0 || (discType === 'percentage' && discValue > 100) || !startDate || !endDate || endDate <= startDate) continue;
             const minNights = p.minNights ? Number(p.minNights) : null;
             const isActive = p.isActive !== false;
 
