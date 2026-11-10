@@ -2303,13 +2303,26 @@
           errorMsg.textContent = [data.warning, data.note].filter(Boolean).join(' ');
           errorMsg.style.display = 'block';
         }
+        // Never "your changes are live" when part of them is not: say so, and point at the note.
+        confirmMsg.textContent = data.warning ? 'Saved — except what the note here says is not live yet.' : 'Saved — your changes are live.';
         confirmMsg.style.display = 'block';
+        // Show what was actually saved (not what was typed): the extra-guest numbers as the server now has them.
+        try {
+          const fresh = await fetch(API_BASE + '/api/update-listing-pricing?token=' + encodeURIComponent(token)).then(r => r.json());
+          if(fresh && fresh.listing && document.getElementById('extraGuestField').style.display !== 'none'){
+            document.getElementById('includedGuests').value = fresh.listing.included_guests != null ? String(fresh.listing.included_guests) : '2';
+            document.getElementById('extraGuestFee').value = fresh.listing.extra_guest_fee != null ? String(fresh.listing.extra_guest_fee) : '1500';
+            syncExtraGuestExample();
+          }
+        } catch(e) { /* the page keeps what was typed */ }
       } else {
         errorMsg.textContent = data.error || 'Something went wrong. Please try again.';
         errorMsg.style.display = 'block';
       }
     } catch(err){
-      errorMsg.textContent = 'Something went wrong saving your photos. Please try again.';
+      // Not only photos fail here: say so honestly, and keep the cause for support.
+      console.error('Manage listing: save failed:', err);
+      errorMsg.textContent = 'Your changes were not saved — something went wrong (photos, or the connection). Please try again.';
       errorMsg.style.display = 'block';
     }
     submitBtn.disabled = false;

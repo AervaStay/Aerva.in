@@ -595,6 +595,7 @@ module.exports = async (req, res) => {
       // anything is saved. Not sent = left as it is.
       // Extra guests (owner, 11 Nov 2026): how many guests the nightly rate
       // covers and the fee per extra guest per night. Not sent = left as it is.
+      let extraGuestNote = null;
       let extraGuestSetting = null;
       if ((sent('includedGuests') || sent('extraGuestFee')) && before[0].listing_type !== 'experience' && before[0].property_type !== 'Resort') {
         extraGuestSetting = require('./_pricing').parseExtraGuestSetting(req.body.includedGuests, req.body.extraGuestFee, sent('maxGuests') && String(req.body.maxGuests || '').trim() ? req.body.maxGuests : before[0].max_guests);
@@ -820,7 +821,11 @@ module.exports = async (req, res) => {
         try {
           await sql`UPDATE listings SET included_guests = COALESCE(${extraGuestSetting.included}, included_guests), extra_guest_fee = COALESCE(${extraGuestSetting.fee}, extra_guest_fee) WHERE id = ${listingId}`;
           await logAudit(sql, { action: 'listing_extra_guest_terms_changed', success: true, actorType: actorKind, actorIdentifier: requester, targetType: 'listing', targetId: listingId, metadata: extraGuestSetting });
-        } catch (err) { console.error('extra guest terms not saved (apply 2026-11-11-04-extra-guest-terms.sql):', err.message); }
+        } catch (err) {
+          console.error('extra guest terms not saved (apply 2026-11-11-04-extra-guest-terms.sql):', err.message);
+          // Never "saved" when it was not: the host is told, and why.
+          extraGuestNote = 'Your extra guest settings were NOT saved: Aerva has a database update to apply first (2026-11-11-04-extra-guest-terms). Everything else was saved. Please try again once it is applied.';
+        }
       }
 
       // When the check-in instructions go out (Manage → Guest Check-In Info
@@ -1501,9 +1506,12 @@ module.exports = async (req, res) => {
             else if (t.name) await sql`UPDATE listing_rooms SET included_guests = COALESCE(${t.included}, included_guests), extra_guest_fee = COALESCE(${t.fee}, extra_guest_fee) WHERE listing_id = ${listingId} AND room_name = ${t.name}`;
           }
           await logAudit(sql, { action: 'room_extra_guest_terms_changed', success: true, actorType: actorKind, actorIdentifier: requester, targetType: 'listing', targetId: listingId, metadata: { rooms: roomGuestTerms } });
-        } catch (err) { console.error('room extra guest terms not saved (apply 2026-11-11-05-room-extra-guest-terms.sql):', err.message); }
+        } catch (err) {
+          console.error('room extra guest terms not saved (apply 2026-11-11-05-room-extra-guest-terms.sql):', err.message);
+          extraGuestNote = 'The extra guest settings on your rooms were NOT saved: Aerva has a database update to apply first (2026-11-11-05-room-extra-guest-terms). Everything else was saved. Please try again once it is applied.';
+        }
       }
-      const warning = [...priceNotes, paidAmenitiesError, blockedDatesError, promotionsError, roomsWarning, freeCancelNote].filter(Boolean).join(' ') || undefined;
+      const warning = [...priceNotes, paidAmenitiesError, blockedDatesError, promotionsError, roomsWarning, freeCancelNote, extraGuestNote].filter(Boolean).join(' ') || undefined;
       return res.status(200).json({ success: true, warning, priceHeld: priceNotes.length ? priceNotes : undefined,
         note: specialNotes.length ? specialNotes.join(' ') : undefined, specialSkipped: specialSaved.skipped || undefined });
     } catch (err) {
