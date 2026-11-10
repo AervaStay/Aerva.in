@@ -256,7 +256,7 @@ module.exports = async (req, res) => {
       discountType, discountValue, discountMinNights, discountDescription,
       exteriorPhotoUrls, interiorPhotoUrls, roomPhotos, photoHashes, coverPhotoUrl,
       petFriendly, maxPetsAllowed, allowedPetTypes, petFee,
-      securityDeposit,
+      securityDeposit, checkInTime, checkOutTime,
       hostingListingId, experienceCategory, experiencePriceUnit, experienceDurationHours, experienceDurationDays, experienceType,
       latitude, longitude, formattedAddress, pincode,
       experienceArrangesTravel, experienceTravelDetails,
@@ -381,6 +381,18 @@ module.exports = async (req, res) => {
       if (!isExistingExperience && existingDraft.status !== 'draft' && existingDraft.status !== 'rejected') {
         return res.status(400).json({ error: 'Only drafts and rejected listings can be edited this way — approved or pending listings go through the review team.' });
       }
+    }
+
+    // Check-in / check-out times from the form: 24-hour HH:MM. A page that
+    // sends them (the current form) must set both to submit for review; a
+    // draft may leave them empty. An older cached page does not send them.
+    const hhmm = (v) => { const m = String(v == null ? '' : v).trim().match(/^([01]?\d|2[0-3]):([0-5]\d)$/); return m ? m[1].padStart(2, '0') + ':' + m[2] : null; };
+    const checkTimes = { sent: Object.prototype.hasOwnProperty.call(req.body || {}, 'checkInTime') || Object.prototype.hasOwnProperty.call(req.body || {}, 'checkOutTime'),
+      inTime: hhmm(checkInTime), outTime: hhmm(checkOutTime) };
+    if (checkTimes.sent && listingType !== 'experience') {
+      if (String(checkInTime || '').trim() && !checkTimes.inTime) return res.status(400).json({ error: 'Please enter the check-in time as a time of day.', field: 'checkInTime' });
+      if (String(checkOutTime || '').trim() && !checkTimes.outTime) return res.status(400).json({ error: 'Please enter the check-out time as a time of day.', field: 'checkOutTime' });
+      if (!isDraft && (!checkTimes.inTime || !checkTimes.outTime)) return res.status(400).json({ error: `Please set the ${!checkTimes.inTime ? 'check-in' : 'check-out'} time.`, field: !checkTimes.inTime ? 'checkInTime' : 'checkOutTime' });
     }
 
     // A draft only needs a name to be worth saving — everything else can
@@ -1056,6 +1068,14 @@ module.exports = async (req, res) => {
           }))
         : [];
       await sql`UPDATE listings SET pending_room_photos = ${JSON.stringify(safeRoomPhotos)} WHERE id = ${listing.id}`;
+    }
+
+    // Check-in and check-out times, asked on the form (owner, 11 Nov 2026):
+    // saved when sent; edited later in Manage listing → Guest Check-In Info.
+    if (!isExperience && checkTimes.sent) {
+      try {
+        await sql`UPDATE listings SET check_in_time = COALESCE(${checkTimes.inTime}, check_in_time), check_out_time = COALESCE(${checkTimes.outTime}, check_out_time) WHERE id = ${listing.id}`;
+      } catch (err) { console.error('check-in times not saved:', err.message); }
     }
 
     // Every room's and space's photos as the form had them (owner, 11 Nov

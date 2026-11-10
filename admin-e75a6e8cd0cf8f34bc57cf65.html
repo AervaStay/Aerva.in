@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-11g"></script>
+<script src="aerva-policies.js?v=2026-11-11n"></script>
 </head>
 <body>
 
@@ -4134,7 +4134,7 @@ async function lkAccount(id, action){
   const msg = document.getElementById('lkAccMsg'); msg.className = 'lk-msg';
   const reason = document.getElementById('lkAccReason').value.trim();
   if(action !== 'signOut' && reason.length < 5){ msg.textContent = 'Write the reason first.'; msg.className = 'lk-msg is-err'; return; }
-  const ask = action === 'suspend' ? 'Suspend this account? They are signed out everywhere and cannot sign in or book.'
+  const ask = action === 'suspend' ? 'Suspend this account? They are signed out everywhere and cannot sign in or book. If they host, their live listings are blocked (not bookable, off search) and their co-hosts cannot act on them; confirmed bookings are not touched.'
     : action === 'unsuspend' ? 'Unsuspend this account? They can sign in again.' : 'Sign this account out on every device?';
   if(!confirm(ask)) return;
   try{

@@ -296,9 +296,21 @@ async function accountAction(sql, { guestId, action, reason, adminLabel }) {
     try { await sql`UPDATE guests SET account_status = 'suspended' WHERE id = ${id}`; }
     catch (err) { throw userError('Run migration_admin_lookup.sql first (it allows the "suspended" status).', 503); }
     await bump();
+    // A suspended host's listings are blocked: taken off search and booking
+    // at once (owner, 11 Nov 2026). Confirmed bookings are not touched.
+    // Their co-hosts can no longer open or act on them (_cohosts.js).
+    try {
+      const hid = ((await sql`SELECT host_id FROM guests WHERE id = ${id}`)[0] || {}).host_id;
+      if (hid) await sql`UPDATE listings SET status = 'deactivated', deactivated_by = 'suspended', deactivated_at = now() WHERE host_id = ${hid} AND status = 'approved'`;
+    } catch (err) { console.error('suspended host: listings not blocked:', err.message); }
   } else if (action === 'unsuspend') {
     if (g.account_status !== 'suspended') throw userError('This account is not suspended.');
     await sql`UPDATE guests SET account_status = NULL WHERE id = ${id}`;
+    // The listings blocked by the suspension go live again (only those).
+    try {
+      const hid = ((await sql`SELECT host_id FROM guests WHERE id = ${id}`)[0] || {}).host_id;
+      if (hid) await sql`UPDATE listings SET status = 'approved', deactivated_by = NULL, deactivated_at = NULL WHERE host_id = ${hid} AND status = 'deactivated' AND deactivated_by = 'suspended'`;
+    } catch (err) { console.error('unsuspended host: listings not restored:', err.message); }
   } else {
     throw userError('Unknown action.');
   }

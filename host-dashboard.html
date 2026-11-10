@@ -741,7 +741,7 @@
 <script src="aerva-cohost.js?v=2026-11-11d"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
-<script src="aerva-policies.js?v=2026-11-11g"></script>
+<script src="aerva-policies.js?v=2026-11-11n"></script>
 <script src="aerva-guest-verify.js?v=2026-11-11d"></script>
 </head>
 <body>
@@ -3295,7 +3295,7 @@
     // A co-host sees the booking's total and the host's payout (their own listings only) and their own share.
     const isCohost = !!(window.AervaCohost && typeof window.AervaCohost.get === 'function' && window.AervaCohost.get());
     document.getElementById('bookingDetailsBody').innerHTML = `
-      <h3 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:19px; margin-bottom:4px;">${escH(booking.guest_name || booking.guest_email)}</h3>
+      <h3 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:19px; margin-bottom:4px;">${escH(booking.guest_name || 'Guest')}</h3>
       <p style="font-size:14px; opacity:0.6; margin-bottom:20px;">${escH(booking.suite_name)}</p>
 
       <div class="settings-row" style="border-bottom:1px solid #e0d5c0;">
@@ -3315,7 +3315,7 @@
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Guest paid</div>
-          <div class="settings-row-value">${fmt(Number(booking.subtotal) + Number(booking.gst) + (Number(booking.free_cancel_fee) || 0))}</div>
+          <div class="settings-row-value">${fmt(Number(booking.subtotal) + Number(booking.gst) + (Number(booking.free_cancel_fee) || 0) + (Number(booking.free_cancel_gst) || 0))}</div>
         </div>
       </div>` : ''}
       ${booking.payout_amount !== undefined ? `
@@ -3334,7 +3334,7 @@
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Guest Paid</div>
-          <div class="settings-row-value">${fmt(Number(booking.subtotal) + Number(booking.gst) + (Number(booking.free_cancel_fee) || 0))}</div>
+          <div class="settings-row-value">${fmt(Number(booking.subtotal) + Number(booking.gst) + (Number(booking.free_cancel_fee) || 0) + (Number(booking.free_cancel_gst) || 0))}</div>
         </div>
       </div>
       ${Number(booking.free_cancel_fee) > 0 ? `
@@ -3347,19 +3347,13 @@
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Your Payout</div>
-          <div class="settings-row-value payout-value">${fmt(Math.max(0, (Number(booking.payout_amount) || 0) - (Number(booking.cohost_share) || 0)))}${Number(booking.cohost_share) > 0 ? `<small style="display:block; font-size:12px; opacity:0.65; margin-top:2px;">After your co-host’s share of ${fmt(booking.cohost_share)}.</small>` : ''}</div>
+          <div class="settings-row-value payout-value">${fmt(Math.max(0, (Number(booking.payout_amount) || 0) - (Number(booking.cohost_share) || 0)))}${booking.after_cohost ? `<small style="display:block; font-size:12px; opacity:0.65; margin-top:2px;">After your co-host’s share.</small>` : ''}</div>
         </div>
       </div>`}
       <div class="settings-row">
         <div class="settings-row-main">
           <div class="settings-row-label" style="font-size:14px;">Status</div>
           <div class="settings-row-value"><span class="status-badge status-${escH(booking.status)}">${escH(booking.status)}</span></div>
-        </div>
-      </div>
-      <div class="settings-row" style="border-bottom:none;">
-        <div class="settings-row-main">
-          <div class="settings-row-label" style="font-size:14px;">Contact</div>
-          <div class="settings-row-value">${escH(booking.guest_email)}</div>
         </div>
       </div>
     `;
@@ -3643,9 +3637,9 @@
       let priceOrGuestHtml = '';
       let cellTitle = title;
       if(booking){
-        const shortName = String(booking.guest_name || String(booking.guest_email || '').split('@')[0] || 'Booked').split(' ')[0];
+        const shortName = String(booking.guest_name || 'Booked').split(' ')[0];
         priceOrGuestHtml = `<span class="cal-day-guest">${escH(shortName)}</span>`;
-        cellTitle = `${booking.guest_name || booking.guest_email} — click for details`;
+        cellTitle = `${booking.guest_name || 'Guest'} — click for details`;
       } else if(!isPast){
         priceOrGuestHtml = `<span class="cal-day-price">${formatCompactPrice(expComputePriceForDate(dateStr))}</span>`;
       }
@@ -3996,9 +3990,9 @@
       if(booked && sbListingId != null){
         const booking = findBookingForListingDate(sbListingId, dateStr);
         if(booking){
-          const shortName = String(booking.guest_name || String(booking.guest_email || '').split('@')[0] || 'Booked').split(' ')[0];
+          const shortName = String(booking.guest_name || 'Booked').split(' ')[0];
           priceOrGuestHtml = `<span class="cal-day-guest">${escH(shortName)}</span>`;
-          cellTitle = `${booking.guest_name || booking.guest_email} — click for details`;
+          cellTitle = `${booking.guest_name || 'Guest'} — click for details`;
         } else if(!isPast){
           // Dates held but not a booking yet (a payment waiting for the
           // guest's details): the cell used to be dark and empty.

@@ -70,7 +70,10 @@ async function loadPayoutSummary(sql, payoutId) {
     // The free cancellation add-on the guest bought (_pricing.js) is part of
     // the gross; shown on its own line when the payout covers it in full.
     ? (() => { const fc = Number(r.free_cancel_fee) > 0 && Number(r.free_cancel_fee) <= Number(r.gross) ? Number(r.free_cancel_fee) : 0;
-        return [['Booking earnings', Number(r.gross) - fc], ['Free cancellation add-on', fc], ['Aerva commission', -Number(r.commission)], ['Co-host share', -Number(r.cohost_shares)]]; })()
+        // A host never sees what a co-host earns (owner, 11 Nov 2026): the first
+        // line is the host's own part of the booking, with no co-host line.
+        const co = Math.max(0, Number(r.cohost_shares) || 0);
+        return [[co > 0 ? 'Booking earnings (your part)' : 'Booking earnings', Number(r.gross) - fc - co], ['Free cancellation add-on', fc], ['Aerva commission', -Number(r.commission)]]; })()
     : [['Co-host share', Number(r.gross)]]; // co-hosts: TDS only, no other deductions
   let reimbursed = [];
   if (Number(r.deductions) > 0) {
@@ -734,7 +737,7 @@ async function runAutoPayouts(sql, { deadlineMs = 7000, razorpay = null } = {}) 
     CROSS JOIN LATERAL (SELECT (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata')) AS local_now) lt
     WHERE (o.status = 'paid' OR (o.status = 'cancelled' AND (to_jsonb(o)->>'payout_on_cancel')::boolean IS TRUE AND o.payout_amount > 0))
       AND o.arrival IS NOT NULL
-      AND o.arrival >= lt.local_now::date - 60
+      AND o.arrival >= lt.local_now::date - 365   -- one year back (owner, 11 Nov 2026; was 60 days)
       AND (o.arrival + 1 < lt.local_now::date OR (o.arrival + 1 = lt.local_now::date AND extract(hour from lt.local_now) >= ${PAYOUT_HOUR}))
       AND NOT EXISTS (SELECT 1 FROM payouts p WHERE p.order_id = o.id AND p.payee_type = 'host' AND COALESCE(to_jsonb(p)->>'kind', 'booking') = 'booking')
     ORDER BY o.arrival LIMIT 100

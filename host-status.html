@@ -1082,7 +1082,7 @@
             <td><span class="when-pill when-${when.replace(' ', '-')}">${when}</span></td>
             <td>${b.confirmation_code ? `<span class="code-cell">${esc(b.confirmation_code)}</span>` : '<span class="sub">—</span>'}</td>
             <td>${esc(b.label || '—')}</td>
-            <td>${esc(b.guest_name || b.guest_email || '—')}${b.guest_phone ? `<br><span class="sub"><a href="${esc(telHref(b.guest_phone))}">${esc(b.guest_phone)}</a></span>` : ''}${b.guest_email ? `<br><span class="sub"><a href="mailto:${encodeURIComponent(b.guest_email)}">${esc(b.guest_email)}</a></span>` : ''}</td>
+            <td>${esc(b.guest_name || 'Guest')}${b.guest_phone ? `<br><span class="sub"><a href="${esc(telHref(b.guest_phone))}">${esc(b.guest_phone)}</a></span>` : ''}${b.guest_email ? `<br><span class="sub"><a href="mailto:${encodeURIComponent(b.guest_email)}">${esc(b.guest_email)}</a></span>` : ''}</td>
             <td>${fmt(b.start_date)} – ${fmt(b.end_date)}<br><span class="sub">${Number(b.nights) || ''} night${Number(b.nights) === 1 ? '' : 's'}</span></td>
             <td>${esc(b.guests || '—')}</td>
             ${cohostView
@@ -1154,9 +1154,9 @@
           window.statusBookingLookup.push({ label: row.label, ...(booking || {}) });
           clickAttr = ` onclick="showStatusBookingDetail(${idx})" style="cursor:pointer;"`;
           const shortName = booking && booking.guest_name ? String(booking.guest_name).split(' ')[0]
-            : booking && booking.guest_email ? booking.guest_email.split('@')[0] : 'Booked';
+            : 'Booked';
           innerHtml = `<span class="cal-day-guest">${esc(shortName)}</span>`;
-          cellTitle = `${row.label} — ${dateStr}: ${booking ? (booking.guest_name || booking.guest_email || 'Booked') : 'Booked'}`;
+          cellTitle = `${row.label} — ${dateStr}: ${booking ? (booking.guest_name || 'Booked') : 'Booked'}`;
           if(booking && booking.waiting_details) innerHtml = '<span class="cal-day-guest" style="opacity:0.75;">Waiting</span>';
         } else if(status === 'blocked' && row.dayImportedFrom && row.dayImportedFrom[i]){
           // Booked on another site and brought in by calendar sync. Only
@@ -1235,8 +1235,7 @@
       ${b.confirmation_code ? `<p style="margin:0 0 12px; padding:8px 10px; background:#f6efe3; border:1px solid #e0cda8; border-radius:8px;">
         <span style="font-size:12.5px; color:#6b5222;">Confirmation code</span><br>
         <strong style="font-size:17px; letter-spacing:0.05em;">${esc(b.confirmation_code)}</strong></p>` : ''}
-      <p style="margin:4px 0;"><strong>Guest:</strong> ${esc(b.guest_name || (b.guest_email || '—'))}</p>
-      ${b.guest_email ? `<p style="margin:4px 0;"><strong>Email:</strong> <a href="mailto:${encodeURIComponent(b.guest_email)}" style="color:#7c6030;">${esc(b.guest_email)}</a></p>` : ''}
+      <p style="margin:4px 0;"><strong>Guest:</strong> ${esc(b.guest_name || 'Guest')}</p>
       ${b.guest_phone ? `<p style="margin:4px 0;"><strong>Phone:</strong> <a href="${esc(telHref(b.guest_phone))}" style="color:#7c6030;">${esc(b.guest_phone)}</a></p>` : ''}
       <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start_date)} – ${fmtDate(b.end_date)}${b.nights ? ` (${Number(b.nights)} night${Number(b.nights) === 1 ? '' : 's'})` : ''} <span style="color:#6e675d;">· ${bookingWhen(b)}</span></p>
       ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${esc(b.guests)}</p>` : ''}

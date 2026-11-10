@@ -448,7 +448,10 @@ async function decorateBookings(sql, guestId, bookings) {
         arrival: dateStr(s.arrival), departure: dateStr(s.departure), nights: s.nights, guests: s.guests, status: s.status,
         confirmation_code: accepted ? s.confirmation_code : null, listing_name: s.property_name, listing_city: s.city, listing_area: s.area,
         listing_address: accepted ? s.formatted_address : null, check_in_time: s.check_in_time, check_out_time: s.check_out_time,
-        local_today: dateStr(s.local_today), can_change: false, can_cancel_request: false, can_report: false, review_state: null
+        local_today: dateStr(s.local_today), can_change: false, can_cancel_request: false, can_report: false, review_state: null,
+        // The guest staying may report a problem on arrival (check-in day, until 10 AM the next day).
+        can_report_arrival: accepted && s.status === 'paid' && (s.listing_type || 'stay') === 'stay' && dateStr(s.local_today) >= dateStr(s.arrival)
+          && dateStr(s.local_today) < dateStr(s.departure) && Date.now() < require('./_booking-rules').stayWindowEndMs(dateStr(s.arrival), s.timezone)
       });
       }
     }

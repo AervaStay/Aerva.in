@@ -330,6 +330,14 @@ async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
   const priced = await priceStay(sql, s, 0, { excludeOrderId: o.id, at: o.created_at || null });
   if (priced.error) throw userError(priced.error.replace(/^Stay 1: /, ''));
   const q = priced.detail;
+  // A Resort's deposit is taken once per booking, on one of its rooms: a room
+  // booked without one (another room of the same payment holds it) stays so.
+  if (q.roomId && !(Number(o.deposit_amount) > 0) && Number(q.depositAmount) > 0) {
+    try {
+      const sib = await sql`SELECT 1 FROM orders WHERE razorpay_order_id = ${o.razorpay_order_id} AND listing_id = ${o.listing_id} AND id <> ${o.id} AND deposit_amount > 0 LIMIT 1`;
+      if (sib.length) q.depositAmount = 0;
+    } catch (e) { /* priced as usual */ }
+  }
   // Aerva's service fee is never refunded: a cheaper change keeps the fee already paid.
   q.guestServiceFee = feeAfterChange(q.guestServiceFee, o);
   addOnAfterChange(q, o);
@@ -374,6 +382,11 @@ async function requestChange(sql, { orderId, guestId, input }) {
   const isTransfer = qc.kind === 'transfer';
   // The guest must have seen and accepted that a transfer is final (no changes, no cancellation).
   if (isTransfer && !(input && input.understood === true)) throw userError('Please confirm you understand that a completed transfer is final: the booking cannot be changed or cancelled afterwards.');
+  // One request at a time (owner, 11 Nov 2026): not while a cancellation request is waiting.
+  try {
+    const openCancel = await sql`SELECT 1 FROM cancellation_requests WHERE order_id = ${qc.booking.id} AND status = 'pending' LIMIT 1`;
+    if (openCancel.length) throw userError('You have asked to cancel this booking. It cannot be changed while that request is waiting.', 409);
+  } catch (e) { if (e && e.status) throw e; }
   let row;
   try {
     row = (await sql`INSERT INTO booking_changes (order_id, guest_id, requested, quote, old_total, new_total, difference, summary)

@@ -470,7 +470,7 @@ const HOST_MONEY_KEYS = new Set([
   'commission', 'commission_amount', 'commission_rate', 'commissionAmount', 'commissionRate',
   'subtotal', 'gst', 'total', 'discount_amount', 'guest_service_fee', 'serviceFee',
   'not_earned', 'notEarned', 'deposit_resolution_amount', 'depositResolutionAmount',
-  'free_cancel_fee', 'free_cancel_commission',
+  'free_cancel_fee', 'free_cancel_gst', 'free_cancel_commission',
   'refund_amount_subunit', 'cohost_share', 'coupon_cost', 'verification'
 ]);
 const HOST_MONEY_PREFIX = /^(bank|tds|pan)([A-Z_]|$)/;
@@ -675,7 +675,7 @@ function trimForCohost(ctx, mode, body) {
     // What these listings earn (booking total, the host's payout), for the
     // co-host's own listings only — every co-host sees it.
     const seesHostMoney = cohostCan(ctx, 'host_earnings');
-    const HOST_FIGURES = ['total', 'subtotal', 'gst', 'payout_amount', 'commission_amount', 'commission_rate', 'not_earned', 'guest_service_fee', 'free_cancel_fee', 'free_cancel_commission'];
+    const HOST_FIGURES = ['total', 'subtotal', 'gst', 'payout_amount', 'commission_amount', 'commission_rate', 'not_earned', 'guest_service_fee', 'free_cancel_fee', 'free_cancel_gst', 'free_cancel_commission'];
     const out = {
       // Every co-host gets the Manage page, through their own link: it
       // stops working when they are removed and cannot rename the listing.
@@ -1307,9 +1307,27 @@ function isAervaBlobUrl(url) {
 }
 const ENCRYPTION_UNAVAILABLE = 'Bank and PAN details cannot be saved right now. Please try again later, or raise a request in the Resolution Center (Help → Raise a request).';
 
+// A guest's email address is never shown to a host or co-host (owner, 11
+// Nov 2026; the Privacy Policy says the same): every answer this endpoint
+// gives has it taken out, and a name that was only ever the email address
+// becomes "Guest". Emails Aerva sends to the guest are not affected.
+const LOOKS_LIKE_EMAIL = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const GUEST_NAME_KEYS = ['guest_name', 'guestName', 'guest_display_name', 'counterpart_name'];
+function hideGuestEmails(v, depth = 0) {
+  if (!v || typeof v !== 'object' || depth > 8 || v instanceof Date) return v;
+  if (Array.isArray(v)) { for (const x of v) hideGuestEmails(x, depth + 1); return v; }
+  for (const k of Object.keys(v)) {
+    if (k === 'guest_email' || k === 'guestEmail') { v[k] = null; if (k === 'guest_email' && !('guest_name' in v)) v.guest_name = 'Guest'; continue; }
+    if (GUEST_NAME_KEYS.includes(k)) { if (v[k] == null || v[k] === '' || (typeof v[k] === 'string' && LOOKS_LIKE_EMAIL.test(v[k].trim()))) v[k] = 'Guest'; continue; }
+    if (v[k] && typeof v[k] === 'object') hideGuestEmails(v[k], depth + 1);
+  }
+  return v;
+}
+
 module.exports = async (req, res) => {
   // Typed text can never become markup — see _plain-text.js.
   sanitizeBody(req);
+  { const sendJson = res.json.bind(res); res.json = (body) => { try { hideGuestEmails(body); } catch (e) { /* sent as it is */ } return sendJson(body); }; }
 
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
@@ -4234,7 +4252,7 @@ module.exports = async (req, res) => {
              discount_type, discount_value, discount_min_nights, discount_description,
              latitude, longitude, formatted_address, pincode,
              exterior_photo_urls, interior_photo_urls, cover_photo_url, created_at,
-             pending_room_photos, to_jsonb(listings)->'draft_room_photos' AS draft_room_photos,
+             pending_room_photos, to_jsonb(listings)->'draft_room_photos' AS draft_room_photos, check_in_time, check_out_time,
              listing_type, hosting_listing_id, experience_category, experience_price_unit,
              experience_duration_hours, experience_duration_days, experience_type, experience_arranges_travel,
              experience_travel_details, experience_meeting_point_type,
@@ -4306,6 +4324,7 @@ module.exports = async (req, res) => {
              -- The free cancellation add-on the guest bought (_pricing.js):
              -- inside commission_amount / payout_amount; shown on its own.
              COALESCE((to_jsonb(o)->>'free_cancel_fee')::int, 0) AS free_cancel_fee,
+             COALESCE((to_jsonb(o)->>'free_cancel_gst')::int, 0) AS free_cancel_gst,
              COALESCE((to_jsonb(o)->>'free_cancel_commission')::int, 0) AS free_cancel_commission,
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
              -- the host may still raise a concern (same rule as raiseDispute)
@@ -4721,6 +4740,15 @@ module.exports = async (req, res) => {
     // details and no money; and holds that went in the last 3 days, with a
     // short notice. { waiting: [...], released: [...] }
     const waitingForDetails = await require('./_guest-verify').hostWaiting(sql, guest.host_id);
+    // A host never sees what a co-host earns (owner, 11 Nov 2026): each
+    // booking carries the host's OWN payout (after any co-host share), and
+    // the share itself is not sent. A co-host's page gets their own share
+    // from trimForCohost (their rows only).
+    bookings.forEach(b => {
+      const s = Math.max(0, Number(b.cohost_share) || 0);
+      if (s > 0) { b.payout_amount = Math.max(0, (Number(b.payout_amount) || 0) - s); b.after_cohost = true; }
+      b.cohost_share = 0;
+    });
     return res.status(200).json({ listings: listingsWithLinks, hostBadge, bookings, bookingsMeta, verification, complianceNotices, today, waitingForDetails });
   } catch (err) {
     console.error('host-listings error:', err);

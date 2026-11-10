@@ -202,8 +202,8 @@ async function cancellationQuote(sql, orderId, guestId) {
     ...(groupNoRefund ? { groupNoRefund: true, policyLabel: 'Non-refundable group booking' } : {}),
     items: rows.map(r => r.suite_name),
     // The add-on on this booking (null without one): until when, what it cost.
-    freeCancel: fcRow.fee > 0 ? (() => { const ms = freeCancelUntilMs(main.arrival, main.listing_timezone, main.listing_check_in_time);
-      return { active: fcNow, until: Number.isFinite(ms) ? new Date(ms).toISOString() : null, untilLabel: freeCancelLabel(ms, main.listing_timezone), fee: fcRow.fee, gst: fcRow.gst }; })() : null
+    freeCancel: (fcRow.fee > 0 || fcRow.included) ? (() => { const ms = freeCancelUntilMs(main.arrival, main.listing_timezone, main.listing_check_in_time);
+      return { active: fcNow, until: Number.isFinite(ms) ? new Date(ms).toISOString() : null, untilLabel: freeCancelLabel(ms, main.listing_timezone), fee: fcRow.fee, gst: fcRow.gst, included: fcRow.included }; })() : null
   };
   // What a natural disaster approved by Aerva would give (the guest's own quote only).
   if (!tier.started && guestId != null) base.naturalDisaster = await disasterOutcome(sql, main.id);
@@ -809,6 +809,12 @@ async function createCancellationRequest(sql, { orderId, guestId, reasonCode, de
   const policyPercent = reasonCode === 'change_of_plans' ? (q.hostDecides ? null : q.pct) : null;
   // Free cancellation add-on, inside its window: the guest's change of plans
   // cancels at once at 100% — nothing for the host to answer.
+  // One request at a time (owner, 11 Nov 2026): while a change to this
+  // booking is waiting (for the host, or for payment), it cannot be cancelled.
+  try {
+    const openChange = await sql`SELECT 1 FROM booking_changes WHERE order_id = ${orderId} AND status IN ('pending', 'awaiting_payment') LIMIT 1`;
+    if (openChange.length) return { error: 'You have asked to change this booking. Wait for your host’s answer, or withdraw the change, before asking to cancel.', status: 409, reason: 'change_open' };
+  } catch (e) { /* before the booking-changes update */ }
   const instant = reasonCode === 'change_of_plans' && q.instant === true && !!razorpay;
   const clean = String(details || '').trim().slice(0, 800);
   let request;

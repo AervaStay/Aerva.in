@@ -57,6 +57,8 @@ async function resolveActingHost(sql, accountId, hostId) {
   const rows = await sql`
     SELECT c.id, c.access, c.permissions, c.listing_ids, c.commission_percent,
            (SELECT g.id FROM guests g WHERE g.host_id = c.host_id ORDER BY g.id LIMIT 1) AS owner_guest_id,
+           -- The host's account suspended by Aerva: nobody acts for it (owner, 11 Nov 2026).
+           (SELECT to_jsonb(g)->>'account_status' FROM guests g WHERE g.host_id = c.host_id ORDER BY g.id LIMIT 1) AS owner_status,
            h.name AS host_name
     FROM cohosts c JOIN hosts h ON h.id = c.host_id
     WHERE c.host_id = ${hid} AND c.cohost_guest_id = ${accountId} AND c.status = 'active'
@@ -64,6 +66,7 @@ async function resolveActingHost(sql, accountId, hostId) {
   `;
   const r = rows[0];
   if (!r || !r.owner_guest_id) return null;
+  if (r.owner_status === 'suspended') return null;   // the host is suspended: its co-hosts cannot open or act on its listings
   return {
     cohostId: r.id,
     hostId: hid,

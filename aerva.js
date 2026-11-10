@@ -2624,7 +2624,7 @@
   function listFreeCancelCharge(fixed, subtotal){
     if(fixed == null || fixed === '') return 0;
     const f = Math.round(Number(fixed)), sub = Number(subtotal);
-    if(!(f >= 0) || !(sub > 0)) return 0;
+    if(!(f > 0) || !(sub > 0)) return 0;   // ₹0 = free, no charge
     const lo = Math.ceil(sub * 5 / 100), hi = Math.floor(sub * 30 / 100);
     return hi < lo ? Math.max(0, hi) : Math.min(hi, Math.max(lo, f));
   }
@@ -2651,6 +2651,7 @@
     // Switched off: nothing about its price is checked, and an earlier message about it goes.
     const errEl = document.querySelector('#listingForm .listing-error');
     if(!on && errEl && /free cancellation/i.test(errEl.textContent || '')){ errEl.textContent = ''; errEl.style.display = 'none'; }
+    if(on && fixed === 0){ ex.textContent = 'Guests get free cancellation at no charge on every booking: a full refund of the booking price, its GST and any deposit until 48 hours before check-in.'; return; }
     if(!on || !(nightly > 0) || !(fixed >= 0) || fixed > 100000){
       ex.textContent = on && !(nightly > 0) && fixed >= 0 ? 'Enter the nightly rate above to see an example.' : '';
       return;
@@ -2732,6 +2733,8 @@
         // the moment the field was hidden — an empty, hidden field can
         // never satisfy a check that doesn't know to skip it.
         ...(isResortSubmission ? [] : [{ value: document.getElementById('listPrice').value, message: 'Please enter the expected nightly rate.' }]),
+        { value: (document.getElementById('listCheckInTime') || { value: 'x' }).value, message: 'Please set the check-in time.' },
+        { value: (document.getElementById('listCheckOutTime') || { value: 'x' }).value, message: 'Please set the check-out time.' },
         { value: document.getElementById('listDescription').value.trim(), message: 'Please tell us a bit about the property.' }
       ];
       for(const check of requiredChecks){
@@ -2996,6 +2999,9 @@
           allowedPetTypes: petFriendlyYes.checked ? collectCheckedValues('PetTypes') : [],
           petFee: petFriendlyYes.checked ? hostAmountToInr(document.getElementById('listPetFee').value) : '',
           securityDeposit: hostAmountToInr(document.getElementById('listSecurityDeposit').value),
+          // Check-in / check-out times (24-hour HH:MM), asked on the form.
+          checkInTime: (document.getElementById('listCheckInTime') || {}).value || '',
+          checkOutTime: (document.getElementById('listCheckOutTime') || {}).value || '',
           // "Offer free cancellation to guests" — off unless ticked (drafts too).
           freeCancelOffered: !!(document.getElementById('listFreeCancelOffered') || {}).checked && document.getElementById('listType').value !== 'Resort',
           // Its fixed ₹ price per booking (kept when switched off, for switching back on).
@@ -3232,6 +3238,9 @@
         if(box) box.checked = true;
       });
       document.getElementById('listSecurityDeposit').value = draft.security_deposit || '';
+      { const hhmm = (v) => { const m = String(v || '').trim().match(/^(\d{1,2}):(\d{2})/); return m ? m[1].padStart(2, '0') + ':' + m[2] : ''; };
+        const ci = document.getElementById('listCheckInTime'), co = document.getElementById('listCheckOutTime');
+        if(ci) ci.value = hhmm(draft.check_in_time); if(co) co.value = hhmm(draft.check_out_time); }
       setListFreeCancel(draft);
       if(draft.pet_friendly){
         petFriendlyYes.checked = true;
@@ -5691,6 +5700,8 @@
             : '<span class="suite-price-unit">Price on request</span>'}
           ${ratingBit(listing)}
         </div>
+        ${listing.nightly_rate && (listing.listing_type || 'stay') !== 'experience' && listing.property_type !== 'Resort' && parseInt(listing.max_guests, 10) > BASE_OCCUPANCY
+          ? `<div class="suite-near" data-extra-guest-note>Price for ${BASE_OCCUPANCY} guests · extra guest charges apply</div>` : ''}
         ${distanceHtml ? `<div class="suite-near">${distanceHtml}</div>` : ''}
         ${cancelRateCardHtml(listing)}
       </div>
@@ -6806,8 +6817,8 @@
     const btn = document.getElementById('bookingSignupSubmitBtn');
     errEl.style.display = 'none';
     successEl.style.display = 'none';
-    if(!password || password.length < 8){
-      errEl.textContent = 'Please choose a password of at least 8 characters.';
+    if(!password || password.length < 8 || !/\p{L}/u.test(password) || !/\d/.test(password)){
+      errEl.textContent = 'Password must be at least 8 characters, with at least one letter and one number.';
       errEl.style.display = 'block';
       return;
     }
@@ -7969,7 +7980,7 @@
         }
       }
       container.querySelectorAll('[data-report-problem]').forEach(btn => {
-        btn.addEventListener('click', (e) => { e.stopPropagation(); openReportProblem(Number(btn.dataset.reportProblem), btn.dataset.listingName || ''); });
+        btn.addEventListener('click', (e) => { e.stopPropagation(); openReportProblem(Number(btn.dataset.reportProblem), btn.dataset.listingName || '', btn.dataset.arrivalOnly === '1'); });
       });
       container.querySelectorAll('[data-change-booking]').forEach(btn => {
         btn.addEventListener('click', (e) => { e.stopPropagation(); openChangeBooking(Number(btn.dataset.changeBooking), btn.dataset.listingName || ''); });
@@ -8956,7 +8967,7 @@
     // the host's payout): without it "Guest paid" came out lower than "Your
     // payout". Host: as on the dashboard and My Earnings (the add-on, without
     // its own GST); guest: with its GST.
-    const paid = conv.subtotal != null ? Number(conv.subtotal) + Number(conv.gst || 0) + (Number(conv.free_cancel_fee) || 0) + (isHostView ? 0 : (Number(conv.free_cancel_gst) || 0)) : null;
+    const paid = conv.subtotal != null ? Number(conv.subtotal) + Number(conv.gst || 0) + (Number(conv.free_cancel_fee) || 0) + (Number(conv.free_cancel_gst) || 0) : null;
     const money = isHostView
       ? [paid != null ? ['Guest paid', fmt(paid), ''] : null, conv.payout_amount != null ? ['Your payout', fmt(conv.payout_amount), 'bd-good'] : null].filter(Boolean)
       // The guest's total is everything charged (service fee and deposit included), as My Bookings shows it.
@@ -16335,7 +16346,7 @@ async function aervaIdPanel(host, { needs = ['email'], message = '', onDone, pho
 }
 
 // ---- Guest: report a problem during the stay (api/_stay-disputes.js) ----
-function openReportProblem(orderId, listingName){
+function openReportProblem(orderId, listingName, arrivalOnly){
   const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
   const overlay = document.createElement('div');
   overlay.className = 'payout-overlay';
@@ -16371,6 +16382,8 @@ function openReportProblem(orderId, listingName){
   setTimeout(() => { const b = overlay.querySelector('.payout-close'); if(b && overlay.isConnected) b.focus(); }, 0);
   overlay.addEventListener('click', (e) => { if(e.target === overlay) close(); });
   overlay.querySelector('.payout-close').addEventListener('click', close);
+  // The guest staying on a gift reports problems on arrival only.
+  if(arrivalOnly) overlay.querySelectorAll('#rpReason option').forEach(o => { if(!/^arrival_/.test(o.value)) o.remove(); });
   document.body.appendChild(overlay);
   overlay.querySelector('#rpSend').addEventListener('click', async () => {
     const msg = overlay.querySelector('#rpMsg'); const btn = overlay.querySelector('#rpSend');
@@ -16721,7 +16734,11 @@ function aervaBookingGlance(b){
     items.push('This booking was transferred: it can no longer be changed or cancelled. For any problem, raise a request in the Resolution Center; Aerva decides.');
   } else {
     // The free cancellation add-on: a full refund until 48 hours before check-in.
-    if(Number(b.free_cancel_fee) > 0 && b.free_cancel_until_label && b.can_cancel_request !== false){
+    if(b.free_cancel_included === true && b.free_cancel_until_label && b.can_cancel_request !== false){
+      items.push(b.free_cancel_active
+        ? `Full refund until ${b.free_cancel_until_label} (the property’s time): this booking includes free cancellation. Cancel before then and the booking price, GST and deposit come back at once — no wait for your host. The service fee is not refunded. After that, the refund policy below applies.`
+        : `Free cancellation ended ${b.free_cancel_until_label} (the property’s time); the refund policy below applies.`);
+    } else if(Number(b.free_cancel_fee) > 0 && b.free_cancel_until_label && b.can_cancel_request !== false){
       items.push(b.free_cancel_active
         ? `Full refund until ${b.free_cancel_until_label} (the property’s time): you added free cancellation. Cancel before then and the booking price, GST and deposit come back at once — no wait for your host. The add-on and the service fee are not refunded. After that, the refund policy below applies.`
         : `Free cancellation ended ${b.free_cancel_until_label} (the property’s time); the refund policy below applies. The add-on is not refunded.`);
@@ -17039,7 +17056,7 @@ async function openPolicyCancel(orderId, listingName){
     // A confirmed group booking is non-refundable: cancelled at once, only the deposit comes back (_cancellations.js groupNoRefund).
     if(q.groupNoRefund) return `<p class="payout-muted" style="margin:8px 0;"><strong>This is a non-refundable group booking.</strong> If you cancel, the booking is cancelled at once for everyone, with no wait for your host, and nothing is refunded for the stay, its GST or Aerva’s service fee, whatever the listing’s policy.</p>${line('Refunded for the stay', '<strong>' + inr(q.refundBooking || 0) + '</strong>')}${q.deposit ? line('Security deposit, refunded to each payer', inr(q.deposit)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}`;
     // Free cancellation add-on, still in its window: cancelled at once, no host answer.
-    if(q.instant) return `<p class="payout-muted" style="margin:8px 0;">You added free cancellation, and it is still before ${esc((q.freeCancel || {}).untilLabel || '')} (the property’s time): your booking is cancelled at once, with no wait for your host.</p>${line('You get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}${q.addOnKept ? line('Free cancellation add-on (non-refundable)', inr(q.addOnKept)) : ''}`;
+    if(q.instant) return `<p class="payout-muted" style="margin:8px 0;">${(q.freeCancel || {}).included ? 'This booking includes free cancellation' : 'You added free cancellation'}, and it is still before ${esc((q.freeCancel || {}).untilLabel || '')} (the property’s time): your booking is cancelled at once, with no wait for your host.</p>${line('You get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}${q.addOnKept ? line('Free cancellation add-on (non-refundable)', inr(q.addOnKept)) : ''}`;
     return `${line('If your host accepts, you get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponBack ? line('Plus, as a coupon', inr(q.couponBack)) : ''}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}${q.addOnKept ? line('Free cancellation add-on (not refunded; its window has passed)', inr(q.addOnKept)) : ''}`;
   };
   body.innerHTML = `<label class="payout-label" for="pcReason">Reason</label>
@@ -17225,6 +17242,14 @@ function aervaShowFreeCancelOffer(q){
   document.querySelectorAll('[data-free-cancel-line]').forEach(el => { el.hidden = !(fc && fc.offered); });
   if(!fc || !fc.offered){ opt.hidden = true; if(t.checked){ t.checked = false; } return; }
   opt.hidden = false;
+  // The host offers it free: part of every booking, nothing to tick or pay.
+  t.disabled = !!fc.included;
+  if(fc.included){
+    t.checked = true;
+    document.getElementById('listingFreeCancelTitle').textContent = `Free cancellation included (until ${fc.untilLabel}) — no charge`;
+    document.getElementById('listingFreeCancelText').textContent = `Included by your host at no charge. Cancel before ${fc.untilLabel} (the property’s time, 48 hours before check-in) for a full refund of the booking price, its GST and any deposit, at once, with no wait for your host. Aerva’s service fee is not refunded. After that, the listing’s refund policy applies.`;
+    return;
+  }
   document.getElementById('listingFreeCancelTitle').textContent = `Free cancellation (until ${fc.untilLabel}) — ${fmtGuest(fc.fee)} + GST`;
   document.getElementById('listingFreeCancelText').textContent = `The host’s price for this stay. Cancel before ${fc.untilLabel} (the property’s time, 48 hours before check-in) for a full refund of the booking price, its GST and any deposit, at once, with no wait for your host. The add-on and Aerva’s service fee are not refunded. After that, the listing’s refund policy applies.`;
 }
@@ -17657,7 +17682,7 @@ function aervaSharedBookingCard(b){
     <p class="ag-mb-note">${tag}</p>
     ${b.gift_message ? `<blockquote class="ag-quote ag-quote-sm">“${esc(b.gift_message)}”</blockquote>` : ''}
     ${checkin}
-    <div class="booking-actions">${accept}${canChat ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${esc(b.suite_name || '')}">${upcoming ? 'Message host' : 'View messages'}</button>` : ''}</div>
+    <div class="booking-actions">${accept}${canChat ? `<button type="button" class="filter-clear" data-order-id="${b.id}" data-listing-name="${esc(b.suite_name || '')}">${upcoming ? 'Message host' : 'View messages'}</button>` : ''}${b.can_report_arrival ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${esc(b.suite_name || '')}" data-arrival-only="1">Report a problem on arrival</button>` : ''}</div>
     <p class="ag-help">${b.shared === 'gift' ? esc(b.gift_from) : esc(b.group.organiserFirstName || 'The organiser')} manages this booking (changes and cancellations).</p>
   </div></div>`;
 }

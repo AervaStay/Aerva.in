@@ -637,6 +637,7 @@ module.exports = async (req, res) => {
     const stayDetails = [];
     const experienceDetails = [];
     const seenListingIds = new Set();
+    const resortDepositTaken = new Set();   // a Resort's security deposit: once per booking, not per room (owner, 11 Nov 2026)
 
     for (let i = 0; i < safeStays.length; i++) {
       const s = safeStays[i];
@@ -662,6 +663,10 @@ module.exports = async (req, res) => {
       const priced = await priceStay(sql, s, i);
       if (priced.error) return res.status(400).json({ error: plainError(priced.error, requestedItems), reason: priced.reason || undefined });
       const d = priced.detail;
+      if (d.roomId && Number(d.depositAmount) > 0) {
+        if (resortDepositTaken.has(d.listingId)) d.depositAmount = 0;
+        else resortDepositTaken.add(d.listingId);
+      }
       grandSubtotal += d.subtotal;
       grandGst += d.gst;
       grandDiscount += d.discountAmount;
@@ -748,7 +753,7 @@ module.exports = async (req, res) => {
                                        guests: x.guests, subtotal: x.subtotal, gst: x.gst, gstRate: x.gstRate, guestServiceFee: x.guestServiceFee, depositAmount: x.depositAmount,
                                        withExperienceId: x.withExperienceId,
                                        // The add-on: offered or not, its price, and whether it is in this quote.
-                                       freeCancel: Object.assign({}, x.freeCancelOffer || { offered: false }, { chosen: (x.freeCancelFee || 0) > 0 }) })),
+                                       freeCancel: Object.assign({}, x.freeCancelOffer || { offered: false }, { chosen: (x.freeCancelFee || 0) > 0 || x.freeCancelFixed === 0 }) })),
         experiences: experienceDetails.map(x => ({ listingId: x.listingId, suite: x.suite, date: x.date, endDate: x.endDate, durationDays: x.durationDays, guests: x.guests,
                                                    subtotal: x.subtotal, gst: x.gst, gstRate: x.gstRate, guestServiceFee: x.guestServiceFee }))
       });

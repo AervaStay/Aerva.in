@@ -56,8 +56,8 @@ window.AERVA_POLICIES = {
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
-    version: '2026-11-11b',       // booking agreement (guests)
-    hostVersion: '2026-11-11b',    // host agreement — accepted for every listing
+    version: '2026-11-11c',       // booking agreement (guests)
+    hostVersion: '2026-11-11c',    // host agreement — accepted for every listing
     // How hosts already on an earlier version move to this one (_host-agreement.js):
     //   'minor'  — rewording / corrections, same meaning: nothing to do;
     //   'notice' — a material change: told at least 30 days ahead (email +
@@ -244,7 +244,7 @@ window.AERVA_POLICIES = {
         ] },
         { title: '22. Contacting Aerva', points: [
           'For any matter about a booking, a guest, a payout or your listing, raise a request in the Resolution Center. Every request receives a reference number.',
-          'Formal complaints may be addressed to Aerva’s Grievance Officer at aervastudios@gmail.com.'
+          'Formal complaints may be addressed to Aerva’s Grievance Officer, Tanish, at aervastudios@gmail.com.'
         ] },
         { title: '23. Aerva’s discretion on disputes', points: [
           'Aerva reviews every dispute between you and a guest, and decides it fairly on the facts and evidence both sides provide.',
@@ -353,7 +353,7 @@ window.AERVA_POLICIES = {
       ]},
       { id: 'contact', title: 'Contact', points: [
         'Questions, complaints and grievances: raise a request in the Resolution Center (Help → Raise a request).',
-        'Grievance Officer: aervastudios@gmail.com'
+        'Grievance Officer: Tanish, aervastudios@gmail.com'
       ]}
     ],
     // What differs by country (shown after the common sections).
@@ -599,6 +599,7 @@ window.AERVA_POLICIES = {
       { title: 'Free cancellation add-on', points: [
         'It is offered only where the host has chosen to offer it for that listing; the listing then shows “Free cancellation available at checkout”. On such a stay, booked more than 48 hours before check-in, a guest may add free cancellation at checkout. It is not offered for experiences, for a stay that comes with an experience, for resort rooms, or for split (group) payments.',
         'Hosts choose, for each listing, whether to offer it (off unless they turn it on), and may change it at any time. A change applies to new bookings only: a booking keeps the add-on it was bought with.',
+        'A host may also offer it free: free cancellation is then included in every booking of that listing at no charge, with the same 48-hour limit and the same refund.',
         'It costs the amount set by the host (between 5% and 30% of the stay price). The host sets one fixed amount per booking for the listing; for a very short or very long stay it is kept between 5% and 30% of the stay price — the stay after any offer, with paid amenities and pet fees, before GST, Aerva’s service fee and any deposit. The amount for each booking is shown at checkout before paying. GST is added on it at the stay’s rate.',
         'A listing whose host has not set a price for it does not offer it. A change of the host’s price applies to new bookings only.',
         'Until 48 hours before the listing’s check-in time, where the property is, the guest may cancel and is refunded the booking price, its GST and any security deposit in full, at once — no request to the host. The end of this window is shown at checkout, in the confirmation and in My Bookings.',
@@ -691,7 +692,7 @@ window.AERVA_POLICIES = {
     ]},
     { id: 'cancellation-experiences', title: 'Cancellation Policy for Experiences', summary: 'How cancellations work for experiences.', sections: [
       { title: 'Rule', points: [
-        'Each experience shows its own refund terms before booking. Those terms apply.',
+        'An experience follows the same refund policy and the same brackets as a stay: Flexible or Firm, as shown on the experience before you book. The same three reasons apply, and Aerva’s service fee is not refunded.',
         'An experience that includes a stay: if the experience’s host cancels it (with its stay), everything the guest paid, GST and Aerva’s service fee included, is held for them as Aerva credit to use on another stay or experience, or to have refunded; no coupon. If the stay’s host cancels, the stay’s rules apply and the coupon is worth 10% of the stay, paid for by the stay’s host.',
         'If a host or co-host cancels, everything the guest paid — the price, its GST and Aerva’s service fee — is held for them as Aerva credit for up to 6 months (its end date is shown in My Bookings) (whatever is left when it ends is refunded automatically): it is taken off what they pay for their next Aerva booking (anything left stays on the credit), or refunded in full to the original payment method at any time from My Bookings. If the cancellation is within 48 hours of check-in, 15 minutes later the guest also receives an Aerva coupon worth 10% of the booking, paid for by whoever cancelled.'
       ]}
@@ -871,7 +872,7 @@ window.AERVA_POLICIES = {
     // Required by the Consumer Protection (E-Commerce) Rules, 2020: the
     // Grievance Officer's name, designation and contact. Fill in the name.
     grievanceOfficer: {
-      name: '',
+      name: 'Tanish',
       designation: 'Grievance Officer',
       email: 'aervastudios@gmail.com'
     },
