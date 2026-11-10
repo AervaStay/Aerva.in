@@ -108,7 +108,7 @@ async function personContext(sql, guestId) {
     SELECT o.id, o.suite_name, o.arrival, o.departure, o.status, to_jsonb(o)->>'confirmation_code' AS code, o.payout_amount
     FROM orders o JOIN listings l ON l.id = o.listing_id
     WHERE l.host_id = ${me.host_id} AND o.departure >= current_date - 30 ORDER BY o.arrival LIMIT 10`) : [];
-  const requests = await soft(sql`SELECT ref, subject, status, created_at FROM support_tickets WHERE guest_id = ${guestId} ORDER BY id DESC LIMIT 5`);
+  const requests = await soft(sql`SELECT ref, subject, status, created_at FROM support_tickets t WHERE guest_id = ${guestId} AND COALESCE(to_jsonb(t)->>'channel', 'web') <> 'signed_out' ORDER BY id DESC LIMIT 5`);
   const today = new Date().toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' });
   const lines = [
     `Today (India time): ${today}.`,

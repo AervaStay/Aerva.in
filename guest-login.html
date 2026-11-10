@@ -34,6 +34,8 @@
     min-height:44px; display:inline-flex; align-items:center; vertical-align:middle;
   }
   .switch-mode{margin-top:12px;}
+  .switch-mode a{color:#8a6c39; min-height:44px; display:inline-flex; align-items:center; vertical-align:middle; padding:0 2px;}
+  .error a{color:#8a6c39; text-decoration:underline;}
   .back-home{
     display:inline-flex; align-items:center; min-height:44px; font-size:12px; letter-spacing:0.08em; text-transform:uppercase;
     color:#1c1a17; opacity:0.6; text-decoration:none; margin-bottom:16px;
@@ -133,6 +135,9 @@
     </div>
     </div>
     <p class="switch-mode"><button type="button" id="showForgotPassword">Forgot your password?</button></p>
+    <!-- Suspended, locked out after an email change, or no sign-in codes:
+         a support request without an account (aerva-help.js, signin=1). -->
+    <p class="switch-mode" id="cantSignInRow"><a href="index.html?view=help&amp;signin=1" id="cantSignInLink">Can’t sign in?</a></p>
     <p class="switch-mode">New to Aerva? <button type="button" id="showSignup">Create an account</button></p>
     <!-- Phone login is built and working (guest-phone-auth.js + the screens
          below); hidden until Twilio is set up. To show it again, set
@@ -277,6 +282,22 @@
 
 <script>
   const API_BASE = (window.AERVA_API || 'https://aerva-in.vercel.app');
+  // An error from the server, plus a link to Help → Can't sign in? when the
+  // server says it is the way forward (a suspended account, codes that
+  // cannot be sent). The message stays plain text (textContent).
+  function showServerError(el, data, fallback){
+    el.textContent = (data && data.error) || fallback;
+    if(data && (data.signinHelp || data.suspended)){
+      el.textContent = el.textContent.replace(/\s*\(aerva\.in\/index\.html\?view=help&signin=1\)/, '');
+      const a = document.createElement('a');
+      a.href = 'index.html?view=help&signin=1&problem=' + (data.suspended ? 'suspended' : 'no_codes');
+      a.textContent = 'Open “Can’t sign in?”';
+      a.className = 'signin-help-link';
+      el.appendChild(document.createTextNode(' '));
+      el.appendChild(a);
+    }
+    el.style.display = 'block';
+  }
   const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
   // The Terms of Service / Privacy Policy a new account agrees to — the
   // same string as TERMS_VERSION in api/guest-auth.js (kept in step by hand).
@@ -461,8 +482,7 @@
           window.location.href = landingPageFor(data.guest);
         } else {
           showOnly(loginState);
-          document.getElementById('loginError').textContent = data.error || 'This verification link is invalid or has expired.';
-          document.getElementById('loginError').style.display = 'block';
+          showServerError(document.getElementById('loginError'), data, 'This verification link is invalid or has expired.');
         }
       } catch(err){
         showOnly(loginState);
@@ -575,11 +595,10 @@
       }
       if(data.otpRequired){
         showLoginOtp(data.message);
-        if(!res.ok){ loginError.textContent = data.error || 'Something went wrong. Please try again.'; loginError.style.display = 'block'; }
+        if(!res.ok) showServerError(loginError, data, 'Something went wrong. Please try again.');
       } else {
         if(data.locked) hideLoginOtp();
-        loginError.textContent = data.error || 'Something went wrong. Please try again.';
-        loginError.style.display = 'block';
+        showServerError(loginError, data, 'Something went wrong. Please try again.');
         if(data.requiresVerification){
           pendingVerifyEmail = emailValue;
           resendRow.style.display = 'block';
@@ -793,8 +812,7 @@
         document.getElementById('phoneCode').value = '';
         showOnly(phoneVerifyState);
       } else {
-        phoneRequestError.textContent = data.error || 'Something went wrong. Please try again.';
-        phoneRequestError.style.display = 'block';
+        showServerError(phoneRequestError, data, 'Something went wrong. Please try again.');
       }
     } catch(err){
       phoneRequestError.textContent = 'Something went wrong. Please try again.';
@@ -831,8 +849,7 @@
         storeSession(data.sessionToken, data.guest);
         window.location.href = landingPageFor(data.guest);
       } else {
-        phoneVerifyError.textContent = data.error || 'Something went wrong. Please try again.';
-        phoneVerifyError.style.display = 'block';
+        showServerError(phoneVerifyError, data, 'Something went wrong. Please try again.');
       }
     } catch(err){
       phoneVerifyError.textContent = 'Something went wrong. Please try again.';
@@ -946,8 +963,7 @@
         document.getElementById('resetExpiredMsg').textContent = data.error;
         showOnly(resetExpiredState);
       } else {
-        resetError.textContent = data.error || 'Something went wrong. Please try again.';
-        resetError.style.display = 'block';
+        showServerError(resetError, data, 'Something went wrong. Please try again.');
         resetBtn.disabled = false;
         resetBtn.textContent = 'Set new password';
       }
@@ -1035,7 +1051,7 @@
           pendingGoogleResponse = response;
           document.getElementById('googleConsentRow').classList.add('needs');
         }
-        socialError.textContent = data.error || 'Could not sign in with Google. Please try again.';
+        showServerError(socialError, data, 'Could not sign in with Google. Please try again.');
         socialError.style.display = 'block';
       }
     } catch(err){

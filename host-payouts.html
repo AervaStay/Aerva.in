@@ -487,7 +487,7 @@
       + ((d.blocked || []).length ? '<p>Blocked by Aerva (a guest found the property does not exist): ' + d.blocked.map(l => '<strong>' + esc(l.name) + '</strong>').join(', ') + '. Only Aerva can unblock a listing.</p>' : '')
       + (Number(d.owed) > 0 ? '<p>You owe Aerva <strong>' + inr(d.owed) + '</strong> — paid to you for bookings whose guests were then moved or refunded. It is deducted from your next payouts automatically.</p>' : '')
       + ((d.held || []).length ? '<p style="margin-bottom:4px;">On hold:</p><ul style="margin:0; padding-left:18px; font-size:14px;">' + d.held.map(x => '<li>' + esc(x.listing) + ' · ' + esc(x.arrival) + ' → ' + esc(x.departure) + ' (' + esc(x.code) + '): ' + esc(x.why) + '</li>').join('') + '</ul>'
-        + '<p class="sub" style="margin-top:8px;">Until a guest confirms a listing is real and as listed, each booking of it is paid at that booking’s check-out time instead of the day after check-in.</p>' : '');
+        + '<p class="sub" style="margin-top:8px;">The first payout for each listing is sent after its first guest checks out, instead of the day after check-in. Later bookings are paid as usual.</p>' : '');
     const lead = document.querySelector('.wrap .lead');
     if(lead && lead.parentNode) lead.parentNode.insertBefore(box, lead.nextSibling);
   }).catch(() => {});

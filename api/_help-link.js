@@ -7,6 +7,13 @@
 //                                          AERVA_POLICIES.support.categories)
 //   helpLink(opts, text)                   that URL as an email link
 //   helpLine(opts, lead)                   "Need help? Raise a request in Aerva Support."
+//   signinHelpUrl({ problem })             "Can't sign in?" — a request without an
+//                                          account (index.html?view=help&signin=1;
+//                                          problem = suspended | email_changed |
+//                                          no_codes | other, preselected)
+//   signinHelpLink(opts, text)             that URL as an email link
+//   SIGNIN_HELP_TEXT                       the same, as plain words for an error
+//                                          message ("Help → Can’t sign in?")
 const SITE = 'https://aerva.in';
 
 function helpUrl({ category, order, listing } = {}) {
@@ -27,4 +34,18 @@ function helpLine(opts = {}, lead = 'Need help?') {
   return `${lead} ${helpLink(opts)}.`;
 }
 
-module.exports = { helpUrl, helpLink, helpLine };
+// "Can't sign in?" (owner, 10 Nov 2026): for a suspended account, someone
+// locked out after an email change, or someone who gets no sign-in codes.
+// Opens the form directly on the help page.
+const SIGNIN_PROBLEMS = ['suspended', 'email_changed', 'no_codes', 'other'];
+function signinHelpUrl({ problem } = {}) {
+  const q = ['view=help', 'signin=1'];
+  if (problem && SIGNIN_PROBLEMS.includes(problem)) q.push('problem=' + problem);
+  return SITE + '/index.html?' + q.join('&');
+}
+function signinHelpLink(opts = {}, text = 'tell us through “Can’t sign in?” in Aerva Support') {
+  return `<a href="${attr(signinHelpUrl(opts))}" style="color:#8a6c39;">${text}</a>`;
+}
+const SIGNIN_HELP_TEXT = 'Help → Can’t sign in? (aerva.in/index.html?view=help&signin=1)';
+
+module.exports = { helpUrl, helpLink, helpLine, signinHelpUrl, signinHelpLink, SIGNIN_HELP_TEXT, SIGNIN_PROBLEMS };

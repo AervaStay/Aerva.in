@@ -36,13 +36,11 @@
 //     The original host is never paid for that booking; anything already
 //     paid out is recorded against them (host_penalties 'overpaid',
 //     _payouts.js settleAfterPayout) and deducted from later payouts.
-//   • Until a guest confirms a listing is real ("This place is real and as
-//     listed" in My Bookings, from check-in; also emailed at check-in), the
-//     payout of EVERY booking of that listing is held until that booking's
-//     check-out time, then released if no report is open on it. The first
-//     guest who confirms marks the listing checked (listings.
-//     checkin_verified_at): later bookings are not asked and pay out as
-//     usual. No answer: the listing stays open, the payout goes at check-out.
+//   • A listing's FIRST stay is paid out after that guest's check-out time
+//     (owner, 10 Nov 2026), then released if no report is open on it. Later
+//     bookings pay out as usual. Guests are still asked from check-in
+//     whether the place is real (listings.checkin_verified_at); that answer
+//     no longer affects payouts.
 //     This payout timing changes hosts' terms, so it applies only to stays
 //     arriving on or after the effective date of the host notice
 //     '2026-11-10-checkin-promise' (aerva-policies.js updates; 30 days'
@@ -159,7 +157,9 @@ async function payoutHolds(sql, orderIds) {
              COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata') AS tz, to_jsonb(l)->>'check_out_time' AS check_out_time,
              l.checkin_blocked_at, l.checkin_verified_at,
              EXISTS (SELECT 1 FROM checkin_reports r WHERE r.order_id = o.id AND r.status = ANY(${ACTIVE})) AS reported,
-             EXISTS (SELECT 1 FROM checkin_reports r WHERE r.listing_id = o.listing_id AND r.reason = 'fake' AND r.status = 'open') AS fake_open
+             EXISTS (SELECT 1 FROM checkin_reports r WHERE r.listing_id = o.listing_id AND r.reason = 'fake' AND r.status = 'open') AS fake_open,
+             NOT EXISTS (SELECT 1 FROM orders p WHERE p.listing_id = o.listing_id AND p.status = 'paid' AND COALESCE(p.order_type, 'stay') = 'stay'
+                           AND (p.arrival < o.arrival OR (p.arrival = o.arrival AND p.id < o.id))) AS first_stay
       FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ANY(${ids})`;
   } catch (e) { return out; }
   const now = Date.now();
@@ -168,12 +168,14 @@ async function payoutHolds(sql, orderIds) {
     if (r.reported) { out.set(r.id, 'A report made on arrival is being settled by Aerva'); continue; }
     if (r.fake_open) { out.set(r.id, 'A guest reported this listing as not existing; held until Aerva decides'); continue; }
     if (r.checkin_blocked_at) { out.set(r.id, 'The listing is blocked by Aerva (check-in promise)'); continue; }
-    // Not yet confirmed real by a guest (or this is the booking whose guest
-    // confirmed it): held until this booking's check-out time — for stays
-    // arriving on or after the notice's effective date only (holdFrom).
-    if (r.order_type === 'stay' && dateStr(r.arrival) >= from && (!r.checkin_verified_at || r.guest_confirmed_stay_at)) {
+    // A listing's FIRST stay (owner, 10 Nov 2026: "first payout would be
+    // after guest check-out"): its payout is sent after that guest's
+    // check-out time. Later bookings are paid as usual. For stays arriving
+    // on or after the notice's effective date only (holdFrom). Guests are
+    // still asked whether the place is real; that no longer holds payouts.
+    if (r.order_type === 'stay' && dateStr(r.arrival) >= from && r.first_stay) {
       const until = checkoutMs(r.departure, r.tz, r.check_out_time);
-      if (now < until) out.set(r.id, `Held until check-out (${new Date(until).toISOString()}): the listing has not yet been confirmed real by a guest`);
+      if (now < until) out.set(r.id, `Held until check-out (${new Date(until).toISOString()}): the first stay at this listing`);
     }
   }
   return out;

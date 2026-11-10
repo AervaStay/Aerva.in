@@ -31,7 +31,7 @@
 require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
 const { verifyToken } = require('./_approval-token');
-const { sessionStatus, newSessionToken, reactivateIfPaused, assertNotSuspended } = require('./_accounts');
+const { sessionStatus, newSessionToken, reactivateIfPaused, assertNotSuspended, SUSPENDED_MESSAGE } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { E164_PATTERN, normalizeToE164, phoneMatchSuffix } = require('./_phone-validation');
@@ -264,7 +264,7 @@ module.exports = async (req, res) => {
         const payload = auth.startsWith('Bearer ') ? verifyToken(auth.slice(7)) : null;
         const st = await sessionStatus(sql, payload);
         if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.' });
-        if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. To ask about it, raise a request in Aerva Support (Help → Raise a request) from any account you can sign in to.' });
+        if (st === 'suspended') return res.status(401).json({ error: SUSPENDED_MESSAGE, suspended: true, signinHelp: true });
         if (st === 'error') return res.status(503).json({ error: 'Could not check your sign-in right now. Please try again.' });
         const meId = st === 'ok' ? Number(payload.listingId) : 0;
         if (!meId) return res.status(401).json({ error: 'Please log in again.' });
@@ -360,7 +360,7 @@ module.exports = async (req, res) => {
 
       return res.status(200).json({ sessionToken, guest: safeGuest(guest) });
     } catch (err) {
-      if (err.suspended) return res.status(403).json({ error: err.message });
+      if (err.suspended) return res.status(403).json({ error: err.message, suspended: true, signinHelp: true });
       console.error('guest-phone-auth (verify) error:', err);
       await logAudit(sql, {
         action: 'guest_phone_otp_verified', success: false, actorType: 'guest', actorIdentifier: cleanPhone,

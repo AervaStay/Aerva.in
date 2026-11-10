@@ -11,6 +11,8 @@
 //   get-pending-listings.js — the support team (admin session)
 //   guest-auth.js     — the header bell: requests with a reply not yet seen
 //   _accounts.js      — deleting an account erases what the person wrote
+//   guest-auth.js     — "Can't sign in?": a request raised WITHOUT an account
+//                       (createSignedOutRequest; channel 'signed_out')
 //
 // Tables: sql/migration_support.sql. Before it runs, raising a request
 // answers 503 "not open yet"; nothing else on the site is affected.
@@ -60,7 +62,9 @@ const CATEGORIES = {
   report_content:        { label: 'Report a listing, review or message', audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'none' },
   privacy_data:          { label: 'My personal data', audience: 'both', booking: 'none', bookingAs: 'any', listing: 'none' },
   grievance:             { label: 'Formal grievance (Grievance Officer)', audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' },
-  other:                 { label: 'Something else', audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' }
+  other:                 { label: 'Something else', audience: 'both', booking: 'optional', bookingAs: 'any', listing: 'optional' },
+  // "Can't sign in?" only (raised signed out; never offered on the signed-in form).
+  account_access:        { label: 'Account access', audience: 'signed_out', booking: 'none', bookingAs: 'any', listing: 'none' }
 };
 const HOST_CATEGORIES = Object.keys(CATEGORIES).filter(k => CATEGORIES[k].audience === 'host');
 
@@ -292,7 +296,7 @@ async function listRequests(sql, guestId) {
     const rows = await sql`
       SELECT t.*, o.suite_name, o.confirmation_code, l.property_name FROM support_tickets t
       LEFT JOIN orders o ON o.id = t.order_id LEFT JOIN listings l ON l.id = t.listing_id
-      WHERE t.guest_id = ${guestId} ORDER BY t.updated_at DESC LIMIT 100`;
+      WHERE t.guest_id = ${guestId} AND COALESCE(to_jsonb(t)->>'channel', 'web') <> 'signed_out' ORDER BY t.updated_at DESC LIMIT 100`;
     return rows.map(ticketView);
   } catch (err) { if (notReady(err)) return []; throw err; }
 }
@@ -303,7 +307,8 @@ async function ownTicket(sql, guestId, ref) {
     t = (await sql`
       SELECT t.*, o.suite_name, o.confirmation_code, l.property_name FROM support_tickets t
       LEFT JOIN orders o ON o.id = t.order_id LEFT JOIN listings l ON l.id = t.listing_id
-      WHERE t.ref = ${String(ref || '').trim().toUpperCase()} AND t.guest_id = ${guestId}`)[0];
+      WHERE t.ref = ${String(ref || '').trim().toUpperCase()} AND t.guest_id = ${guestId}
+        AND COALESCE(to_jsonb(t)->>'channel', 'web') <> 'signed_out'`)[0];
   } catch (err) { if (notReady(err)) throw NOT_READY(); throw err; }
   if (!t) throw userError('That request could not be found on your account.', 404);
   return t;
@@ -423,12 +428,21 @@ async function autoCloseResolved(sql, { limit = 100 } = {}) {
                      WHERE id IN (SELECT id FROM support_tickets WHERE status = 'resolved'
                                     AND resolved_at < now() - make_interval(hours => ${FEEDBACK_HOURS}) ORDER BY resolved_at LIMIT ${limit})
                        AND status = 'resolved'
-                     RETURNING id, ref, subject, guest_id`;
+                     RETURNING id, ref, subject, guest_id, to_jsonb(support_tickets)->>'channel' AS channel,
+                               COALESCE(to_jsonb(support_tickets)->>'contact_email', to_jsonb(support_tickets)->>'account_email') AS contact_email`;
   } catch (err) { if (notReady(err)) return { closed: 0 }; throw err; }
   for (const t of rows) {
     await sql`INSERT INTO support_messages (ticket_id, sender, body) VALUES (${t.id}, 'system', ${`Closed automatically ${FEEDBACK_HOURS} hours after it was resolved, with no feedback.`})`;
     await logAudit(sql, { action: 'support_auto_closed', success: true, actorType: 'system', actorIdentifier: 'support',
       targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref } });
+    // Raised without signing in: only ever the address the person gave (never the account's).
+    if (t.channel === 'signed_out') {
+      if (t.contact_email) await sendEmail(t.contact_email, `Your request ${t.ref} is closed`,
+        `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your request is closed</h2>
+         <p><strong>${esc(t.subject)}</strong> · ${esc(t.ref)}</p>
+         <p>We marked it resolved ${FEEDBACK_HOURS} hours ago and did not hear back, so it is now closed. If you still need help, reply to this email and mention ${esc(t.ref)}.</p>`, SUPPORT_INBOX());
+      continue;
+    }
     const g = t.guest_id ? (await sql`SELECT email FROM guests WHERE id = ${t.guest_id}`)[0] : null;
     if (g && g.email) await sendEmail(g.email, `Your request ${t.ref} is closed`,
       `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">Your request is closed</h2>
@@ -442,8 +456,9 @@ async function autoCloseResolved(sql, { limit = 100 } = {}) {
 // The header bell: requests with a reply the person has not opened yet.
 async function bellNotifications(sql, guestId) {
   try {
-    const rows = await sql`SELECT ref, subject, last_support_message_at FROM support_tickets
+    const rows = await sql`SELECT ref, subject, last_support_message_at FROM support_tickets t
                            WHERE guest_id = ${guestId} AND last_support_message_at IS NOT NULL
+                             AND COALESCE(to_jsonb(t)->>'channel', 'web') <> 'signed_out'
                              AND (user_last_seen_at IS NULL OR last_support_message_at > user_last_seen_at)
                            ORDER BY last_support_message_at DESC LIMIT 5`;
     const out = rows.map(r => ({
@@ -452,7 +467,8 @@ async function bellNotifications(sql, guestId) {
       href: `index.html?view=help&request=${encodeURIComponent(r.ref)}`
     }));
     // Resolved and waiting for the person's word (closes by itself after 48 hours).
-    const res = await sql`SELECT ref, subject, resolved_at FROM support_tickets WHERE guest_id = ${guestId} AND status = 'resolved' ORDER BY resolved_at DESC LIMIT 5`;
+    const res = await sql`SELECT ref, subject, resolved_at FROM support_tickets t WHERE guest_id = ${guestId} AND status = 'resolved'
+                          AND COALESCE(to_jsonb(t)->>'channel', 'web') <> 'signed_out' ORDER BY resolved_at DESC LIMIT 5`;
     res.forEach(r => {
       if (out.some(o => o.href.endsWith(encodeURIComponent(r.ref)))) return;
       out.push({ id: 'support-feedback:' + r.ref + ':' + new Date(r.resolved_at).getTime(), kind: 'action',
@@ -475,14 +491,19 @@ async function adminList(sql, { status = 'active', q = '' } = {}) {
              COALESCE(to_jsonb(t)->>'channel', 'web') AS channel, COALESCE((to_jsonb(t)->>'urgent')::boolean, false) AS urgent,
              (to_jsonb(t)->>'feedback_rating')::int AS feedback_rating, (to_jsonb(t)->>'auto_closed')::boolean AS auto_closed,
              t.created_at, t.updated_at, t.first_response_at, t.last_user_message_at, t.last_support_message_at,
-             g.name AS person_name, g.email AS person_email,
+             g.name AS person_name, COALESCE(g.email, to_jsonb(t)->>'contact_email') AS person_email,
+             to_jsonb(t)->>'contact_email' AS contact_email, to_jsonb(t)->>'account_email' AS account_email,
+             (COALESCE(to_jsonb(t)->>'channel', 'web') = 'signed_out') AS signed_out,
              (t.first_response_at IS NULL AND t.status NOT IN ('resolved', 'closed')
                AND t.created_at < now() - make_interval(hours => ${FIRST_RESPONSE_HOURS})) AS overdue,
              (t.last_user_message_at IS NOT NULL AND (t.last_support_message_at IS NULL OR t.last_user_message_at > t.last_support_message_at)) AS awaiting_us
       FROM support_tickets t LEFT JOIN guests g ON g.id = t.guest_id
       WHERE (${want}::text[] IS NULL OR t.status = ANY(${want}::text[]))
-        AND (${term} = '' OR t.ref ILIKE ${'%' + term + '%'} OR t.subject ILIKE ${'%' + term + '%'} OR g.email ILIKE ${'%' + term + '%'} OR g.name ILIKE ${'%' + term + '%'})
-      ORDER BY (COALESCE((to_jsonb(t)->>'urgent')::boolean, false) AND t.status NOT IN ('resolved', 'closed')) DESC, (t.category = 'safety' AND t.status NOT IN ('resolved', 'closed')) DESC, (t.first_response_at IS NULL) DESC, t.updated_at DESC LIMIT 200`;
+        AND (${term} = '' OR t.ref ILIKE ${'%' + term + '%'} OR t.subject ILIKE ${'%' + term + '%'} OR g.email ILIKE ${'%' + term + '%'} OR g.name ILIKE ${'%' + term + '%'}
+             OR to_jsonb(t)->>'contact_email' ILIKE ${'%' + term + '%'} OR to_jsonb(t)->>'account_email' ILIKE ${'%' + term + '%'})
+      -- "Can't sign in?" first (the person has no other way to reach us), then other urgent requests, then safety.
+      ORDER BY (COALESCE(to_jsonb(t)->>'channel', 'web') = 'signed_out' AND t.status NOT IN ('resolved', 'closed')) DESC,
+               (COALESCE((to_jsonb(t)->>'urgent')::boolean, false) AND t.status NOT IN ('resolved', 'closed')) DESC, (t.category = 'safety' AND t.status NOT IN ('resolved', 'closed')) DESC, (t.first_response_at IS NULL) DESC, t.updated_at DESC LIMIT 200`;
     counts = await sql`SELECT status, count(*)::int AS n FROM support_tickets GROUP BY status`;
   } catch (err) { if (notReady(err)) return { ready: false, tickets: [], counts: {} }; throw err; }
   return {
@@ -538,6 +559,11 @@ async function adminSaveCase(sql, { id, summary, outcome, requesterConduct, othe
 async function adminReply(sql, { id, text, status = null, internal = false, adminEmail = 'admin', audit = {} }) {
   const t = (await sql`SELECT t.*, g.email AS person_email, g.name AS person_name FROM support_tickets t LEFT JOIN guests g ON g.id = t.guest_id WHERE t.id = ${Number(id) || 0}`)[0];
   if (!t) throw userError('Request not found.', 404);
+  // Raised without signing in ("Can't sign in?"): the person cannot open the
+  // request page, so replies go by email to the address they gave — never to
+  // the email on the account, which may not be theirs any more.
+  const signedOut = t.channel === 'signed_out';
+  if (signedOut) t.person_email = t.contact_email || t.account_email || null;
   const body = clean(text, REPLY_MAX);
   if (status !== null && !STATUSES.includes(status)) throw userError('Unknown status.');
   if (!body && status === null) throw userError('Write a reply, or choose a new status.');
@@ -581,7 +607,16 @@ async function adminReply(sql, { id, text, status = null, internal = false, admi
   await logAudit(sql, { action: internal ? 'support_internal_note' : replied ? 'support_replied' : 'support_status_changed', success: true,
     actorType: 'admin', ...audit, targetType: 'support_ticket', targetId: t.id, metadata: { ref: t.ref, from: t.status, to: next } });
   // The person hears about a reply, or the request being resolved or closed.
-  if (t.person_email && (replied || (next !== t.status && ['resolved', 'closed', 'waiting_on_you'].includes(next)))) {
+  if (signedOut && t.person_email && (replied || (next !== t.status && ['resolved', 'closed'].includes(next)))) {
+    const what = replied ? 'Aerva Support has replied' : `Your request is now: ${STATUS_LABELS[next]}`;
+    await sendEmail(t.person_email, `${what} — ${t.ref}`,
+      `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">${esc(what)}</h2>
+       <p><strong>${esc(t.subject)}</strong> · reference <strong>${esc(t.ref)}</strong></p>
+       ${replied ? `<blockquote style="margin:12px 0; padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f; white-space:pre-wrap;">${esc(body)}</blockquote>` : ''}
+       <p>${next === 'closed' ? 'This request is closed.' : 'To answer, reply to this email and keep the reference ' + esc(t.ref) + ' in the subject. We may also call you on the number you gave.'}</p>
+       <p style="font-size:13px; color:#6e675d;">You are receiving this because you asked Aerva for help signing in. Aerva will never ask for your password or a sign-in code.</p>`, SUPPORT_INBOX());
+    if (replied) await sql`INSERT INTO support_messages (ticket_id, sender, internal, body) VALUES (${t.id}, 'system', true, ${'Emailed to ' + t.person_email + ' (raised without signing in).'})`;
+  } else if (!signedOut && t.person_email && (replied || (next !== t.status && ['resolved', 'closed', 'waiting_on_you'].includes(next)))) {
     const what = replied ? 'Aerva Support has replied' : `Your request is now: ${STATUS_LABELS[next]}`;
     await sendEmail(t.person_email, `${what} — ${t.ref}`,
       `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">${esc(what)}</h2>
@@ -647,6 +682,128 @@ async function systemUpdate(sql, ticketId, body, { resolve = false } = {}) {
   } catch (err) { console.error('support update not written:', ticketId, err.message); }
 }
 
+// ---------------------------------------------------------------- "Can't sign in?"
+// A request raised WITHOUT an account (owner, 10 Nov 2026), from Help →
+// "Can't sign in?" (index.html?view=help&signin=1), for three people who
+// otherwise could not reach Aerva: a suspended account, someone locked out
+// after their email was changed without their permission, and someone who
+// does not receive sign-in codes. Called by guest-auth.js (mode
+// 'support-signed-out'); needs 2026-11-10-05-signed-out-support.sql.
+//
+// It is a support ticket with channel 'signed_out', category
+// 'account_access', urgent, first in Admin → Support. If the email matches
+// an account (now, or one it had before an email change) the ticket is
+// linked to it for the team — the person is never told whether it did. The
+// answer is the same either way. The ticket never shows in that account's
+// own Support pages or bell (whoever holds the account now may not be the
+// person writing), and every email about it goes to the address the person
+// gave, never to the account's.
+const SIGNIN_PROBLEMS = {
+  suspended:     'My account is suspended',
+  email_changed: 'Someone changed my email / I’m locked out',
+  no_codes:      'I don’t receive sign-in codes',
+  other:         'Other sign-in problem'
+};
+const SIGNED_OUT_PER_IP_HOUR = 3;       // requests from one address per hour
+const SIGNED_OUT_PER_EMAIL_DAY = 3;     // requests for one account email per 24 hours
+const SIGNED_OUT_BODY_MIN = 20, SIGNED_OUT_BODY_MAX = 2000;
+const EMAIL_RE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+const signedOutReply = (ref) => `Thanks — reference ${ref}; Aerva will contact you by phone or at the email you gave.`;
+
+// The account an email belongs to now, or belonged to before an email
+// change (guest-profile.js logs 'guest_email_changed' with the new address
+// and, from 10 Nov 2026, the old one as 'from'). null when none.
+async function accountForEmail(sql, email) {
+  const now = (await sql`SELECT id, name, host_id FROM guests WHERE lower(email) = ${email} AND deleted_at IS NULL ORDER BY id LIMIT 1`)[0];
+  if (now) return { ...now, how: 'the email on the account' };
+  try {
+    const a = (await sql`SELECT target_id FROM audit_log WHERE action = 'guest_email_changed' AND target_id IS NOT NULL
+                           AND (lower(metadata->>'from') = ${email} OR lower(metadata->>'email') = ${email})
+                         ORDER BY created_at DESC LIMIT 1`)[0];
+    if (a) {
+      const g = (await sql`SELECT id, name, host_id FROM guests WHERE id = ${Number(a.target_id)} AND deleted_at IS NULL`)[0];
+      if (g) return { ...g, how: 'an earlier email of the account (since changed)' };
+    }
+  } catch (err) { console.error('signed-out request: earlier email lookup skipped:', err.message); }
+  return null;
+}
+
+async function createSignedOutRequest(sql, { problem, accountEmail, phone, contactEmail, description, honeypot, ip }) {
+  const acct = String(accountEmail || '').trim().toLowerCase().slice(0, 254);
+  // A filled hidden field: a bot. The same answer, nothing stored or sent.
+  if (honeypot != null && String(honeypot).trim()) {
+    await logAudit(sql, { action: 'support_signed_out_request', success: false, actorType: 'guest', actorIdentifier: acct || null,
+      metadata: { reason: 'honeypot', ip: ip || null } });
+    const ref = randomRef();
+    return { ref, message: signedOutReply(ref), ignored: true };
+  }
+  if (!SIGNIN_PROBLEMS[problem]) throw userError('Choose what the problem is.');
+  if (!EMAIL_RE.test(acct)) throw userError('Enter the email address on your Aerva account.');
+  const e164 = normalizeToE164(String(phone || '').trim());
+  if (!e164) throw userError('Enter a valid phone number we can call you on, with the country code if it is not an Indian number.');
+  let reach = String(contactEmail || '').trim().toLowerCase().slice(0, 254);
+  if (reach && !EMAIL_RE.test(reach)) throw userError('Enter a valid email address we can reach you at, or leave it empty.');
+  if (reach === acct) reach = '';
+  // Contact details are NOT removed here: the person has to give them.
+  const text = clean(description, SIGNED_OUT_BODY_MAX + 1);
+  if (text.length < SIGNED_OUT_BODY_MIN) throw userError('Please describe the problem in a few sentences (at least 20 characters).');
+  if (text.length > SIGNED_OUT_BODY_MAX) throw userError(`Please keep the description under ${SIGNED_OUT_BODY_MAX} characters.`);
+
+  const byIp = ip ? await countRecentAttempts(sql, { action: 'support_signed_out_request', windowMinutes: 60, byIp: ip }) : 0;
+  const byEmail = await countRecentAttempts(sql, { action: 'support_signed_out_request', windowMinutes: 24 * 60, byActor: acct });
+  if (byIp >= SIGNED_OUT_PER_IP_HOUR || byEmail >= SIGNED_OUT_PER_EMAIL_DAY) {
+    await logAudit(sql, { action: 'support_signed_out_limited', success: false, actorType: 'guest', actorIdentifier: acct,
+      metadata: { reason: byIp >= SIGNED_OUT_PER_IP_HOUR ? 'ip_hour' : 'email_day', ip: ip || null } });
+    throw userError(byIp >= SIGNED_OUT_PER_IP_HOUR
+      ? 'Several requests have been sent from here in the last hour. Please try again later.'
+      : 'Several requests have already been sent for this email today. Aerva will contact you about them.', 429);
+  }
+
+  const match = await accountForEmail(sql, acct);
+  const sendTo = reach || acct;
+  const label = SIGNIN_PROBLEMS[problem];
+  let ticket;
+  try {
+    for (let i = 0; i < 20 && !ticket; i++) {
+      ticket = (await sql`
+        INSERT INTO support_tickets (ref, guest_id, role, category, subject, callback_phone, last_user_message_at, channel, urgent, account_email, contact_email)
+        VALUES (${randomRef()}, ${match ? match.id : null}, ${match && match.host_id ? 'host' : 'guest'}, 'account_access', ${label}, ${e164}, now(),
+                'signed_out', true, ${acct}, ${sendTo})
+        ON CONFLICT (ref) DO NOTHING RETURNING *`)[0];
+    }
+    if (!ticket) throw new Error('could not draw a free reference number');
+    await sql`INSERT INTO support_messages (ticket_id, sender, body, created_at) VALUES (${ticket.id}, 'system',
+                ${`Request raised without signing in (Can’t sign in?): ${label}. Reference ${ticket.ref}. Account email given: ${acct}. Phone: ${e164}.${reach ? ' Reach them at: ' + reach + '.' : ''} Replies are emailed to ${sendTo}.`}, now() - interval '2 milliseconds')`;
+    await sql`INSERT INTO support_messages (ticket_id, sender, internal, body, created_at) VALUES (${ticket.id}, 'system', true,
+                ${match ? `Matches account #${match.id}${match.name ? ' (' + match.name + ')' : ''} by ${match.how}. The person was not told. Confirm who they are (phone call) before acting on the account.`
+                        : 'No Aerva account has this email (now or before an email change). The person was not told.'}, now() - interval '1 millisecond')`;
+    await sql`INSERT INTO support_messages (ticket_id, sender, body) VALUES (${ticket.id}, 'user', ${text})`;
+  } catch (err) {
+    if (notReady(err)) throw NOT_READY();
+    throw err;
+  }
+  await logAudit(sql, { action: 'support_signed_out_request', success: true, actorType: 'guest', actorIdentifier: acct,
+    targetType: 'support_ticket', targetId: ticket.id,
+    metadata: { ref: ticket.ref, problem, linked: !!match, guestId: match ? match.id : undefined, ip: ip || null } });
+
+  // To Aerva's support inbox, like every new request.
+  await sendEmail(SUPPORT_INBOX(), `ACCOUNT ACCESS — New request ${ticket.ref}: ${label}`,
+    `<p><strong>Can’t sign in</strong> · ${esc(label)} · urgent, first in Admin → Support</p>
+     <p>Account email given: <strong>${esc(acct)}</strong> — ${match ? `matches account #${match.id}${match.name ? ' (' + esc(match.name) + ')' : ''} by ${esc(match.how)}` : 'no account has this email'}<br>
+        Phone: <strong>${esc(e164)}</strong>${reach ? `<br>Reach them at: <strong>${esc(reach)}</strong>` : ''}</p>
+     <blockquote style="margin:12px 0; padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f; white-space:pre-wrap;">${esc(text)}</blockquote>
+     <p>Confirm who they are before changing anything on an account. Replies from Admin → Support are emailed to ${esc(sendTo)}.</p>`, sendTo);
+  // The acknowledgement: the same words whether or not an account exists,
+  // and nothing the person typed (so it cannot carry someone else's message).
+  await sendEmail(sendTo, `We have received your request ${ticket.ref}`,
+    `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">We have received your request</h2>
+     <p>Thank you for contacting Aerva. Your reference number is <strong>${esc(ticket.ref)}</strong>.</p>
+     <p><strong>${esc(label)}</strong></p>
+     <p>Aerva will contact you by phone or at this email address. You do not need to sign in. To add anything, reply to this email and keep the reference in the subject.</p>
+     <p style="font-size:13px; color:#6e675d;">If you did not ask Aerva for help signing in, you can ignore this email. Aerva will never ask for your password or a sign-in code.</p>`, SUPPORT_INBOX());
+  return { ref: ticket.ref, message: signedOutReply(ticket.ref) };
+}
+
 // The request types, for Admin → Lookup "Raise a request for this customer".
 function categoryList() {
   return Object.keys(CATEGORIES).map(k => ({ key: k, label: CATEGORIES[k].label, audience: CATEGORIES[k].audience, booking: CATEGORIES[k].booking, bookingAs: CATEGORIES[k].bookingAs, listing: CATEGORIES[k].listing }));
@@ -658,5 +815,6 @@ module.exports = {
   CONDUCT, FEEDBACK_HOURS,
   requestOptions, createRequest, listRequests, getRequest, replyToRequest, closeRequest, submitFeedback, autoCloseResolved, bellNotifications,
   createChatRequest, appendUserMessage, applyFeedback, ticketView, bookingRole,
-  adminList, adminGet, adminReply, adminSaveCase, eraseForAccount, cleanFiles, openSystemRequest, systemUpdate
+  adminList, adminGet, adminReply, adminSaveCase, eraseForAccount, cleanFiles, openSystemRequest, systemUpdate,
+  createSignedOutRequest, SIGNIN_PROBLEMS, SIGNED_OUT_PER_IP_HOUR, SIGNED_OUT_PER_EMAIL_DAY, SIGNED_OUT_BODY_MIN, SIGNED_OUT_BODY_MAX
 };

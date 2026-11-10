@@ -44,7 +44,7 @@ const { DEFAULT_TIMEZONE } = require('./_timezones');
 const { buildProfile, sanitizeProfileInput, PRIVACY_OPTIONS, sanitizePrivacy, readPrivacy } = require('./_profiles');
 const { GUEST_FACTORS, EXPERIENCE_FACTORS, GUEST_TIERS, tierByKey } = require('./_tiers');
 const { verifyToken } = require('./_approval-token');
-const { isAccountDeleted, deletionBlockers, deleteAccount, sessionStatus, bumpSessionVersion, newSessionToken } = require('./_accounts');
+const { isAccountDeleted, deletionBlockers, deleteAccount, sessionStatus, bumpSessionVersion, newSessionToken, SUSPENDED_MESSAGE } = require('./_accounts');
 const { logAudit } = require('./_audit-log');
 const { sanitizeBody } = require('./_plain-text');
 const { cancellationQuote, createCancellationRequest, cancellationCard } = require('./_cancellations');
@@ -255,7 +255,7 @@ module.exports = async (req, res) => {
   {
     const st = await sessionStatus(sql, session);
     if (st === 'deleted') return res.status(401).json({ error: 'This account has been deleted.' });
-    if (st === 'suspended') return res.status(401).json({ error: 'This account has been suspended. To ask about it, raise a request in Aerva Support (Help → Raise a request) from any account you can sign in to.', suspended: true });
+    if (st === 'suspended') return res.status(401).json({ error: SUSPENDED_MESSAGE, suspended: true, signinHelp: true });
       if (st === 'revoked') return res.status(401).json({ error: 'Please log in again.' });
     if (st !== 'ok') return res.status(503).json({ error: 'Could not check your sign-in right now. Please try again.' });
   }
@@ -1428,7 +1428,7 @@ module.exports = async (req, res) => {
             throw err;
           }
           await logAudit(sql, { action: changing ? 'guest_email_changed' : 'guest_email_confirmed', success: true, actorType: 'guest', actorIdentifier: String(guestId),
-            targetType: 'guest', targetId: guestId, metadata: { email: wanted, ip: clientIp } });
+            targetType: 'guest', targetId: guestId, metadata: { email: wanted, ...(changing ? { from: current } : {}), ip: clientIp } });
           if (!changing) return res.status(200).json({ confirmed: true, email: wanted });
 
           // The host record carries the same contact address (booking emails,
