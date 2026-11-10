@@ -265,7 +265,11 @@ const IMPACT = {
       FROM booking_changes c JOIN orders o ON o.id = c.order_id LEFT JOIN guests g ON g.id = o.guest_id
       JOIN messages m ON m.conversation_id = (SELECT id FROM conversations WHERE order_id = o.id LIMIT 1)
       WHERE c.status = 'expired' AND m.created_at >= ${since} AND m.display_text LIKE 'The change request has closed%'`;
-    return rows.map(r => ({ ...guestOf(r), what: `Change request closed (time limit): ${r.suite_name}` }));
+    const out = rows.map(r => ({ ...guestOf(r), what: `Change request closed (time limit): ${r.suite_name}` }));
+    // Co-hosts whose request that the host cover a coupon got no answer in 7 days (_cohost-coupon.js).
+    const cc = await safe(() => sql`SELECT metadata FROM audit_log WHERE created_at >= ${since} AND action = 'cohost_coupon_request_expired'`);
+    cc.forEach(r => { const m = r.metadata || {}; out.push({ who: 'Co-host', name: m.cohostName || 'Co-host', email: m.cohostEmail || '', what: `Coupon request to ${m.hostName || 'the host'} closed without an answer (${inr(m.amount)}): ${m.listing || ''}` }); });
+    return out;
   }),
 
   currency_rates: async () => []

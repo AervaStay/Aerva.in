@@ -11,6 +11,14 @@
 //   Security deposits held   until refunded, or paid to the host
 //   GST payable (s.9(5))     GST on stays, until deposited
 //   TDS payable (194-O)      TDS deducted from payouts, until deposited
+//
+// A cancellation coupon a co-host paid and the host agreed to cover
+// (_cohost-coupon.js) is a transfer between two payables, never income:
+// when the host's payout is sent with the deduction, "Payable to hosts"
+// falls by it (inside that payout's deductions) and "Payable to co-hosts"
+// rises by the same amount (the co-host's payout row, kind 'cohost-coupon',
+// is created at that moment); it falls again when that payout is sent. No
+// commission, no TDS. reimbursementsDue() below is the co-hosts' side.
 //   Commission income        Aerva's commission from hosts      ┐ P&L
 //   Guest service fee income Aerva's fee from guests            ┘
 //
@@ -39,6 +47,19 @@
 // ledger never released it. Found while adding the 10 Nov money rules.
 const r2 = (n) => Math.round((Number(n) || 0) * 100) / 100;
 const userError = (message, status = 400) => Object.assign(new Error(message), { isUserFacing: true, status });
+
+// Coupons reimbursed to co-hosts (payout rows of kind 'cohost-coupon'),
+// counted from the moment the row exists — when the amount was taken from
+// the host — between two India-time days. 0 before the database update.
+async function reimbursementsDue(sql, from, end) {
+  try {
+    return Number((await sql`
+      SELECT COALESCE(sum(p.gross), 0) AS v FROM payouts p
+      WHERE p.kind = 'cohost-coupon' AND p.payee_type = 'cohost'
+        AND EXISTS (SELECT 1 FROM orders o WHERE o.id = p.order_id AND o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$')
+        AND (p.created_at AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp AND (p.created_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp`)[0].v) || 0;
+  } catch (e) { return 0; }
+}
 
 function monthBounds(month) {
   const m = String(month || '').match(/^(\d{4})-(\d{2})$/);
@@ -367,10 +388,11 @@ async function accountsReport(sql, month) {
     cash.push({ date: isoDay(r.created_at, true), type: isCredit ? 'Refund of Aerva credit' : 'Refund to guest (' + k.split(':')[0] + ')', bookingId: r.order_id, reference: r.razorpay_refund_id || '', amountIn: 0, amountOut: r2(Number(r.amount) / 100), ledger });
   });
   payouts.forEach(p => {
-    cash.push({ ...feeCols(p.pout_id), date: isoDay(p.sent_at, true), type: p.kind === 'deposit' ? 'Payout: deposit compensation' : (p.payee_type === 'cohost' ? 'Payout to co-host' : 'Payout to host'),
+    const reimb = p.kind === 'cohost-coupon';
+    cash.push({ ...feeCols(p.pout_id), date: isoDay(p.sent_at, true), type: p.kind === 'deposit' ? 'Payout: deposit compensation' : reimb ? 'Payout to co-host: coupon reimbursed by host' : (p.payee_type === 'cohost' ? 'Payout to co-host' : 'Payout to host'),
       bookingId: p.order_id, reference: p.reference || '', payee: p.payee || '', amountIn: 0, amountOut: r2(p.net),
       tds: r2(p.tds), couponRecovered: r2(p.deductions),
-      ledger: p.kind === 'deposit' ? 'Security deposits held (TDS → TDS payable)' : 'Payable to hosts (TDS → TDS payable)' });
+      ledger: p.kind === 'deposit' ? 'Security deposits held (TDS → TDS payable)' : reimb ? 'Payable to co-hosts (moved from Payable to hosts when the host’s payout was sent; a reimbursement: no commission, no TDS)' : 'Payable to hosts (TDS → TDS payable)' });
   });
   cash.sort((a, b) => (a.date < b.date ? -1 : a.date > b.date ? 1 : 0));
 
@@ -399,7 +421,9 @@ async function accountsReport(sql, month) {
     FROM payouts p WHERE p.status = 'sent' AND COALESCE(p.kind, 'booking') <> 'deposit'
       AND EXISTS (SELECT 1 FROM orders o WHERE o.id = p.order_id AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$'))
       AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp`)[0];
-  const payableHost = r2(Math.max(0, recognisedHost - Number(paid.host))), payableCo = r2(Math.max(0, recognisedCo - Number(paid.co)));
+  // Co-hosts are also owed the coupons hosts agreed to cover, once taken from the host.
+  const reimbursedDue = await reimbursementsDue(sql, '1970-01-01', end);
+  const payableHost = r2(Math.max(0, recognisedHost - Number(paid.host))), payableCo = r2(Math.max(0, recognisedCo + reimbursedDue - Number(paid.co)));
   let depositsHeld = 0;
   try { depositsHeld = (await sql`SELECT COALESCE(sum(deposit_amount), 0) AS v FROM orders o WHERE deposit_status IN ('held', 'disputed') AND (o.razorpay_payment_id ~ '^pay_[A-Za-z0-9]{14}$' AND o.razorpay_order_id ~ '^order_[A-Za-z0-9]{14}$')`)[0].v; } catch (e) { depositsHeld = 0; }
 
@@ -431,8 +455,8 @@ async function accountsReport(sql, month) {
     received: r2(cash.reduce((t, c) => t + c.amountIn, 0)),
     refunded: r2(cash.filter(c => /^Refund/.test(c.type)).reduce((t, c) => t + c.amountOut, 0)),
     paidOut: r2(cash.filter(c => /^Payout/.test(c.type)).reduce((t, c) => t + c.amountOut, 0)),
-    paidOutHosts: r2(cash.filter(c => /^Payout/.test(c.type) && c.type !== 'Payout to co-host').reduce((t, c) => t + c.amountOut, 0)),
-    paidOutCohosts: r2(cash.filter(c => c.type === 'Payout to co-host').reduce((t, c) => t + c.amountOut, 0)),
+    paidOutHosts: r2(cash.filter(c => /^Payout/.test(c.type) && !/^Payout to co-host/.test(c.type)).reduce((t, c) => t + c.amountOut, 0)),
+    paidOutCohosts: r2(cash.filter(c => /^Payout to co-host/.test(c.type)).reduce((t, c) => t + c.amountOut, 0)),
     tdsHosts: r2(payouts.filter(p => p.payee_type === 'host').reduce((t, p) => t + Number(p.tds || 0), 0)),
     tdsCohosts: r2(payouts.filter(p => p.payee_type !== 'host').reduce((t, p) => t + Number(p.tds || 0), 0)),
     balances: {
@@ -573,6 +597,8 @@ async function balancesAt(sql, day) {
   const gIn = grp.failed ? 0 : Number(grp.paid_in) || 0, gRef = grp.failed ? 0 : Number(grp.refunded) || 0;
   const gRows = grp.failed ? 0 : Number(grp.in_rows) || 0, gFee = grp.failed ? 0 : Number(grp.fee) || 0, gTax = grp.failed ? 0 : Number(grp.tax) || 0;
   const co = Number(rec.co) || 0;
+  // Coupons hosts agreed to cover for co-hosts, taken from the host before the day.
+  const reimb = await reimbursementsDue(sql, '1970-01-01', day);
   return {
     credits: r2(credits),
     cum: {
@@ -583,7 +609,7 @@ async function balancesAt(sql, day) {
     settlementsKnown: !setl.failed,
     advance: r2(Number(adv.v) + gIn - gRef - gRows),
     host: r2((Number(rec.hostside) || 0) - co - (Number(paid.host) || 0)),
-    cohost: r2(co - (Number(paid.co) || 0)),
+    cohost: r2(co + reimb - (Number(paid.co) || 0)),
     deposits: r2((Number(ord.deposits) || 0) - (Number(ref.deposit) || 0) - (Number(paid.deposit) || 0) - (Number(depIn.v) || 0))
   };
 }
@@ -660,6 +686,16 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
   const hostP = payouts.filter(p => p.payee_type === 'host' && p.kind !== 'deposit');
   const coP = payouts.filter(p => p.payee_type !== 'host' && p.kind !== 'deposit');
   const earnedHost = sum(bookings, b => b.hostPayable - b.cohostShares), earnedCo = sum(bookings, b => b.cohostShares);
+  // Coupons hosts agreed to cover for co-hosts (_cohost-coupon.js): moved
+  // from the hosts' payable (inside their payouts' deductions) to the
+  // co-hosts' payable this month.
+  const reimbToCo = r2(await reimbursementsDue(sql, start, end));
+  let reimbFromHosts = 0;
+  try {
+    const ids = hostP.map(p => p.id);
+    if (ids.length) reimbFromHosts = r2(Number((await sql`SELECT COALESCE(sum(hp.amount), 0) AS v FROM payouts p JOIN host_penalties hp ON hp.id = ANY(p.deducted_penalty_ids)
+                                                     WHERE p.id = ANY(${ids}) AND hp.kind = 'cohost_coupon'`)[0].v) || 0);
+  } catch (e) { reimbFromHosts = 0; }
 
   const income = summary.income;
   const gstOut = summary.gstOnStaysPayable;
@@ -723,17 +759,19 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
       L('Hosts’ share of stays this month', earnedHost, 'Sundry creditors: Hosts', 'From stays checked in or cancelled this month (after Aerva’s commission and co-hosts’ share)', { sign: '+' }),
       L('Money sent to hosts', -sum(hostP, p => p.net), 'Bank', 'Payouts sent this month', { sign: '−' }),
       L('TDS on hosts', -sum(hostP, p => p.tds), 'Duties & taxes: TDS payable', 'Part of the host’s money, paid to the government instead', { sign: '−' }),
-      L('Deducted from hosts’ payouts', -sum(hostP, p => p.deductions), 'Sundry creditors: Hosts', 'Host-funded cancellation coupons, and amounts paid before on bookings reduced after their payout was sent', { sign: '−' }),
+      L('Deducted from hosts’ payouts', -r2(sum(hostP, p => p.deductions) - reimbFromHosts), 'Sundry creditors: Hosts', 'Host-funded cancellation coupons, and amounts paid before on bookings reduced after their payout was sent', { sign: '−' }),
+      ...(reimbFromHosts ? [L('Coupons reimbursed to co-hosts', -reimbFromHosts, 'Sundry creditors: Hosts → Sundry creditors: Co-hosts', 'A guest’s cancellation coupon a co-host paid and the host agreed to cover: deducted from the host’s payout and owed to the co-host instead. A transfer between two payables — not income, no commission, no TDS', { sign: '−' })] : []),
       ...check('host', open.host, [earnedHost, -sum(hostP, p => p.net), -sum(hostP, p => p.tds), -sum(hostP, p => p.deductions)], close.host),
       L('Closing payable', close.host, 'Sundry creditors: Hosts', 'Owed to hosts at month end', { strong: true })
     ] },
     { title: 'Payable to co-hosts (liability)', note: 'Co-hosts are paid from the host’s share, not from Aerva’s income.', lines: [
       L('Opening payable', open.cohost, 'Sundry creditors: Co-hosts', 'Owed to co-hosts at the start of the month'),
       L('Co-hosts’ share of stays this month', earnedCo, 'Sundry creditors: Co-hosts', 'From stays checked in or cancelled this month', { sign: '+' }),
+      ...(reimbToCo ? [L('Coupons reimbursed by hosts', reimbToCo, 'Sundry creditors: Hosts → Sundry creditors: Co-hosts', 'Cancellation coupons co-hosts paid that their hosts agreed to cover, taken from the hosts’ payouts this month (see Payable to hosts). A reimbursement, not income: no commission, no TDS', { sign: '+' })] : []),
       L('Money sent to co-hosts', -sum(coP, p => p.net), 'Bank', 'Payouts sent this month', { sign: '−' }),
       L('TDS on co-hosts', -sum(coP, p => p.tds), 'Duties & taxes: TDS payable', '', { sign: '−' }),
       ...(sum(coP, p => p.deductions) ? [L('Deducted from co-hosts’ payouts', -sum(coP, p => p.deductions), 'Sundry creditors: Co-hosts', 'Amounts paid before on bookings reduced after their payout was sent', { sign: '−' })] : []),
-      ...check('co', open.cohost, [earnedCo, -sum(coP, p => p.net), -sum(coP, p => p.tds), -sum(coP, p => p.deductions)], close.cohost),
+      ...check('co', open.cohost, [earnedCo, reimbToCo, -sum(coP, p => p.net), -sum(coP, p => p.tds), -sum(coP, p => p.deductions)], close.cohost),
       L('Closing payable', close.cohost, 'Sundry creditors: Co-hosts', 'Owed to co-hosts at month end', { strong: true })
     ] },
     { title: 'Aerva credits (liability)', note: 'Credit held for guests: Aerva’s service fee when a host cancels, and (before 10 Nov 2026) the nights not stayed when a stay was shortened — leaving early now gives nothing back. No money moves when a credit is made or used — it was received through Razorpay on the booking it came from. Every movement, with that booking and Razorpay payment, is in the Aerva credits CSV.', lines: [

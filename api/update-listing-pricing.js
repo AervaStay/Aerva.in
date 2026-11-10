@@ -45,6 +45,7 @@ const { sanitizeBody } = require('./_plain-text');
 const { assertSafeUrl, syncFeed, newToken } = require('./_calendar-sync');
 const { encryptField, decryptField, encryptionReady } = require('./_secure-fields');
 const special = require('./_listing-special');
+const { parseFreeCancelSetting } = require('./_pricing');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -302,6 +303,10 @@ module.exports = async (req, res) => {
                check_in_time, check_out_time, wifi_name, wifi_password, access_code,
                auto_send_checkin_instructions, checkin_photos, status, rooms_pending_review, status_before_compliance_block, admin_status_reason, timezone,
                COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy,
+               -- the host's choice (2026-11-10-06-free-cancel-optin.sql); missing = off
+               COALESCE((to_jsonb(listings)->>'free_cancel_offered')::boolean, false) AS free_cancel_offered,
+               -- its fixed ₹ price per booking (2026-11-10-07-free-cancel-fee.sql); missing = none set
+               (to_jsonb(listings)->>'free_cancel_fee')::int AS free_cancel_fee,
                COALESCE((to_jsonb(listings)->>'same_day_until')::int, 24) AS same_day_until,
                COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough,
                to_jsonb(listings)->>'checkin_send_trigger' AS checkin_send_trigger,
@@ -567,6 +572,14 @@ module.exports = async (req, res) => {
       const specialIn = await special.cleanSpecial(req.body, sql, { selfId: listingId });
       if (specialIn.error) return res.status(400).json({ error: specialIn.error, field: 'special' });
       const specialBefore = Object.keys(specialIn.values).length ? await special.readSpecial(sql, listingId) : null;
+      // Free cancellation price (owner, 10 Nov 2026): switched on, a fixed ₹
+      // amount per booking (₹100 – ₹1,00,000) is required — refused before
+      // anything is saved. Not sent = left as it is.
+      let freeCancelSetting = null;
+      if (sent('freeCancelOffered') && before[0].listing_type !== 'experience') {
+        freeCancelSetting = parseFreeCancelSetting(req.body.freeCancelOffered === true && before[0].property_type !== 'Resort', req.body.freeCancelFee);
+        if (freeCancelSetting.error) return res.status(400).json({ error: freeCancelSetting.error, reason: freeCancelSetting.reason, field: 'freeCancelFee' });
+      }
 
       // ---- Unusual price changes wait for approval (_price-review.js) ----
       // On a live listing, a sharp drop, a price below the minimum or a
@@ -789,6 +802,45 @@ module.exports = async (req, res) => {
       if (cancellationPolicy === 'flexible' || cancellationPolicy === 'firm') {
         try { await sql`UPDATE listings SET cancellation_policy = ${cancellationPolicy} WHERE id = ${listingId}`; }
         catch (err) { console.error('cancellation_policy not saved (run migration_cancellation_policy.sql):', err.message); }
+      }
+      // "Offer free cancellation to guests" (owner, 10 Nov 2026): the host's
+      // own choice for a stay, changeable any time, no Aerva review. Applies
+      // to NEW bookings only — a booking keeps the add-on it was bought with
+      // (orders.free_cancel_*). Not sent = left as it is. Before
+      // 2026-11-10-06-free-cancel-optin.sql it is not saved (every listing
+      // is then off) and the host is told.
+      let freeCancelNote = null;
+      if (freeCancelSetting) {
+        const want = freeCancelSetting.offered;
+        try {
+          const was = (await sql`SELECT free_cancel_offered FROM listings WHERE id = ${listingId}`)[0];
+          if (was && was.free_cancel_offered !== want) {
+            await sql`UPDATE listings SET free_cancel_offered = ${want} WHERE id = ${listingId}`;
+            await logAudit(sql, { action: want ? 'listing_free_cancel_on' : 'listing_free_cancel_off', success: true, actorType: actorKind,
+              actorIdentifier: requester, targetType: 'listing', targetId: listingId, metadata: { freeCancelOffered: want, freeCancelFee: freeCancelSetting.fee } });
+          }
+          // Its price (2026-11-10-07-free-cancel-fee.sql). Switched off with no
+          // amount sent, the amount is kept for when it is switched back on.
+          if (freeCancelSetting.fee != null || want) {
+            try {
+              const old = (await sql`SELECT to_jsonb(l)->>'free_cancel_fee' AS fee FROM listings l WHERE id = ${listingId}`)[0];
+              const oldFee = old && old.fee != null ? Number(old.fee) : null;
+              if (oldFee !== freeCancelSetting.fee) {
+                await sql`UPDATE listings SET free_cancel_fee = ${freeCancelSetting.fee} WHERE id = ${listingId}`;
+                await logAudit(sql, { action: 'listing_free_cancel_price', success: true, actorType: actorKind,
+                  actorIdentifier: requester, targetType: 'listing', targetId: listingId, metadata: { from: oldFee, to: freeCancelSetting.fee } });
+              }
+            } catch (err) {
+              if (err.code !== '42703') throw err;
+              console.error('free_cancel_fee not saved (apply 2026-11-10-07-free-cancel-fee.sql):', err.message);
+              if (want) freeCancelNote = 'Free cancellation can\u2019t be offered yet \u2014 it will be available soon. Everything else was saved.';
+            }
+          }
+        } catch (err) {
+          if (err.code !== '42703') throw err;
+          console.error('free_cancel_offered not saved (apply 2026-11-10-06-free-cancel-optin.sql):', err.message);
+          if (want) freeCancelNote = 'Free cancellation can\u2019t be offered yet \u2014 it will be available soon. Everything else was saved.';
+        }
       }
 
       if (rateChanged) {
@@ -1380,7 +1432,7 @@ module.exports = async (req, res) => {
       if (specialSaved.note) specialNotes.push(specialSaved.note);
       else if (specialIn.redacted) specialNotes.push('We took a phone number, email or link out of \u201cWhat\u2019s special\u201d or your recommendations \u2014 guests book and talk through Aerva.');
       if (specialSaved.saved && specialIn.dropped) specialNotes.push(`${specialIn.dropped === 1 ? 'One suggested experience is' : specialIn.dropped + ' suggested experiences are'} no longer live on Aerva and ${specialIn.dropped === 1 ? 'was' : 'were'} left out.`);
-      const warning = [...priceNotes, paidAmenitiesError, blockedDatesError, promotionsError, roomsWarning].filter(Boolean).join(' ') || undefined;
+      const warning = [...priceNotes, paidAmenitiesError, blockedDatesError, promotionsError, roomsWarning, freeCancelNote].filter(Boolean).join(' ') || undefined;
       return res.status(200).json({ success: true, warning, priceHeld: priceNotes.length ? priceNotes : undefined,
         note: specialNotes.length ? specialNotes.join(' ') : undefined, specialSkipped: specialSaved.skipped || undefined });
     } catch (err) {

@@ -72,7 +72,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
-<script src="aerva-cohost.js?v=2026-11-09a"></script>
+<script src="aerva-cohost.js?v=2026-11-11b"></script>
 </head>
 <body>
 
@@ -345,7 +345,25 @@
     [resetPasswordState, 'Choose a new password'], [resetExpiredState, 'Link expired'],
     [phoneRequestState, 'Log in with phone'], [phoneVerifyState, 'Enter your code']
   ]);
+  // A button left "Creating account…" / "Sending…" after its request
+  // finished (success moves to another screen without resetting it), or a
+  // page brought back by the browser's Back button, must never show a
+  // greyed-out "busy" button: every form opens ready to use.
+  const BUSY_LABELS = new Map();
+  function rememberLabels(){
+    document.querySelectorAll('form button[type="submit"], button.btn').forEach(b => {
+      if(!BUSY_LABELS.has(b) && !/…$/.test(b.textContent.trim())) BUSY_LABELS.set(b, b.textContent);
+    });
+  }
+  function resetBusyButtons(){
+    BUSY_LABELS.forEach((label, b) => { if(b.disabled && /…$/.test(b.textContent.trim())){ b.disabled = false; b.textContent = label; } });
+  }
+  rememberLabels();
+  window.addEventListener('pageshow', (e) => { if(e.persisted) resetBusyButtons(); });
+
   function showOnly(el){
+    rememberLabels();
+    resetBusyButtons();
     [checkingState, loginState, signupState, phoneRequestState, phoneVerifyState, checkEmailState,
      forgotPasswordState, forgotSentState, resetPasswordState, resetExpiredState].forEach(s => s.style.display = 'none');
     el.style.display = 'block';

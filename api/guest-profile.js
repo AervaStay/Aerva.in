@@ -657,9 +657,10 @@ module.exports = async (req, res) => {
                  -- receiving the message should be the booker name,"
                  -- not whichever side happens to be looking at this row.
                  COALESCE(g.name, c.guest_email) AS guest_display_name,
-                 o.arrival, o.departure, o.status AS booking_status,
+                 o.arrival, o.departure, o.status AS booking_status, to_jsonb(o)->>'confirmation_code' AS confirmation_code,
                  o.nights, o.guests, o.subtotal, o.gst, o.payout_amount,
                  (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today,
+                 COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}) AS listing_tz, to_jsonb(l)->>'check_in_time' AS listing_check_in_time,
                  (SELECT CASE WHEN to_jsonb(m)->>'unsent_at' IS NOT NULL THEN 'Message unsent' ELSE display_text END
                     FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
                  (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
@@ -694,6 +695,22 @@ module.exports = async (req, res) => {
           c.departure = toDateStr(c.departure);
           const localToday = toDateStr(c.local_today);
           delete c.local_today;
+          // "Cancel this booking" on the host's side (owner, 10 Nov 2026):
+          // 'open' until check-in time (the host can cancel — the same rule
+          // host-listings cancelBooking enforces); then 'support' (only
+          // Aerva can) until 10 AM on the check-out date; after that the
+          // section is gone ('closed').
+          {
+            const R = require('./_booking-rules');
+            let state = 'closed';
+            if (c.booking_status === 'paid' && c.arrival && c.departure) {
+              const endMs = R.localMidnightMs(c.departure, c.listing_tz) + R.STAY_WINDOW_HOUR * 3600e3;
+              if (R.hoursUntilCheckInTime(c.arrival, c.listing_tz, c.listing_check_in_time) > 0) state = 'open';
+              else if (Date.now() < endMs) state = 'support';
+            }
+            c.host_cancel_state = state;
+            delete c.listing_tz; delete c.listing_check_in_time;
+          }
           // The host's payout is the host's business: never to a guest, and
           // never to a co-host (payouts are the host's alone).
           if (c.my_role !== 'host' || actingCtx) delete c.payout_amount;
@@ -1238,17 +1255,23 @@ module.exports = async (req, res) => {
       // POST { mode: 'supportCreate', category, subject, description, orderId?, listingId?, attachments?, callback? }
       // POST { mode: 'supportReply', ref, text, attachments? }
       // POST { mode: 'supportClose', ref }
-      // POST { mode: 'hostCancelAnswer', ref, accept } — the host confirms (or declines)
-      // Aerva cancelling a booking for them (_host-cancel-confirm.js).
-      if (mode === 'hostCancelAnswer') {
+      // POST { mode: 'hostCancelAnswer', ref, accept, payment? } — the host confirms (or declines)
+      // Aerva cancelling a booking for them (_host-cancel-confirm.js). Within 48 hours
+      // of check-in, confirming needs the guest's 10% coupon paid first:
+      // POST { mode: 'hostCancelPay', ref } opens the Razorpay payment, and its
+      // answer comes back as payment: { couponId, razorpay_order_id, razorpay_payment_id, razorpay_signature }.
+      if (mode === 'hostCancelAnswer' || mode === 'hostCancelPay') {
         if (actingCtx) return res.status(403).json({ error: 'Only the host can confirm this, from their own account.' });
         try {
           const b = req.body || {};
-          const r = await require('./_host-cancel-confirm').answer(sql, razorpayClient(), { guestId, ref: b.ref, accept: b.accept === true });
+          const hcc = require('./_host-cancel-confirm');
+          if (mode === 'hostCancelPay') return res.status(200).json(await hcc.startCouponPayment(sql, razorpayClient(), { guestId, ref: b.ref }));
+          const payment = b.payment && typeof b.payment === 'object' ? b.payment : null;
+          const r = await hcc.answer(sql, razorpayClient(), { guestId, ref: b.ref, accept: b.accept === true, payment });
           return res.status(200).json({ ...r, request: await support.getRequest(sql, guestId, b.ref) });
         } catch (err) {
-          if (!err.isUserFacing) console.error('hostCancelAnswer failed:', err);
-          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now. Please try again.' });
+          if (!err.isUserFacing) console.error(mode + ' failed:', err);
+          return res.status(err.isUserFacing ? err.status : 500).json({ ...(err.isUserFacing && err.extra ? err.extra : {}), error: err.isUserFacing ? err.message : 'Could not do this right now. Please try again.' });
         }
       }
       if (mode === 'supportCreate' || mode === 'supportReply' || mode === 'supportClose' || mode === 'supportFeedback') {

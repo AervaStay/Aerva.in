@@ -37,6 +37,7 @@ const { redactContactInfo } = require('./_redact');
 const { HOST_AGREEMENT_VERSION } = require('./_agreements');
 const { requestContext } = require('./_audit-log');
 const special = require('./_listing-special');
+const { parseFreeCancelSetting } = require('./_pricing');
 
 const sql = neon(process.env.DATABASE_URL);
 
@@ -280,6 +281,15 @@ module.exports = async (req, res) => {
     // Experience submission path sends 'experience' explicitly.
     const safeListingType = listingType === 'experience' ? 'experience' : 'stay';
     const isExperience = safeListingType === 'experience';
+    // Free cancellation price (owner, 10 Nov 2026): switched on, the host
+    // must set a fixed ₹ amount per booking (₹100 – ₹1,00,000) — refused
+    // otherwise, drafts included, before anything is saved.
+    let freeCancelSetting = null;
+    if (Object.prototype.hasOwnProperty.call(req.body || {}, 'freeCancelOffered')) {
+      const fcWanted = !isExperience && propertyType !== 'Resort' && req.body.freeCancelOffered === true;
+      freeCancelSetting = parseFreeCancelSetting(fcWanted, req.body.freeCancelFee);
+      if (freeCancelSetting.error) return res.status(400).json({ error: freeCancelSetting.error, reason: freeCancelSetting.reason, field: 'freeCancelFee' });
+    }
 
     // The guest's own account info is never trusted from the request body
     // — always looked up fresh from their session, same reasoning as the
@@ -891,6 +901,39 @@ module.exports = async (req, res) => {
     const specialSaved = await special.saveSpecial(sql, listing.id, specialIn.values);
     if (specialSaved.saved) Object.assign(listing, specialIn.values);
 
+    // "Offer free cancellation to guests" (owner, 10 Nov 2026) — the host's
+    // own choice for a stay, drafts included, no Aerva review. Off unless
+    // ticked; left as it is when the request doesn't carry it at all (an
+    // older page). A separate statement so the save above works before
+    // 2026-11-10-06-free-cancel-optin.sql has run (then it is simply not
+    // saved, and nobody is offered the add-on). Applies to new bookings only.
+    let freeCancelChange = null, freeCancelPriceChange = null;
+    if (freeCancelSetting) {
+      // Not for an experience, nor a Resort (its rooms book without the add-on).
+      const want = freeCancelSetting.offered;
+      try {
+        const before = (await sql`SELECT COALESCE((to_jsonb(l)->>'free_cancel_offered')::boolean, false) AS on, to_jsonb(l)->>'free_cancel_fee' AS fee FROM listings l WHERE id = ${listing.id}`)[0];
+        await sql`UPDATE listings SET free_cancel_offered = ${want} WHERE id = ${listing.id}`;
+        listing.free_cancel_offered = want;
+        if (before && before.on !== want) freeCancelChange = want;
+        // Its price (2026-11-10-07-free-cancel-fee.sql). Switched off with no
+        // amount sent, the amount is kept for when it is switched back on.
+        if (freeCancelSetting.fee != null || want) {
+          try {
+            await sql`UPDATE listings SET free_cancel_fee = ${freeCancelSetting.fee} WHERE id = ${listing.id}`;
+            listing.free_cancel_fee = freeCancelSetting.fee;
+            if (before && want && before.fee != null && Number(before.fee) !== freeCancelSetting.fee) freeCancelPriceChange = { from: Number(before.fee), to: freeCancelSetting.fee };
+          } catch (err) {
+            if (err.code !== '42703') throw err;
+            console.error('free_cancel_fee not saved (apply 2026-11-10-07-free-cancel-fee.sql):', err.message);
+          }
+        }
+      } catch (err) {
+        if (err.code !== '42703') throw err;
+        console.error('free_cancel_offered not saved (apply 2026-11-10-06-free-cancel-optin.sql):', err.message);
+      }
+    }
+
     // For non-Resort stays, mirror each named room photo as its own
     // listing_rooms record — NOT independently priced or bookable (the
     // whole property still books as ONE unit, at this listing's own
@@ -1022,6 +1065,8 @@ module.exports = async (req, res) => {
         if (Number(existingDraft.nightly_rate) !== Number(rate)) bits.push(`Price changed from ₹${escHtml(existingDraft.nightly_rate)} to ₹${escHtml(rate)}.`);
         if (priceNotes.length) bits.push('An unusual price or discount change is waiting in Admin → Approvals.');
         if (specialSaved.saved && specialBefore) bits.push(...special.describeChange(specialBefore, specialIn.values, escHtml));
+        if (freeCancelChange !== null) bits.push(`Free cancellation add-on ${freeCancelChange ? `now offered to guests at ₹${escHtml(Number(listing.free_cancel_fee || 0).toLocaleString('en-IN'))} per booking` : 'no longer offered to guests'} (new bookings only).`);
+        else if (freeCancelPriceChange) bits.push(`Free cancellation price changed from ₹${escHtml(freeCancelPriceChange.from.toLocaleString('en-IN'))} to ₹${escHtml(freeCancelPriceChange.to.toLocaleString('en-IN'))} per booking (new bookings only).`);
         changeNote = bits.length ? bits.join(' ') : 'Details edited (no photo, name or price change).';
         if (added.length || removed || renamed || coverChanged) {
           await logAudit(sql, {

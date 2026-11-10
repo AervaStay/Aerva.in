@@ -303,6 +303,13 @@ async function clear(sql, keep) {
     ['offer_email_sends', sql`DELETE FROM offer_email_sends WHERE guest_id = ANY(${G})`],
     ['guests', sql`DELETE FROM guests WHERE id = ANY(${G})`]
   ];
+  // Co-hosts' requests that the host cover a coupon (_cohost-coupon.js), once
+  // their database update has run: they go with their booking, host or co-host.
+  try {
+    if ((await sql`SELECT to_regclass('public.cohost_coupon_requests') AS t`)[0].t) {
+      steps.unshift(['cohost_coupon_requests', sql`DELETE FROM cohost_coupon_requests WHERE order_id = ANY(${O}) OR host_id = ANY(${H}) OR cohost_guest_id = ANY(${G})`]);
+    }
+  } catch (e) { /* table not there: nothing to remove */ }
   // RETURNING counts would need every statement rewritten; count first instead.
   const before = await counts(sql);
   try {

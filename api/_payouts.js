@@ -15,6 +15,11 @@
 // settleAfterPayout: an amount no longer owed is deducted from the payee's
 // next payout (host_penalties, kind 'overpaid'); an amount added is paid as
 // a payout of its own (payouts.kind 'adjustment-<n>').
+// A cancellation coupon a co-host paid and the host agreed to cover
+// (_cohost-coupon.js): deducted from the host's next payout like any other
+// amount owed (host_penalties, kind 'cohost_coupon', after TDS), and paid to
+// the co-host as a payout of its own (payouts.kind 'cohost-coupon': no
+// commission, no fee, no TDS) once the host's payout has been sent.
 // The summary is built from the saved payout row and its booking, so the
 // email, the notification and the page always show the same figures.
 
@@ -31,6 +36,7 @@ const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '
 async function loadPayoutSummary(sql, payoutId) {
   const r = (await sql`
     SELECT p.*, o.suite_name, o.arrival, o.departure, o.id AS booking_id, o.razorpay_order_id, g.name AS guest_name,
+           COALESCE(to_jsonb(o)->>'confirmation_code', '#' || o.id) AS booking_code,
            COALESCE((to_jsonb(o)->>'free_cancel_fee')::numeric, 0) AS free_cancel_fee,
            CASE WHEN p.payee_type = 'host' THEN h.name ELSE pg.name END AS payee_name
     FROM payouts p JOIN orders o ON o.id = p.order_id LEFT JOIN guests g ON g.id = o.guest_id
@@ -38,8 +44,12 @@ async function loadPayoutSummary(sql, payoutId) {
     WHERE p.id = ${Number(payoutId) || 0}
   `)[0];
   if (!r) return null;
+  const CC = require('./_cohost-coupon');
   const lines = r.kind === 'deposit'
     ? [['Security deposit compensation', Number(r.gross)]]
+    // A coupon the co-host paid, covered by the host: moved between the two payouts.
+    : r.kind === CC.PAYOUT_KIND
+    ? [[CC.reimbursementLabel(r.booking_code), Number(r.gross)]]
     : /^adjustment/.test(r.kind || '')
     ? [['Booking changed after your payout', Number(r.gross)]]
     : /^rest/.test(r.kind || '')
@@ -50,13 +60,21 @@ async function loadPayoutSummary(sql, payoutId) {
     ? (() => { const fc = Number(r.free_cancel_fee) > 0 && Number(r.free_cancel_fee) <= Number(r.gross) ? Number(r.free_cancel_fee) : 0;
         return [['Booking earnings', Number(r.gross) - fc], ['Free cancellation add-on', fc], ['Aerva commission', -Number(r.commission)], ['Co-host share', -Number(r.cohost_shares)]]; })()
     : [['Co-host share', Number(r.gross)]]; // co-hosts: TDS only, no other deductions
+  let reimbursed = [];
   if (Number(r.deductions) > 0) {
-    // What was deducted: cancellation coupons, and/or an amount paid before
+    // A coupon reimbursed to a co-host (the host accepted their request):
+    // each on its own line, "Coupon for booking <code>, cancelled by co-host <name>".
+    reimbursed = await CC.deductionLines(sql, r.deducted_penalty_ids || []);
+    reimbursed.forEach(x => lines.push([x.label, -x.amount]));
+    const rest = round2(Number(r.deductions) - reimbursed.reduce((t, x) => t + x.amount, 0));
+    // What else was deducted: cancellation coupons, and/or an amount paid before
     // on a booking that was reduced after its payout was sent.
-    let kinds = ['coupon'];
-    try { kinds = (await sql`SELECT DISTINCT COALESCE(to_jsonb(hp)->>'kind', 'coupon') AS k FROM host_penalties hp WHERE hp.id = ANY(${r.deducted_penalty_ids || []})`).map(x => x.k); } catch (e) { /* coupons */ }
-    const label = kinds.length === 1 && kinds[0] === 'overpaid' ? 'Overpaid earlier, deducted' : kinds.includes('overpaid') ? 'Coupons and earlier overpayment deducted' : 'Cancellation coupons deducted';
-    lines.push([label, -Number(r.deductions)]);
+    if (rest > 0) {
+      let kinds = ['coupon'];
+      try { kinds = (await sql`SELECT DISTINCT COALESCE(to_jsonb(hp)->>'kind', 'coupon') AS k FROM host_penalties hp WHERE hp.id = ANY(${r.deducted_penalty_ids || []})`).map(x => x.k).filter(k => k !== CC.PENALTY_KIND); } catch (e) { /* coupons */ }
+      const label = kinds.length === 1 && kinds[0] === 'overpaid' ? 'Overpaid earlier, deducted' : kinds.includes('overpaid') ? 'Coupons and earlier overpayment deducted' : 'Cancellation coupons deducted';
+      lines.push([label, -rest]);
+    }
   }
   if (Number(r.tds) > 0) lines.push([tdsLabel(r), -Number(r.tds)]);
   return {
@@ -66,7 +84,8 @@ async function loadPayoutSummary(sql, payoutId) {
     // Same reference the guest's booking confirmation shows.
     booking: r.razorpay_order_id || ('#' + r.booking_id),
     lines: lines.filter(([, v]) => v !== 0 && !Object.is(v, -0)).map(([label, value]) => ({ label, value })),
-    note: tdsNote(r),
+    note: r.kind === CC.PAYOUT_KIND ? CC.REIMBURSEMENT_NOTE : (tdsNote(r) || (reimbursed.length ? CC.DEDUCTION_NOTE : null)),
+    kind: r.kind || 'booking',
     link: `${SITE}/index.html?payout=${r.id}`
   };
 }
@@ -402,7 +421,9 @@ const payeeKey = (type, guestId) => `${type}:${Number(guestId) || 0}`;
 async function settleAfterPayout(sql, orderId, { reason = 'The booking changed after its payout was sent', release = false } = {}) {
   const out = { recovered: 0, added: 0 };
   try {
-    const rows = await sql`SELECT * FROM payouts WHERE order_id = ${Number(orderId) || 0} AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') <> 'deposit'`;
+    // Not deposit compensation, and not a coupon reimbursed to a co-host
+    // (_cohost-coupon.js): neither is part of what the booking earned.
+    const rows = await sql`SELECT * FROM payouts WHERE order_id = ${Number(orderId) || 0} AND COALESCE(to_jsonb(payouts)->>'kind', 'booking') NOT IN ('deposit', 'cohost-coupon')`;
     if (!rows.length) return out;
     const o = (await sql`SELECT o.id, l.host_id, to_jsonb(o)->>'payout_rest_held_at' AS rest_held_at FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0];
     if (!o) return out;
@@ -611,6 +632,9 @@ async function markPayoutSent(sql, payoutId, { reference, arrivingBy = null, by 
   if ((row.deducted_penalty_ids || []).length) {
     try { await sql`UPDATE host_penalties SET status = 'recovered', settled_at = now(), settled_by = ${by}, note = ${'Deducted from payout #' + row.id} WHERE id = ANY(${row.deducted_penalty_ids}) AND status = 'owed'`; }
     catch (e) { console.error('penalty recovery failed:', e.message); }
+    // A coupon the host agreed to cover for a co-host is now taken from the
+    // host: only now is the co-host's payout created (_cohost-coupon.js).
+    try { await require('./_cohost-coupon').settleDeducted(sql); } catch (e) { console.error('co-host coupon reimbursement failed (retried by the payouts job):', e.message); }
   }
   const summary = await loadPayoutSummary(sql, row.id);
   const to = row.payee_type === 'host'
@@ -661,6 +685,10 @@ async function runAutoPayouts(sql, { deadlineMs = 7000, razorpay = null } = {}) 
   const started = Date.now();
   const out = { created: 0, attempted: 0, retried: 0, due: 0, failed: 0 };
   const errors = [];
+  // Coupons hosts agreed to cover for co-hosts, already taken from the host
+  // and not yet turned into the co-host's payout (left behind, or settled by
+  // hand in Admin): created now, sent below like any payout left 'due'.
+  try { const cc = await require('./_cohost-coupon').settleDeducted(sql, { send: false }); if (cc.reimbursed) out.couponReimbursements = cc.reimbursed; } catch (e) { /* next run */ }
   // A booking's payout (not a deposit compensation) — before
   // migration_payout_kinds.sql every row is one.
   const orders = await sql`
@@ -739,4 +767,4 @@ async function runAutoPayouts(sql, { deadlineMs = 7000, razorpay = null } = {}) 
 
 module.exports = { loadPayoutSummary, payoutEmailHtml, sendPayoutEmail, recentPayoutNotifications, inr,
   planPayouts, createPayoutRows, refreshTds, markPayoutSent, runAutoPayouts, attemptPayout, settleAfterPayout, pollRazorpayX, razorpayxReady, PAYOUT_HOUR, RETRY_HOURS,
-  createDepositCompensationPayout };
+  createDepositCompensationPayout, cohostPayee };
