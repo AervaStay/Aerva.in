@@ -46,7 +46,7 @@ const MAX_AMENITIES_PER_STAY = 15;
 // add-on is not offered and nothing is charged).
 // The add-on's PRICE is the host's (owner, 10 Nov 2026 — replacing the flat
 // 15%): a fixed ₹ amount per booking (listings.free_cancel_fee, whole
-// rupees, ₹100 – ₹1,00,000; 2026-11-10-07-free-cancel-fee.sql), kept
+// rupees, ₹0 – ₹1,00,000; 2026-11-10-07-free-cancel-fee.sql), kept
 // between FREE_CANCEL_MIN_PCT and FREE_CANCEL_MAX_PCT of each booking's
 // stay subtotal (the booking price above), worked out per booking at quote
 // time (freeCancelCharge). A listing switched on without an amount (switched
@@ -59,16 +59,17 @@ const MAX_AMENITIES_PER_STAY = 15;
 const FREE_CANCEL_PERCENT = 15;
 const FREE_CANCEL_MIN_PCT = 5;
 const FREE_CANCEL_MAX_PCT = 30;
-const FREE_CANCEL_FIXED_MIN = 100;
+const FREE_CANCEL_FIXED_MIN = 0;   // owner, 11 Nov 2026 (was ₹100): any amount from ₹0; each booking still pays at least 5% of its stay price
 const FREE_CANCEL_FIXED_MAX = 100000;
 const FREE_CANCEL_HOURS = 48;
 // What one booking pays for the add-on: the host's fixed amount, kept
 // between 5% (rounded up) and 30% (rounded down) of the stay subtotal, in
 // whole rupees. 0 when there is no valid fixed amount or no subtotal.
 function freeCancelCharge(fixed, subtotal) {
+  if (fixed == null || fixed === '') return 0;
   const f = Math.round(Number(fixed));
   const sub = Number(subtotal);
-  if (!(f > 0) || !(sub > 0)) return 0;
+  if (!(f >= 0) || !(sub > 0)) return 0;
   const lo = Math.ceil(sub * FREE_CANCEL_MIN_PCT / 100);
   const hi = Math.floor(sub * FREE_CANCEL_MAX_PCT / 100);
   if (hi < lo) return Math.max(0, hi);   // only for a stay of a few rupees
@@ -94,7 +95,7 @@ function parseFreeCancelSetting(offered, rawFee) {
       if (on) return { error: `Enter the free cancellation price as a whole amount between ₹${FREE_CANCEL_FIXED_MIN} and ₹${FREE_CANCEL_FIXED_MAX.toLocaleString('en-IN')}.`, reason: 'free_cancel_fee_invalid' };
     } else fee = n;
   }
-  if (on && fee == null) return { error: 'Enter the price guests pay for free cancellation (₹100 or more), or turn free cancellation off.', reason: 'free_cancel_fee_required' };
+  if (on && fee == null) return { error: 'Enter the price guests pay for free cancellation, or turn free cancellation off.', reason: 'free_cancel_fee_required' };
   return { offered: on, fee };
 }
 function freeCancelUntilMs(arrival, zone, checkInTime) {
@@ -113,7 +114,7 @@ function addOnOf(row) {
   // fixed: the host's amount it was sold with (null for bookings made before
   // the host-set price, or before 2026-11-10-07-free-cancel-fee.sql).
   const fx = row && row.free_cancel_fixed != null && row.free_cancel_fixed !== '' ? Math.round(Number(row.free_cancel_fixed)) : null;
-  return { fee: n('free_cancel_fee'), gst: n('free_cancel_gst'), commission: n('free_cancel_commission'), refunded, fixed: fx > 0 ? fx : null };
+  return { fee: n('free_cancel_fee'), gst: n('free_cancel_gst'), commission: n('free_cancel_commission'), refunded, fixed: fx != null && fx >= 0 ? fx : null };
 }
 // Still inside the window (a transferred booking cannot be cancelled at all).
 function freeCancelActive(row, zone, checkInTime, nowMs = Date.now()) {

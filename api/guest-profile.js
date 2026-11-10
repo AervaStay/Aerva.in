@@ -655,12 +655,12 @@ module.exports = async (req, res) => {
         if (shared) {
           // No price for a recipient or a friend: amounts in Aerva's notices are hidden,
           // and the booking's cards (cancel, change, dispute) are the organiser's or buyer's.
-          return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, shared,
+          return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messagingClosed: await require('./_message-guard').messagingClosed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, shared,
             messages: messages.map(m => Object.assign({}, m, { display_text: hideMoneyForShared(m.display_text, m.sender_type) })),
             booking: { orderId: order.id, confirmationCode: order.confirmation_code || null, arrival: order.arrival, departure: order.departure, guests: order.guests, nights: order.nights, status: order.status },
             reviewPrompt: null, cancellation: null, change: null, dispute: null });
         }
-        return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, messages,
+        return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messagingClosed: await require('./_message-guard').messagingClosed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, messages,
           booking: { orderId: order.id, confirmationCode: order.confirmation_code || null,
                      arrival: order.arrival, departure: order.departure, guests: order.guests, nights: order.nights,
                      total: order.total, status: order.status },
@@ -880,11 +880,11 @@ module.exports = async (req, res) => {
         // mode 'conversation' — no amounts, and the booking's cards (cancel, change,
         // dispute, review) stay with the organiser or buyer.
         if (sharedView && !isHost) {
-          return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), myRole, shared: sharedView,
+          return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messagingClosed: await require('./_message-guard').messagingClosed(sql, conversationId), myRole, shared: sharedView,
             messages: messages.map(m => Object.assign({}, m, { display_text: hideMoneyForShared(m.display_text, m.sender_type) })),
             reviewPrompt: null, cancellation: null, change: null, dispute: null });
         }
-        return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messages, myRole, reviewPrompt: await threadReviewPrompt(sql, conversationId, myRole),
+        return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messagingClosed: await require('./_message-guard').messagingClosed(sql, conversationId), messages, myRole, reviewPrompt: await threadReviewPrompt(sql, conversationId, myRole),
                                       cancellation: await cancellationCard(sql, conversationId, myRole),
                                       change: await changeCard(sql, conversationId, myRole),
                                       dispute: await disputeCard(sql, conversationId, myRole) });
@@ -1903,6 +1903,9 @@ module.exports = async (req, res) => {
           senderType = isHost ? 'host' : 'guest';
         }
 
+        if (await require('./_message-guard').messagingClosed(sql, conversationId)) {
+          return res.status(400).json({ error: require('./_message-guard').MESSAGING_CLOSED_TEXT, messagingClosed: true });
+        }
         if (photos.length && !(await require('./_message-guard').photosAllowed(sql, conversationId))) {
           return res.status(400).json({ error: 'Photos can be shared once the booking is confirmed, until the review period closes.' });
         }

@@ -179,7 +179,21 @@ async function paidByOrderRow(sql, razorpayOrderId) {
   return allocatePaid(await paymentRows(sql, { razorpayOrderId }));
 }
 
-module.exports = { dateStr, localMidnightMs, hoursUntilCheckIn, allocatePaid, paidByOrderRow, paymentRows,
+// SECURITY DEPOSIT WINDOW (owner, 10 Nov 2026): the host has 24 hours from
+// check-out to report damage; after that the deposit is refunded. Stored as
+// orders.deposit_release_at = the calendar day the window ends (departure +
+// 1 day); the window ends on that day at the listing's check-out time.
+const DEPOSIT_WINDOW_HOURS = 24;
+function depositReleaseDate(departure) {
+  const d = dateStr(departure);
+  if (!d) return null;
+  const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 1);
+  return x.toISOString().slice(0, 10);
+}
+function depositWindowEndMs(releaseAt, zone, checkOutTime) {
+  return localMidnightMs(releaseAt, zone) + checkInMinutes(checkOutTime || '11:00') * 60000;
+}
+module.exports = { DEPOSIT_WINDOW_HOURS, depositReleaseDate, depositWindowEndMs, dateStr, localMidnightMs, hoursUntilCheckIn, allocatePaid, paidByOrderRow, paymentRows,
   checkInMinutes, checkInMomentMs, hoursUntilCheckInTime, daysBeforeCheckIn, sameDayGrace, SAME_DAY_GRACE_MINUTES, LATE_NIGHT_UNTIL_HOUR, SAME_DAY_HOURS, localClock, earliestArrival,
   STAY_WINDOW_HOUR, stayWindowEndMs, localDateAt };
 

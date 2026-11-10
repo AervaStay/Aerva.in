@@ -2622,8 +2622,9 @@
   // freeCancelCharge — the same rule, so the example matches checkout).
   let listFreeCancelNeedsPrice = false;   // switched on before hosts set a price (a resumed draft / clone)
   function listFreeCancelCharge(fixed, subtotal){
+    if(fixed == null || fixed === '') return 0;
     const f = Math.round(Number(fixed)), sub = Number(subtotal);
-    if(!(f > 0) || !(sub > 0)) return 0;
+    if(!(f >= 0) || !(sub > 0)) return 0;
     const lo = Math.ceil(sub * 5 / 100), hi = Math.floor(sub * 30 / 100);
     return hi < lo ? Math.max(0, hi) : Math.min(hi, Math.max(lo, f));
   }
@@ -2631,8 +2632,8 @@
     const t = document.getElementById('listFreeCancelOffered'), fee = document.getElementById('listFreeCancelFee');
     if(!t || !fee || !t.checked || document.getElementById('listType').value === 'Resort') return '';
     const raw = fee.value.trim(), n = Number(raw);
-    if(raw === '') return 'Enter the price guests pay for free cancellation (₹100 or more), or turn free cancellation off.';
-    if(!Number.isInteger(n) || n < 100 || n > 100000) return 'Enter the free cancellation price as a whole amount between ₹100 and ₹1,00,000.';
+    if(raw === '') return 'Enter the price guests pay for free cancellation, or turn free cancellation off.';
+    if(!Number.isInteger(n) || n < 0 || n > 100000) return 'Enter the free cancellation price as a whole amount between ₹0 and ₹1,00,000.';
     return '';
   }
   function syncListFreeCancel(){
@@ -2641,12 +2642,17 @@
     if(!t || !fee || !wrap || !ex) return;
     const on = t.checked;
     wrap.hidden = !on;
+    fee.disabled = !on;   // switched off: the browser does not check a hidden price either
     const warn = document.getElementById('listFreeCancelNeedsPrice');
-    if(warn) warn.hidden = !(on && listFreeCancelNeedsPrice && !(Number(fee.value) >= 100));
+    if(warn) warn.hidden = !(on && listFreeCancelNeedsPrice && fee.value.trim() === '');
     const nightly = hostAmountToInr(document.getElementById('listPrice').value);
-    const fixed = Math.round(Number(fee.value));
-    if(!on || !(nightly > 0) || !(fixed >= 100) || fixed > 100000){
-      ex.textContent = on && !(nightly > 0) && fixed >= 100 ? 'Enter the nightly rate above to see an example.' : '';
+    const hasFee = fee.value.trim() !== '';
+    const fixed = hasFee ? Math.round(Number(fee.value)) : NaN;
+    // Switched off: nothing about its price is checked, and an earlier message about it goes.
+    const errEl = document.querySelector('#listingForm .listing-error');
+    if(!on && errEl && /free cancellation/i.test(errEl.textContent || '')){ errEl.textContent = ''; errEl.style.display = 'none'; }
+    if(!on || !(nightly > 0) || !(fixed >= 0) || fixed > 100000){
+      ex.textContent = on && !(nightly > 0) && fixed >= 0 ? 'Enter the nightly rate above to see an example.' : '';
       return;
     }
     const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
@@ -2657,8 +2663,8 @@
   function setListFreeCancel(src){
     const t = document.getElementById('listFreeCancelOffered'), fee = document.getElementById('listFreeCancelFee');
     if(t) t.checked = !!src && src.free_cancel_offered === true;
-    if(fee) fee.value = src && Number(src.free_cancel_fee) > 0 ? String(Math.round(Number(src.free_cancel_fee))) : '';
-    listFreeCancelNeedsPrice = !!src && src.free_cancel_offered === true && !(Number(src.free_cancel_fee) >= 100);
+    if(fee) fee.value = src && src.free_cancel_fee != null && src.free_cancel_fee !== '' && Number(src.free_cancel_fee) >= 0 ? String(Math.round(Number(src.free_cancel_fee))) : '';
+    listFreeCancelNeedsPrice = !!src && src.free_cancel_offered === true && !(src.free_cancel_fee != null && src.free_cancel_fee !== '' && Number(src.free_cancel_fee) >= 0);
     syncListFreeCancel();
   }
   ['listFreeCancelOffered', 'listFreeCancelFee', 'listPrice', 'listPricingCurrency'].forEach(id => {
@@ -2941,6 +2947,7 @@
       .map(r => r.isBedroom
         ? {
             roomName: r.name, isBedroom: true,
+            bedIndex: roomSpaceRows.filter(x => x.isBedroom).indexOf(r),   // so a reopened draft puts them back on the same room
             urls: allRoomPhotos(r).filter(p => p.url).map(p => p.url),
             // Only meaningful for a Resort submission — undefined for
             // everything else, which submit-listing.js treats the same
@@ -3017,6 +3024,30 @@
       const data = await res.json();
       if(res.ok && data.note) showListSpecialNote(data.note);
 
+      // One draft per host: replace the existing draft with this one, or discard this one.
+      if(res.status === 409 && data.reason === 'draft_exists' && data.draft){
+        activeBtn.disabled = false; otherBtn.disabled = false;
+        activeBtn.textContent = isDraft ? 'Save as Draft' : 'Send listing for review';
+        const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+        errorEl.style.color = '';
+        errorEl.innerHTML = `<span role="alert">You already have a draft: <strong>${esc(data.draft.name)}</strong>. You can keep one draft at a time.</span>
+          <span style="display:flex; flex-wrap:wrap; gap:10px; margin-top:12px;">
+            <button type="button" class="btn solid" data-draft-replace style="width:auto; padding:10px 18px;">Replace it with this one</button>
+            <button type="button" class="btn" data-draft-discard style="width:auto; padding:10px 18px;">Discard this one</button>
+          </span>`;
+        errorEl.style.display = 'block';
+        errorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        errorEl.querySelector('[data-draft-replace]').addEventListener('click', () => {
+          listingSubmissionState.currentListingId = data.draft.id;   // the same draft is overwritten
+          errorEl.textContent = ''; errorEl.style.display = 'none';
+          saveListing(true);
+        });
+        errorEl.querySelector('[data-draft-discard]').addEventListener('click', () => {
+          listAutosaveOff = true; listAutosaveClear();   // what was typed for this one is not kept
+          window.location.href = 'index.html?view=list-property&edit=' + encodeURIComponent(data.draft.id);
+        });
+        return;
+      }
       if(!res.ok){
         // A real failure — data and cached uploads are preserved exactly as
         // they are, so clicking again just retries from here, not from scratch.
@@ -3168,6 +3199,23 @@
         });
         renderRoomSpaces();
       }
+      // Every room's and space's photos saved with the draft go back into
+      // their own sections (only exterior photos used to come back).
+      let restoredRoomPhotos = 0;
+      if(Array.isArray(draft.draft_room_photos) && draft.draft_room_photos.length){
+        const bedRows = roomSpaceRows.filter(r => r.isBedroom);
+        draft.draft_room_photos.forEach((saved, i) => {
+          if(!saved || !Array.isArray(saved.urls) || !saved.urls.length) return;
+          const row = saved.isBedroom
+            ? bedRows[Number.isInteger(saved.bedIndex) ? saved.bedIndex : draft.draft_room_photos.slice(0, i).filter(x => x && x.isBedroom).length]
+            : roomSpaceRows.find(r => !r.isBedroom && r.name === saved.roomName);
+          if(!row || allRoomPhotos(row).length) return;   // no such section now, or already filled above
+          if(saved.isBedroom && saved.roomName) row.name = saved.roomName;
+          row.photos = saved.urls.filter(u => typeof u === 'string' && /^https:\/\//i.test(u)).map(url => ({ url, file: null }));
+          restoredRoomPhotos += row.photos.length;
+        });
+        if(restoredRoomPhotos) renderRoomSpaces();
+      }
       if(draft.max_guests) document.getElementById('listGuests').value = draft.max_guests;
       document.getElementById('listPrice').value = draft.nightly_rate || '';
       document.getElementById('listDescription').value = draft.description || '';
@@ -3204,8 +3252,8 @@
       const errorEl = listingForm.querySelector('.listing-error');
       errorEl.style.color = 'var(--gold-deep)';
       errorEl.textContent = keptExterior.length ? (draft.status === 'rejected'
-          ? `Editing your rejected listing. Reason given: "${draft.rejection_reason || 'not specified'}" — make the needed changes below, then submit to send it back for review. Your exterior photos are in the gallery below; room and space photos need adding again.`
-          : 'Resuming your draft — your details and exterior photos are filled in. Room and space photos need adding again.')
+          ? `Editing your rejected listing. Reason given: "${draft.rejection_reason || 'not specified'}" — make the needed changes below, then submit to send it back for review. Your exterior photos are in the gallery below${restoredRoomPhotos ? ', and your room and space photos are back in their sections' : '; room and space photos need adding again'}.`
+          : (restoredRoomPhotos ? 'Resuming your draft — your details and photos are filled in. Check each section before you submit.' : 'Resuming your draft — your details and exterior photos are filled in. Room and space photos need adding again.'))
         : draft.status === 'rejected'
         ? `Editing your rejected listing. Reason given: "${draft.rejection_reason || 'not specified'}" — make the needed changes below, then submit to send it back for review. You'll need to re-attach your photos (browsers don't allow us to pre-load previously uploaded files for security reasons).`
         : 'Resuming your draft — your text details are filled in, but you\'ll need to re-attach your photos (browsers don\'t allow us to pre-load previously uploaded files for security reasons).';
@@ -7496,7 +7544,7 @@
       <div class="rv-set">${GUEST_REVIEW_FACTORS.map(starRowHtml).join('')}</div>
       <label class="rv-comment-label" for="guestReviewComment">A few words for other hosts</label>
       <textarea id="guestReviewComment" rows="4" maxlength="1000" placeholder="How was it having them stay?"></textarea>
-      ${p.depositHeld ? `<label style="display:flex; gap:10px; align-items:flex-start; margin-top:12px; font-size:14px; cursor:pointer;"><input type="checkbox" id="guestReviewDeposit" style="margin-top:3px; width:18px; height:18px;"> <span>No damage — refund the guest’s ₹${Number(p.depositHeld).toLocaleString('en-IN')} security deposit now. It reaches them in 2 bank working days instead of after 7 days, and you can no longer raise a concern about it.</span></label>` : ''}
+      ${p.depositHeld ? `<label style="display:flex; gap:10px; align-items:flex-start; margin-top:12px; font-size:14px; cursor:pointer;"><input type="checkbox" id="guestReviewDeposit" style="margin-top:3px; width:18px; height:18px;"> <span>No damage — refund the guest’s ₹${Number(p.depositHeld).toLocaleString('en-IN')} security deposit now, without waiting for the 24 hours after check-out. You can no longer report damage on it.</span></label>` : ''}
       <button type="button" class="btn solid" id="guestReviewSend" style="width:100%; margin-top:14px; cursor:pointer;">Send review</button>
       <p class="payout-muted" id="guestReviewMsg" style="margin-top:10px;"></p></div>`;
     const close = () => { ov.remove(); };
@@ -7982,6 +8030,7 @@
       chatCurrentConversationId = data.conversationId;
       document.getElementById('chatModalTitle').textContent = data.listingName || listingName || 'Chat';
       renderChatMessages(data.messages || [], data.viewerRole, !!data.photosAllowed);
+      setChatClosed(document.getElementById('chatInput'), !!data.messagingClosed);
       showReviewPrompt('chatReviewPrompt', data.reviewPrompt);
       // Booking details and the cancel / change / dispute cards sit ABOVE
       // the messages (inserted before the message list), so the reply box
@@ -8089,6 +8138,25 @@
       chatPicker = box ? makeChatPhotoPicker(box, box.parentNode) : null;
     }
     return chatPicker;
+  }
+  // Messages on a booking close 15 days after check-out (the review window):
+  // the box to write in gives way to a short note.
+  function setChatClosed(box, closed){
+    if(!box || !box.parentNode) return;
+    const row = box.parentNode, host = row.parentNode;
+    let note = host ? host.querySelector(':scope > .chat-closed-note') : null;
+    if(closed){
+      row.style.display = 'none';
+      if(!note && host){
+        note = document.createElement('p'); note.className = 'chat-closed-note';
+        note.style.cssText = 'font-size:13px; line-height:1.5; opacity:0.75; margin:0;';
+        note.innerHTML = 'Messages for this booking closed 15 days after check-out. For anything about this stay, <a href="index.html?view=help" style="text-decoration:underline;">raise a request in the Resolution Center</a>.';
+        host.insertBefore(note, row);
+      }
+    } else {
+      if(row.style.display === 'none') row.style.display = '';
+      if(note) note.remove();
+    }
   }
   function renderChatMessages(messages, viewerRole, photosAllowed){
     const container = document.getElementById('chatMessagesContainer');
@@ -8768,6 +8836,7 @@
       showDisputeCard('inboxReviewPrompt', data.dispute, () => refreshInboxMessages());
       if(!inboxPicker){ const box = document.getElementById('inboxChatInput'); inboxPicker = box ? makeChatPhotoPicker(box, box.parentNode) : null; }
       if(inboxPicker) inboxPicker.setAllowed(!!data.photosAllowed);
+      setChatClosed(document.getElementById('inboxChatInput'), !!data.messagingClosed);
       await renderInboxMessages(data.messages || []);
       loadInboxChatTemplates(inboxCurrentConversationId);
       // Read messages update their own unread_count server-side, but the
@@ -11601,7 +11670,7 @@
     }
     rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee + experienceFee)}</span></div>`);
     if(listing.security_deposit && Number(listing.security_deposit) > 0){
-      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (covers damage and extra cleaning; held up to 7 days)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
+      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (covers damage and extra cleaning; refunded after check-out unless damage is reported within 24 hours)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
     }
 
     const grandTotalInr = total + stayTax.gst + (listing.security_deposit ? Number(listing.security_deposit) : 0) + experienceTotal + experienceGst + experienceFee;
@@ -13943,6 +14012,7 @@
       const tbBox = document.getElementById('tbText');
       tbPicker = tbBox ? makeChatPhotoPicker(tbBox, tbBox.parentNode) : null;
       if(tbPicker) tbPicker.setAllowed(!!data.photosAllowed);
+      if(typeof setChatClosed === 'function') setChatClosed(tbBox, !!data.messagingClosed);
       const drawTb = (msgs) => {
         thread.innerHTML = msgs.length
           ? msgs.map(m => `

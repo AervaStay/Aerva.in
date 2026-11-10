@@ -48,7 +48,7 @@
 //          (see get-listings.js's ?siteBackground=1 mode, which is what
 //          the homepage actually reads from).
 //   POST { processDeposits: true }
-//        — finds every security deposit past its 7-day hold with no
+//        — finds every security deposit past its 24-hour hold with no
 //          dispute raised, and refunds each one in full to the guest's
 //          original payment method via Razorpay. Admin-triggered by
 //          design (a button in admin.html), not an unattended cron job —
@@ -2048,7 +2048,7 @@ module.exports = async (req, res) => {
       }
     }
 
-    // ---- Auto-refund every held deposit past its 7-day release date ----
+    // ---- Auto-refund every held deposit past its 24-hour window ----
     // Admin-triggered rather than a blind cron job — this endpoint does
     // real money movement via Razorpay, so a human clicking "Process" in
     // admin.html is the safety check before it runs, at least until this

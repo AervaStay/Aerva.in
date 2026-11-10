@@ -876,6 +876,19 @@ module.exports = async (req, res) => {
       `;
       listing = updated[0];
     } else {
+      // One draft per host (owner, 11 Nov 2026): a NEW draft is refused while
+      // another draft of a stay exists. The page then asks: replace the
+      // existing draft with this one (it saves again with that draft's id, so
+      // the same row is overwritten), or discard this one.
+      if (isDraft && !listingId && listingType !== 'experience') {
+        const other = (await sql`SELECT id, property_name, created_at FROM listings
+                                 WHERE host_id = ${hostId} AND status = 'draft' AND COALESCE(listing_type, 'stay') <> 'experience'
+                                 ORDER BY created_at DESC, id DESC LIMIT 1`)[0];
+        if (other) {
+          return res.status(409).json({ reason: 'draft_exists', draft: { id: other.id, name: other.property_name || 'Untitled draft' },
+            error: `You already have a draft: “${other.property_name || 'Untitled draft'}”. You can keep one draft at a time — replace it with this one, or discard this one.` });
+        }
+      }
       // description, host_name and host_phone are NOT NULL (schema.sql); a
       // draft may leave them blank, so blank is stored as '' rather than NULL.
       const inserted = await sql`
@@ -1043,6 +1056,24 @@ module.exports = async (req, res) => {
           }))
         : [];
       await sql`UPDATE listings SET pending_room_photos = ${JSON.stringify(safeRoomPhotos)} WHERE id = ${listing.id}`;
+    }
+
+    // Every room's and space's photos as the form had them (owner, 11 Nov
+    // 2026): opening a draft or a rejected listing again puts each one back
+    // in its section — only exterior photos used to come back. Only for the
+    // form; nothing else reads it. Column: 2026-11-11-03-draft-room-photos.sql
+    // (before it has run this is skipped and nothing else changes).
+    if (!isExperience) {
+      try {
+        const formRooms = (Array.isArray(roomPhotos) ? roomPhotos : []).map(r => {
+          if (!r || typeof r.roomName !== 'string' || !r.roomName.trim()) return null;
+          const urls = (Array.isArray(r.urls) ? r.urls : (r.url ? [r.url] : [])).filter(isAervaBlobUrl).slice(0, 30);
+          if (!urls.length) return null;
+          const bedIndex = Number.isInteger(r.bedIndex) && r.bedIndex >= 0 && r.bedIndex < 200 ? r.bedIndex : null;
+          return { roomName: r.roomName.trim().slice(0, 100), isBedroom: r.isBedroom === true, bedIndex, urls };
+        }).filter(Boolean).slice(0, 220);
+        await sql`UPDATE listings SET draft_room_photos = ${JSON.stringify(formRooms)}::jsonb WHERE id = ${listing.id}`;
+      } catch (err) { if (!/draft_room_photos/.test(String(err && err.message))) console.error('draft room photos not saved:', err.message); }
     }
 
     // Photos already found to show contact details are taken out now,

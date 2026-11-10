@@ -2000,7 +2000,7 @@ module.exports = async (req, res) => {
         -- the host offers the free cancellation add-on (2026-11-10-06-free-cancel-optin.sql)
         -- AND has set its price (2026-11-10-07-free-cancel-fee.sql); missing either = off
         (COALESCE((to_jsonb(listings)->>'free_cancel_offered')::boolean, false)
-         AND COALESCE((to_jsonb(listings)->>'free_cancel_fee')::int, 0) >= 100) AS free_cancel_offered,
+         AND COALESCE((to_jsonb(listings)->>'free_cancel_fee')::int, -1) >= 0) AS free_cancel_offered,
         to_jsonb(listings)->>'price_changed_at' AS price_changed_at,
         COALESCE((to_jsonb(listings)->>'same_day_until')::int, 24) AS same_day_until
       FROM listings

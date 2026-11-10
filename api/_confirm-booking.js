@@ -35,7 +35,6 @@ const { markIdDeadlineIfMissing } = require('./_guest-id');
 // Fallback only for orders placed before the split commission existed.
 const crypto = require('crypto');
 const FALLBACK_COMMISSION_RATE = 5;
-const DEPOSIT_HOLD_DAYS = 7;   // a deposit is held for 7 days after departure
 
 // ---- The booking's confirmation code ----
 // RANDOM only: eight digits, carrying nothing about the booking, the
@@ -426,9 +425,7 @@ function planRows(ctx) {
     commissionAmount += freeCancelCommission;
     let depositReleaseAt = null;
     if (depositAmount > 0) {
-      const d = new Date(stay.departure + 'T00:00:00Z');
-      d.setUTCDate(d.getUTCDate() + DEPOSIT_HOLD_DAYS);
-      depositReleaseAt = d.toISOString().split('T')[0];
+      depositReleaseAt = require('./_booking-rules').depositReleaseDate(stay.departure);   // 24 hours after check-out
     }
     rows.push({
       type: 'stay', item: stay, suite: stay.suite, listingId: stay.listingId || null, roomId: stay.roomId || null,
@@ -438,7 +435,7 @@ function planRows(ctx) {
       effectiveRate, commissionAmount, payoutAmount: subtotal + freeCancelFee - commissionAmount,
       freeCancelFee, freeCancelGst, freeCancelCommission,
       // the host's fixed amount it was sold with (re-clamped on added nights, _booking-changes.js)
-      freeCancelFixed: freeCancelFee && Number(stay.freeCancelFixed) > 0 ? Math.round(Number(stay.freeCancelFixed)) : null,
+      freeCancelFixed: freeCancelFee && stay.freeCancelFixed != null && Number(stay.freeCancelFixed) >= 0 ? Math.round(Number(stay.freeCancelFixed)) : null,
       depositAmount, depositReleaseAt, feeCreditUsed: Math.round(Number(stay.feeCreditUsed) || 0), ...takeCoupon()
     });
   }
@@ -501,7 +498,7 @@ async function insertRow(sql, ctx, row, cancelledReason) {
     // orders.free_cancel_fixed (2026-11-10-07-free-cancel-fee.sql): only ever
     // set once that update has run (a listing has no price before it, so
     // nothing is offered); a separate statement that never fails the booking.
-    if (row.freeCancelFixed) {
+    if (row.freeCancelFixed != null) {
       try { await sql`UPDATE orders SET free_cancel_fixed = ${row.freeCancelFixed} WHERE id = ${id}`; }
       catch (err) { console.error('free_cancel_fixed not saved on booking:', id, err.message); }
     }

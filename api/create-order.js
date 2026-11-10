@@ -190,7 +190,7 @@ function priceLines(stayDetails, experienceDetails, { gst, fee, deposit, coupon 
   const rates = [...new Set([...stayDetails, ...experienceDetails].filter(x => Number(x.gst) > 0).map(x => x.gstRate))];
   if (gst) lines.push({ kind: 'gst', label: rates.length === 1 ? `GST (${rates[0]}%)` : 'GST', amount: gst });
   lines.push({ kind: 'fee', label: 'Guest service fee', amount: fee });
-  if (deposit) lines.push({ kind: 'deposit', label: 'Refundable deposit (held 7 days)', amount: deposit });
+  if (deposit) lines.push({ kind: 'deposit', label: 'Refundable deposit', amount: deposit });
   if (coupon) lines.push({ kind: 'coupon', label: 'Coupon', amount: -coupon });
   if (feeCredit) lines.push({ kind: 'fee_credit', label: 'Aerva credit', amount: -feeCredit });
   return lines;

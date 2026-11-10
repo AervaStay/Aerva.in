@@ -412,7 +412,7 @@
       <div class="field">
         <label for="securityDeposit"><span id="securityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, leave blank if you don't charge one</span></label>
         <input id="securityDeposit" type="number" min="0" placeholder="e.g. 2000">
-        <p class="price-history-note">Charged to the guest at checkout and held by Aerva for 7 days after checkout. If you don't raise a concern in that window, it's refunded to the guest automatically.</p>
+        <p class="price-history-note">Charged to the guest at checkout and held by Aerva for 24 hours after check-out. If you don't report damage in that time, it's refunded to the guest automatically.</p>
       </div>
 
       <div class="field">
@@ -437,7 +437,7 @@
         <!-- Its price: a fixed ₹ amount per booking (api/update-listing-pricing.js freeCancelFee). -->
         <div class="fc-price" id="freeCancelPriceWrap" hidden>
           <label for="freeCancelFee">Free cancellation price (₹ per booking) <span style="color:#a3402f;">*</span></label>
-          <input id="freeCancelFee" type="number" min="100" max="100000" step="1" inputmode="numeric" placeholder="e.g. 1500" aria-describedby="freeCancelFeeRule freeCancelExample">
+          <input id="freeCancelFee" type="number" step="1" inputmode="numeric" placeholder="e.g. 1500" aria-describedby="freeCancelFeeRule freeCancelExample">
           <p class="fc-optin-help" id="freeCancelFeeRule">Guests pay this amount per booking. For very short or very long stays it is kept between 5% and 30% of the stay price.</p>
           <p class="fc-optin-help fc-example" id="freeCancelExample" aria-live="polite"></p>
         </div>
@@ -1753,8 +1753,9 @@
   // 30% of its stay price (api/_pricing.js freeCancelCharge — same rule).
   let freeCancelNeedsPrice = false;
   function freeCancelChargeFor(fixed, subtotal){
+    if(fixed == null || fixed === '') return 0;
     const f = Math.round(Number(fixed)), sub = Number(subtotal);
-    if(!(f > 0) || !(sub > 0)) return 0;
+    if(!(f >= 0) || !(sub > 0)) return 0;
     const lo = Math.ceil(sub * 5 / 100), hi = Math.floor(sub * 30 / 100);
     return hi < lo ? Math.max(0, hi) : Math.min(hi, Math.max(lo, f));
   }
@@ -1763,19 +1764,20 @@
     if(!document.getElementById('freeCancelOffered').checked) return '';
     const raw = document.getElementById('freeCancelFee').value.trim();
     const n = Number(raw);
-    if(raw === '') return 'Enter the price guests pay for free cancellation (₹100 or more), or turn free cancellation off.';
-    if(!Number.isInteger(n) || n < 100 || n > 100000) return 'Enter the free cancellation price as a whole amount between ₹100 and ₹1,00,000.';
+    if(raw === '') return 'Enter the price guests pay for free cancellation, or turn free cancellation off.';
+    if(!Number.isInteger(n) || n < 0 || n > 100000) return 'Enter the free cancellation price as a whole amount between ₹0 and ₹1,00,000.';
     return '';
   }
   function syncFreeCancelPrice(){
     const on = document.getElementById('freeCancelOffered').checked;
     const fee = document.getElementById('freeCancelFee');
     document.getElementById('freeCancelPriceWrap').hidden = !on;
-    document.getElementById('freeCancelNeedsPrice').hidden = !(on && freeCancelNeedsPrice && !(Number(fee.value) >= 100));
+    fee.disabled = !on;   // switched off: the browser does not check a hidden price either
+    document.getElementById('freeCancelNeedsPrice').hidden = !(on && freeCancelNeedsPrice && fee.value.trim() === '');
     const ex = document.getElementById('freeCancelExample');
     const nightly = toInr(document.getElementById('nightlyRate').value);
-    const fixed = Math.round(Number(fee.value));
-    if(!on || !(nightly > 0) || !(fixed >= 100) || fixed > 100000){ ex.textContent = ''; return; }
+    const fixed = fee.value.trim() !== '' ? Math.round(Number(fee.value)) : NaN;
+    if(!on || !(nightly > 0) || !(fixed >= 0) || fixed > 100000){ ex.textContent = ''; return; }
     const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
     const two = nightly * 2, week = nightly * 7;
     ex.textContent = `For example, on a 2-night stay of ${inr(two)}, guests would pay ${inr(freeCancelChargeFor(fixed, two))}; on a 7-night stay of ${inr(week)}, ${inr(freeCancelChargeFor(fixed, week))}.`;
@@ -1970,9 +1972,9 @@
       document.getElementById('cancellationPolicy').value = l.cancellation_policy === 'firm' ? 'firm' : 'flexible';
       // Free cancellation add-on: stays only (a Resort's rooms book without it).
       document.getElementById('freeCancelOffered').checked = l.free_cancel_offered === true;
-      document.getElementById('freeCancelFee').value = Number(l.free_cancel_fee) > 0 ? String(Math.round(Number(l.free_cancel_fee))) : '';
+      document.getElementById('freeCancelFee').value = l.free_cancel_fee != null && Number(l.free_cancel_fee) >= 0 ? String(Math.round(Number(l.free_cancel_fee))) : '';
       // Switched on before hosts set the price: not offered until they set one.
-      freeCancelNeedsPrice = l.free_cancel_offered === true && !(Number(l.free_cancel_fee) >= 100);
+      freeCancelNeedsPrice = l.free_cancel_offered === true && !(l.free_cancel_fee != null && Number(l.free_cancel_fee) >= 0);
       document.getElementById('freeCancelField').style.display = (l.listing_type === 'experience' || l.property_type === 'Resort') ? 'none' : '';
       syncFreeCancelPrice();
       document.getElementById('sameDayUntil').value = String([18, 19, 20, 21, 22, 23, 24].includes(Number(l.same_day_until)) ? Number(l.same_day_until) : 24);
@@ -2157,7 +2159,7 @@
       return;
     }
 
-    // Free cancellation switched on: its price is required (₹100 – ₹1,00,000).
+    // Free cancellation switched on: its price is required (₹0 – ₹1,00,000).
     const fcProblem = freeCancelPriceProblem();
     if(fcProblem){
       errorMsg.textContent = fcProblem;
