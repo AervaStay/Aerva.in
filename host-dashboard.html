@@ -738,10 +738,10 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
-<script src="aerva-cohost.js?v=2026-11-09a"></script>
+<script src="aerva-cohost.js?v=2026-11-11b"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
-<script src="aerva-policies.js?v=2026-11-10w"></script>
+<script src="aerva-policies.js?v=2026-11-11b"></script>
 </head>
 <body>
 
@@ -800,6 +800,12 @@
        Sits above everything on every tab, because the consequence of
        ignoring it is the listing coming off Aerva. -->
   <div id="complianceNotice" style="display:none;"></div>
+
+  <!-- A co-host paid a guest's cancellation coupon and asks the host to
+       cover it: the host's own account accepts or declines here
+       (api/_cohost-coupon.js). Shown only when something waits, or was
+       answered in the last 30 days. -->
+  <div id="cohostCouponBox" style="display:none;"></div>
 
   <div class="listing-tabs" id="dashboardMainTabs" style="margin-top:8px;">
     <button type="button" class="listing-tab-btn active" data-main-tab="listings" id="mainTabListings">My Collection</button>
@@ -1887,6 +1893,7 @@
           <div class="listing-meta">${escH(item.city || 'No city yet')} · ${inrText(item.nightly_rate)}/night ${statusBadgeHtml(item.status)}</div>
             ${item.status === 'approved' || item.status === 'deactivated' ? cancelRateHtml(item) : ''}
           ${rejectionNoteHtml}
+          ${!isResort && item.free_cancel_offered === true && !(Number(item.free_cancel_fee) >= 100) ? `<p class="calendar-hint" data-free-cancel-needs-price style="color:#7a3b12;">Set a price to keep offering free cancellation (Manage listing). Until then guests can’t add it.</p>` : ''}
           ${calendarHintHtml}
         </div>
         <div class="card-actions" style="display:flex; flex-direction:column; gap:8px; align-items:flex-end;">
@@ -5127,6 +5134,77 @@
   }
   const start = () => { loadHosting(); wireDelete(); wireLogoutAll(); };
   if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', start); else start();
+})();
+</script>
+<script>
+// Co-hosts' requests that this host cover a cancellation coupon they paid
+// (owner, 10 Nov 2026). Only the host's own account answers: these calls
+// are never routed "as" a host (aerva-cohost.js leaves them alone).
+// Server: host-listings.js ?cohostCoupons=1 / cohostCouponAnswer.
+(function(){
+  const box = document.getElementById('cohostCouponBox');
+  if(!box) return;
+  const API = (window.AERVA_API || 'https://aerva-in.vercel.app') + '/api/host-listings';
+  const token = (function(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } })();
+  if(!token) return;
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+  const day = (v) => { const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }); };
+  const stay = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };
+  const row = (k, v) => '<div style="display:flex; justify-content:space-between; gap:16px; padding:5px 0; font-size:14.5px;"><span style="opacity:0.65; flex:0 0 auto;">' + k + '</span><span style="text-align:right; overflow-wrap:anywhere;">' + v + '</span></div>';
+  const done = (r) => r.status === 'accepted' ? 'You accepted. ' + esc(inr(r.amount)) + ' is deducted from your next payout and added to ' + esc(r.cohostFirstName) + '’s.'
+    : r.status === 'reimbursed' ? 'You accepted. ' + esc(inr(r.amount)) + ' was deducted from your payout and goes to ' + esc(r.cohostFirstName) + '.'
+    : r.status === 'declined' ? 'You declined. Nothing moves through Aerva.'
+    : r.status === 'expired' ? 'Not answered in time: the request closed. Nothing moves through Aerva.'
+    : 'Closed. Nothing moves through Aerva.';
+  async function load(){
+    try{
+      const res = await fetch(API + '?cohostCoupons=1', { headers: { 'Authorization': 'Bearer ' + token } });
+      const data = await res.json();
+      const list = (res.ok && data.available && data.toAnswer) || [];
+      if(!list.length){ box.style.display = 'none'; box.innerHTML = ''; return; }
+      const waiting = list.filter(r => r.status === 'pending'), answered = list.filter(r => r.status !== 'pending');
+      box.style.cssText = 'margin:0 0 24px; background:#fff; border:1px solid #ece4d8; border-left:3px solid #a9884f; border-radius:12px; padding:16px 18px;';
+      box.innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500; font-size:21px; margin:0 0 4px;">Coupon requests from your co-hosts</h2>'
+        + '<p style="font-size:13.5px; opacity:0.75; margin:0 0 6px;">A co-host who cancels within 48 hours of check-in pays the guest’s coupon themselves, and may ask you to cover it. Only you can answer.</p>'
+        + waiting.map(r => '<div data-cc="' + Number(r.id) + '" style="border-top:1px solid #f0e9df; padding:12px 0 4px;">'
+            + '<p style="margin:0 0 6px; font-size:15px;"><strong>' + esc(r.cohostFirstName) + '</strong> asks you to cover a <strong>' + esc(inr(r.amount)) + '</strong> coupon.</p>'
+            + row('Booking', esc(r.booking) + ' · ' + esc(r.listing))
+            + row('Dates', esc(stay(r.arrival)) + ' – ' + esc(stay(r.departure)))
+            + row('Guest', esc(r.guestFirstName))
+            + row('Reason given', esc(r.reason || '—'))
+            + row('Coupon', '<strong>' + esc(inr(r.amount)) + '</strong>')
+            + (r.note ? '<p style="margin:8px 0 0; padding:10px 12px; background:#faf6ef; border-radius:8px; font-size:14.5px; overflow-wrap:anywhere;"><strong>' + esc(r.cohostFirstName) + ' wrote:</strong> ' + esc(r.note) + '</p>' : '')
+            + '<p style="font-size:13px; opacity:0.75; margin:10px 0;">If you accept, ' + esc(inr(r.amount)) + ' is deducted from your next payout and added to ' + esc(r.cohostFirstName) + '’s next payout. Aerva only moves it between the two payouts: no commission, no fee. If you decline, or do not answer by ' + esc(day(r.answerBy)) + ', nothing moves through Aerva.</p>'
+            + '<div style="display:flex; gap:10px; flex-wrap:wrap;">'
+            + '<button type="button" class="settings-save-btn" data-cc-answer="accept" style="padding:11px 22px; border:none; border-radius:999px; cursor:pointer; font:inherit; font-size:14px;">Accept</button>'
+            + '<button type="button" class="settings-cancel-btn" data-cc-answer="decline" style="padding:11px 22px; border-radius:999px; cursor:pointer; font:inherit; font-size:14px;">Decline</button></div>'
+            + '<p data-cc-err role="alert" style="display:none; color:#a3402f; font-size:13.5px; margin:8px 0 0;"></p></div>').join('')
+        + answered.map(r => '<div style="border-top:1px solid #f0e9df; padding:10px 0; font-size:14px;"><strong>' + esc(r.listing) + '</strong> · booking ' + esc(r.booking) + ' · ' + esc(inr(r.amount)) + ' · ' + esc(r.cohostFirstName)
+            + '<br><span style="opacity:0.75;">' + done(r) + '</span></div>').join('');
+      box.querySelectorAll('[data-cc]').forEach(card => card.querySelectorAll('[data-cc-answer]').forEach(btn => btn.addEventListener('click', async () => {
+        const accept = btn.dataset.ccAnswer === 'accept';
+        const err = card.querySelector('[data-cc-err]');
+        const r0 = waiting.find(x => Number(x.id) === Number(card.dataset.cc));
+        if(accept && !confirm('Accept? ' + inr(r0.amount) + ' will be deducted from your next payout and added to ' + r0.cohostFirstName + '’s. This cannot be undone.')) return;
+        if(!accept && !confirm('Decline? Nothing will move through Aerva, and this request cannot be sent again.')) return;
+        card.querySelectorAll('button').forEach(b => { b.disabled = true; });
+        err.style.display = 'none';
+        try{
+          const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+            body: JSON.stringify({ cohostCouponAnswer: { requestId: Number(card.dataset.cc), accept } }) });
+          const d = await r.json().catch(() => ({}));
+          if(r.ok || r.status === 409){ load(); return; }
+          err.textContent = d.error || 'Could not save your answer. Please try again.'; err.style.display = 'block';
+          card.querySelectorAll('button').forEach(b => { b.disabled = false; });
+        }catch(e){
+          err.textContent = 'Could not save your answer. Please try again.'; err.style.display = 'block';
+          card.querySelectorAll('button').forEach(b => { b.disabled = false; });
+        }
+      })));
+    }catch(e){ /* leave the page as it is */ }
+  }
+  if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', load); else load();
 })();
 </script>
 <script src="aerva-header.js?v=2026-10-10a" defer></script>

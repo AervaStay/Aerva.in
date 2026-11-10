@@ -596,8 +596,10 @@ const JOBS = [
     run: (c) => processScheduledRefunds(c.sql, razorpayClient(), { deadlineMs: Math.min(4000, c.remainingMs) }) },
   // Booking changes that can no longer happen: check-out day has begun,
   // or the 24 hours to pay the difference have passed.
-  { name: 'booking_changes_expiry', label: 'Close booking changes past their time limit', everyMinutes: 15,
-    run: (c) => expireChanges(c.sql) },
+  // Also: a co-host's request that the host cover a cancellation coupon,
+  // left unanswered for 7 days — closed, nothing moves (_cohost-coupon.js).
+  { name: 'booking_changes_expiry', label: 'Close booking changes past their time limit, and co-hosts’ coupon requests the host did not answer in 7 days', everyMinutes: 15,
+    run: async (c) => { const out = await expireChanges(c.sql); const cc = await require('./_cohost-coupon').expireDue(c.sql); return { ...out, couponRequestsExpired: cc.expired || 0 }; } },
   // Group bookings (_group-bookings.js): close groups at 2 hours (confirm, or
   // ask the organiser about a smaller booking), cancel unanswered ones after
   // 30 minutes with full refunds, remind organisers 30 minutes before the end.
@@ -1987,6 +1989,10 @@ module.exports = async (req, res) => {
         -- read through to_jsonb so this query still works before the
         -- migration adds the column (every listing is then Flexible)
         COALESCE(to_jsonb(listings)->>'cancellation_policy', 'flexible') AS cancellation_policy,
+        -- the host offers the free cancellation add-on (2026-11-10-06-free-cancel-optin.sql)
+        -- AND has set its price (2026-11-10-07-free-cancel-fee.sql); missing either = off
+        (COALESCE((to_jsonb(listings)->>'free_cancel_offered')::boolean, false)
+         AND COALESCE((to_jsonb(listings)->>'free_cancel_fee')::int, 0) >= 100) AS free_cancel_offered,
         to_jsonb(listings)->>'price_changed_at' AS price_changed_at,
         COALESCE((to_jsonb(listings)->>'same_day_until')::int, 24) AS same_day_until
       FROM listings

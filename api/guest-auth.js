@@ -571,6 +571,8 @@ module.exports = async (req, res) => {
         (await require('./_support').bellNotifications(sql, guest.id)).forEach(n => notifications.push(n));
         // Payout details: what the host or co-host must do, or is waiting for (_bank-check.js).
         (await require('./_bank-check').payoutNotifications(sql, { hostId: guest.host_id, guestId: guest.id })).forEach(n => notifications.push(n));
+        // A coupon a co-host paid: the host is asked to cover it; the co-host hears the answer (_cohost-coupon.js).
+        (await require('./_cohost-coupon').bellNotifications(sql, { hostId: guest.host_id, guestId: guest.id })).forEach(n => notifications.push(n));
         // Payouts sent in the last 30 days (as host, or as a co-host).
         (await recentPayoutNotifications(sql, { hostId: guest.host_id, guestId: guest.id })).forEach(n => notifications.push(n));
       } catch (err) {

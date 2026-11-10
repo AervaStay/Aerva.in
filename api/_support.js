@@ -530,8 +530,36 @@ async function adminGet(sql, id) {
                 firstResponseDueAt: new Date(new Date(t.created_at).getTime() + FIRST_RESPONSE_HOURS * 3600e3).toISOString() };
   let caseNotes = [];
   try { caseNotes = await sql`SELECT * FROM support_case_notes WHERE ticket_id = ${t.id} ORDER BY created_at DESC, id DESC`; } catch (err) { if (!notReady(err)) throw err; }
+  // The person's bookings, so the team can investigate without leaving the
+  // request (owner, 10 Nov 2026): as a guest, and — for a host — the
+  // bookings at their listings. Running and upcoming first, then the latest
+  // past ones. Never fails the request view.
+  const bookings = { asGuest: [], asHost: [] };
+  if (t.guest_id) {
+    const cols = (rows) => rows.map(r => ({ id: r.id, code: r.confirmation_code || null, suite: r.suite_name, arrival: String(r.arrival_day), departure: String(r.departure_day),
+      nights: Number(r.nights) || 0, guests: Number(r.guests) || 0, status: r.status, when: r.stay_when, total: r.total == null ? null : Math.round(Number(r.total)),
+      deposit: Math.round(Number(r.deposit_amount) || 0), depositStatus: r.deposit_status || null, refundPercent: r.refund_percent == null ? null : Number(r.refund_percent),
+      cancelledBy: r.cancelled_by || null, openChange: !!r.open_change, openCancel: !!r.open_cancel, guestName: r.guest_name || null, thisRequest: Number(r.id) === Number(t.order_id) }));
+    const pick = (who) => sql`
+      SELECT o.id, to_jsonb(o)->>'confirmation_code' AS confirmation_code, o.suite_name, o.arrival::text AS arrival_day, o.departure::text AS departure_day, o.nights, o.guests, o.status, o.total,
+             to_jsonb(o)->>'deposit_amount' AS deposit_amount, to_jsonb(o)->>'deposit_status' AS deposit_status, to_jsonb(o)->>'refund_percent' AS refund_percent, to_jsonb(o)->>'cancelled_by' AS cancelled_by,
+             CASE WHEN o.status <> 'paid' THEN 'cancelled' WHEN o.departure < CURRENT_DATE THEN 'past' WHEN o.arrival <= CURRENT_DATE THEN 'now' ELSE 'upcoming' END AS stay_when,
+             EXISTS (SELECT 1 FROM booking_changes c WHERE c.order_id = o.id AND c.status IN ('pending', 'accepted')) AS open_change,
+             EXISTS (SELECT 1 FROM cancellation_requests c WHERE c.order_id = o.id AND c.status = 'pending') AS open_cancel,
+             gg.name AS guest_name
+      FROM orders o JOIN listings l ON l.id = o.listing_id LEFT JOIN guests gg ON gg.id = o.guest_id
+      WHERE o.status IN ('paid', 'cancelled') AND ${who === 'guest'} = (o.guest_id = ${t.guest_id})
+        AND (${who === 'guest'} OR l.host_id = (SELECT host_id FROM guests WHERE id = ${t.guest_id}))
+        AND (${who === 'guest'} OR o.guest_id IS DISTINCT FROM ${t.guest_id})
+      ORDER BY (o.id = ${Number(t.order_id) || 0}) DESC,
+               CASE WHEN o.status = 'paid' AND o.departure >= CURRENT_DATE THEN 0 ELSE 1 END,
+               CASE WHEN o.status = 'paid' AND o.departure >= CURRENT_DATE THEN o.arrival END ASC, o.arrival DESC
+      LIMIT 10`;
+    try { bookings.asGuest = cols(await pick('guest')); } catch (err) { console.error('support: person bookings', err && err.message); }
+    try { bookings.asHost = cols(await pick('host')); } catch (err) { console.error('support: host bookings', err && err.message); }
+  }
   return { ticket: { ...t, categoryLabel: (CATEGORIES[t.category] || {}).label || t.category }, messages: msgs, statuses: STATUS_LABELS,
-           caseNotes, caseRecord: caseNotes[0] || null, conduct: CONDUCT, otherParty: !!(t.order_id || t.listing_id) };
+           caseNotes, caseRecord: caseNotes[0] || null, conduct: CONDUCT, otherParty: !!(t.order_id || t.listing_id), bookings };
 }
 
 // The support team's record of a request: the issue as understood, the

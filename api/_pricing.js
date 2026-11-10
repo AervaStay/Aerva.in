@@ -26,9 +26,11 @@ const MAX_EXPERIENCES = 5; // same reasoning, for the experiences array
 const MAX_AMENITIES_PER_STAY = 15;
 
 // ---- Free cancellation add-on (owner, 9 Nov 2026) ----
-// At checkout for a stay (not an experience, not a stay included with one,
-// not a split/group payment) the guest may add "Free cancellation" for
-// FREE_CANCEL_PERCENT of the booking price: the stay subtotal after
+// At checkout for a stay whose host offers it (listings.free_cancel_offered,
+// off by default — 2026-11-10-06-free-cancel-optin.sql; not an experience,
+// not a stay included with one, not a split/group payment) the guest may
+// add "Free cancellation" for
+// the host's price (below), kept within 5%–30% of the booking price: the stay subtotal after
 // discount, with paid amenities and pet fees, before GST, service fee and
 // deposit. With it, a cancellation up to FREE_CANCEL_HOURS before the
 // check-in MOMENT (listing's check-in time, property's clock —
@@ -42,8 +44,59 @@ const MAX_AMENITIES_PER_STAY = 15;
 // out from the booking's arrival, so it moves with a change of dates.
 // Columns: migrations/2026-11-10-01-free-cancellation.sql (until it has run, the
 // add-on is not offered and nothing is charged).
+// The add-on's PRICE is the host's (owner, 10 Nov 2026 — replacing the flat
+// 15%): a fixed ₹ amount per booking (listings.free_cancel_fee, whole
+// rupees, ₹100 – ₹1,00,000; 2026-11-10-07-free-cancel-fee.sql), kept
+// between FREE_CANCEL_MIN_PCT and FREE_CANCEL_MAX_PCT of each booking's
+// stay subtotal (the booking price above), worked out per booking at quote
+// time (freeCancelCharge). A listing switched on without an amount (switched
+// on before hosts set the price) counts as NOT offering it. The fixed amount
+// a booking was bought with is kept on the order (orders.free_cancel_fixed)
+// so a change re-clamps it on the new subtotal (_booking-changes.js).
+// FREE_CANCEL_PERCENT is the old flat rate: kept only for bookings made
+// before the host-set price (orders.free_cancel_fixed empty), whose added
+// nights still add 15% of their price, as they were sold.
 const FREE_CANCEL_PERCENT = 15;
+const FREE_CANCEL_MIN_PCT = 5;
+const FREE_CANCEL_MAX_PCT = 30;
+const FREE_CANCEL_FIXED_MIN = 100;
+const FREE_CANCEL_FIXED_MAX = 100000;
 const FREE_CANCEL_HOURS = 48;
+// What one booking pays for the add-on: the host's fixed amount, kept
+// between 5% (rounded up) and 30% (rounded down) of the stay subtotal, in
+// whole rupees. 0 when there is no valid fixed amount or no subtotal.
+function freeCancelCharge(fixed, subtotal) {
+  const f = Math.round(Number(fixed));
+  const sub = Number(subtotal);
+  if (!(f > 0) || !(sub > 0)) return 0;
+  const lo = Math.ceil(sub * FREE_CANCEL_MIN_PCT / 100);
+  const hi = Math.floor(sub * FREE_CANCEL_MAX_PCT / 100);
+  if (hi < lo) return Math.max(0, hi);   // only for a stay of a few rupees
+  return Math.min(hi, Math.max(lo, f));
+}
+// A listing's fixed amount as stored, or null when it has none / an invalid one.
+function freeCancelFixedOf(listing) {
+  const v = listing ? listing.free_cancel_fee : null;
+  if (v == null || v === '') return null;
+  const n = Math.round(Number(v));
+  return Number.isFinite(n) && n >= FREE_CANCEL_FIXED_MIN && n <= FREE_CANCEL_FIXED_MAX ? n : null;
+}
+// The host's form input: { offered, fee } to save, or { error } (the switch
+// on without a valid amount is refused). Switched off, the amount is kept
+// (null when none was sent) so switching back on remembers it.
+function parseFreeCancelSetting(offered, rawFee) {
+  const on = offered === true;
+  const empty = rawFee == null || String(rawFee).trim() === '';
+  let fee = null;
+  if (!empty) {
+    const n = Number(String(rawFee).replace(/[,\s₹]/g, ''));
+    if (!Number.isFinite(n) || Math.round(n) !== n || n < FREE_CANCEL_FIXED_MIN || n > FREE_CANCEL_FIXED_MAX) {
+      if (on) return { error: `Enter the free cancellation price as a whole amount between ₹${FREE_CANCEL_FIXED_MIN} and ₹${FREE_CANCEL_FIXED_MAX.toLocaleString('en-IN')}.`, reason: 'free_cancel_fee_invalid' };
+    } else fee = n;
+  }
+  if (on && fee == null) return { error: 'Enter the price guests pay for free cancellation (₹100 or more), or turn free cancellation off.', reason: 'free_cancel_fee_required' };
+  return { offered: on, fee };
+}
 function freeCancelUntilMs(arrival, zone, checkInTime) {
   return checkInMomentMs(arrival, zone, checkInTime) - FREE_CANCEL_HOURS * 3600e3;
 }
@@ -57,7 +110,10 @@ function freeCancelLabel(ms, zone) {
 function addOnOf(row) {
   const n = (k) => Math.max(0, Math.round(Number(row && row[k]) || 0));
   const refunded = !!row && (row.free_cancel_refunded === true || row.free_cancel_refunded === 'true');
-  return { fee: n('free_cancel_fee'), gst: n('free_cancel_gst'), commission: n('free_cancel_commission'), refunded };
+  // fixed: the host's amount it was sold with (null for bookings made before
+  // the host-set price, or before 2026-11-10-07-free-cancel-fee.sql).
+  const fx = row && row.free_cancel_fixed != null && row.free_cancel_fixed !== '' ? Math.round(Number(row.free_cancel_fixed)) : null;
+  return { fee: n('free_cancel_fee'), gst: n('free_cancel_gst'), commission: n('free_cancel_commission'), refunded, fixed: fx > 0 ? fx : null };
 }
 // Still inside the window (a transferred booking cannot be cancelled at all).
 function freeCancelActive(row, zone, checkInTime, nowMs = Date.now()) {
@@ -259,7 +315,11 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
                discount_min_nights, commission_rate, security_deposit,
                pet_friendly, max_pets_allowed, pet_fee, allowed_pet_types,
                max_guests, property_type, listing_type, timezone, to_jsonb(listings)->>'same_day_until' AS same_day_until,
-               to_jsonb(listings)->>'check_in_time' AS check_in_time
+               to_jsonb(listings)->>'check_in_time' AS check_in_time,
+               -- the host's choice (2026-11-10-06-free-cancel-optin.sql); missing = off
+               COALESCE((to_jsonb(listings)->>'free_cancel_offered')::boolean, false) AS free_cancel_offered,
+               -- the host's fixed price for it (2026-11-10-07-free-cancel-fee.sql); missing = not offered
+               to_jsonb(listings)->>'free_cancel_fee' AS free_cancel_fee
         FROM listings
         WHERE id = ${s.listingId} AND status = 'approved'
       `;
@@ -512,15 +572,28 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
 
       // Free cancellation add-on: always worked out (the page offers it with
       // its price), charged only when asked for (s.freeCancel === true) and
-      // offered. Never for a stay that comes with an experience, nor when
-      // the caller rules it out (s.noFreeCancel: group payments, changes).
+      // offered. Offered only where the host has chosen to offer it
+      // (listings.free_cancel_offered, off by default; owner, 10 Nov 2026).
+      // Never for a stay that comes with an experience, nor when the caller
+      // rules it out (s.noFreeCancel: group payments, changes). Asking for it
+      // on a listing whose host does not offer it is refused, never quietly
+      // dropped, so a page can't charge a total the guest didn't expect.
+      // A Resort's rooms book without it (the host form doesn't offer the choice).
+      // The host's fixed price is required: switched on without one (before
+      // hosts set the price) counts as not offered (owner, 10 Nov 2026).
+      const fcFixed = freeCancelFixedOf(listing);
+      const hostOffers = listing.free_cancel_offered === true && listing.property_type !== 'Resort' && fcFixed != null;
+      if (s.freeCancel === true && !hostOffers && !s.includedWithExperienceId && !s.noFreeCancel) {
+        return { error: `Stay ${i + 1}: ${listing.property_name} doesn't offer free cancellation. Please untick it to continue.`, reason: 'free_cancel_not_offered' };
+      }
       const fcUntil = freeCancelUntilMs(s.arrival, listing.timezone, listing.check_in_time);
-      const fcOffered = !s.includedWithExperienceId && !s.noFreeCancel && Number.isFinite(fcUntil) && Date.now() < fcUntil
+      const fcOffered = hostOffers && !s.includedWithExperienceId && !s.noFreeCancel && Number.isFinite(fcUntil) && Date.now() < fcUntil
         && await orderMoneyColumnsReady(sql);
-      const fcFee = Math.round(staySubtotal * FREE_CANCEL_PERCENT / 100);
+      // The host's fixed amount, kept between 5% and 30% of this stay's subtotal.
+      const fcFee = hostOffers ? freeCancelCharge(fcFixed, staySubtotal) : 0;
       const fcGst = Math.round(fcFee * stayTax.rate / 100);
       const fcCommission = Math.round(fcFee * (rates.host / 100));
-      const fcTaken = fcOffered && s.freeCancel === true;
+      const fcTaken = fcOffered && fcFee > 0 && s.freeCancel === true;
 
       return { detail: {
         listingId: listing.id,
@@ -551,12 +624,15 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
         withExperienceId: s.includedWithExperienceId || null,
         amenities: amenityDetails,
         // What the add-on would cost (shown at checkout), and what is charged.
-        freeCancelOffer: { offered: fcOffered, percent: FREE_CANCEL_PERCENT, fee: fcFee, gst: fcGst,
+        freeCancelOffer: { offered: fcOffered && fcFee > 0, fixed: hostOffers ? fcFixed : null, clamped: hostOffers && fcFee !== fcFixed ? (fcFee > fcFixed ? 'min' : 'max') : null,
+                           minPercent: FREE_CANCEL_MIN_PCT, maxPercent: FREE_CANCEL_MAX_PCT, fee: fcFee, gst: fcGst,
                            until: Number.isFinite(fcUntil) ? new Date(fcUntil).toISOString() : null, untilLabel: freeCancelLabel(fcUntil, listing.timezone) },
         freeCancelFee: fcTaken ? fcFee : 0,
         freeCancelGst: fcTaken ? fcGst : 0,
         freeCancelCommission: fcTaken ? fcCommission : 0,
         freeCancelUntil: fcTaken ? new Date(fcUntil).toISOString() : null,
+        // The host's fixed amount this booking was sold with (orders.free_cancel_fixed).
+        freeCancelFixed: fcTaken ? fcFixed : null,
       } };
 }
 
@@ -649,5 +725,6 @@ module.exports = {
   calculateNights, addDaysToDateStr, getNightsInRange, toDateStr, validateAndPriceAmenities,
   discountAmountFor, calculateDiscount, priceStay, priceExperience, parseMaxGuests,
   activePromotions, MAX_EXPERIENCE_GUESTS,
-  FREE_CANCEL_PERCENT, FREE_CANCEL_HOURS, freeCancelUntilMs, freeCancelLabel, addOnOf, freeCancelActive, orderMoneyColumnsReady
+  FREE_CANCEL_PERCENT, FREE_CANCEL_HOURS, FREE_CANCEL_MIN_PCT, FREE_CANCEL_MAX_PCT, FREE_CANCEL_FIXED_MIN, FREE_CANCEL_FIXED_MAX,
+  freeCancelCharge, freeCancelFixedOf, parseFreeCancelSetting, freeCancelUntilMs, freeCancelLabel, addOnOf, freeCancelActive, orderMoneyColumnsReady
 };

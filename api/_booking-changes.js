@@ -42,7 +42,7 @@
 // together; refunds go through _refunds.js (one per booking, payment and
 // purpose, checked with Razorpay).
 
-const { priceStay, priceExperience, parseMaxGuests, addOnOf, FREE_CANCEL_PERCENT, orderMoneyColumnsReady } = require('./_pricing');
+const { priceStay, priceExperience, parseMaxGuests, addOnOf, FREE_CANCEL_PERCENT, freeCancelCharge, orderMoneyColumnsReady } = require('./_pricing');
 const { localMidnightMs, dateStr, takeHolds, attachHolds, releaseHolds, holdValidForConfirmation, HOLD_SECONDS, stayWindowEndMs, localDateAt } = require('./_booking-rules');
 const { claimForCancellation, releaseClaim, postThreadMessage, returnCouponValue, returnValue } = require('./_cancellations');
 const { safeRefund, refundAcrossPayments, hasChangePayments, planRefundAcrossPayments, dropPlannedRefunds } = require('./_refunds');
@@ -89,17 +89,27 @@ function feeAfterChange(newFee, row) {
 // The free cancellation add-on (_pricing.js) on a changed stay. It stays
 // with the booking: a change of dates keeps it (its 48-hour window is
 // always worked out from the arrival, so it moves with the new check-in);
-// a shorter stay does not refund it; a change that ADDS nights adds
-// FREE_CANCEL_PERCENT of the added nights' price (the new stay's average
-// nightly price × the nights added), with GST at the stay's rate and Aerva's
-// commission at the host's rate on that part. Sets q.freeCancel* in place.
+// a shorter stay never refunds it (nor any change that lowers the price).
+// A change that ADDS nights (owner, 10 Nov 2026): the add-on is worked out
+// again from the host's fixed amount the booking was sold with
+// (orders.free_cancel_fixed — never the listing's current price), kept
+// between 5% and 30% of the NEW stay subtotal (_pricing.js
+// freeCancelCharge); only if that is more than what was paid is the
+// difference charged, with GST at the stay's rate and Aerva's commission at
+// the host's rate on that part. Bookings sold before the host-set price
+// (no fixed amount on the order) keep the rule they were sold with: added
+// nights add FREE_CANCEL_PERCENT of their price. Other changes (same
+// number of nights) leave it as paid. Sets q.freeCancel* in place.
 function addOnAfterChange(q, row) {
   const fc = addOnOf(row);
   q.freeCancelFee = fc.fee; q.freeCancelGst = fc.gst; q.freeCancelCommission = fc.commission; q.freeCancelExtra = 0;
+  q.freeCancelFixed = fc.fixed;
   if (fc.fee <= 0 || fc.refunded) return q;
   const added = Math.max(0, Number(q.nights) - Number(row.nights));
   if (added > 0 && Number(q.nights) > 0) {
-    const extra = Math.round(Number(q.subtotal) * added / Number(q.nights) * FREE_CANCEL_PERCENT / 100);
+    const extra = fc.fixed != null
+      ? Math.max(0, freeCancelCharge(fc.fixed, Number(q.subtotal)) - fc.fee)
+      : Math.round(Number(q.subtotal) * added / Number(q.nights) * FREE_CANCEL_PERCENT / 100);
     q.freeCancelExtra = extra;
     q.freeCancelFee += extra;
     q.freeCancelGst += Math.round(extra * (Number(q.gstRate) || 0) / 100);

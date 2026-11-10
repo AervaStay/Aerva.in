@@ -3782,3 +3782,34 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 .ag-modal{position:fixed; inset:0; background:rgba(28,26,23,0.45); z-index:5000; display:flex; align-items:center; justify-content:center; padding:16px;}
 .ag-modal-box{background:#fff; border-radius:14px; padding:22px 20px; width:100%; max-width:460px; max-height:90vh; overflow:auto; position:relative;}
 .ag-modal-x{position:absolute; top:8px; right:10px; border:0; background:none; font-size:26px; line-height:1; cursor:pointer; padding:6px;}
+
+/* ---- "Offer free cancellation to guests" (list-property form) ----
+   A switch: the real checkbox sits on top of the track, invisible, so a
+   tap, a keyboard and a screen reader all work it as a checkbox. */
+.fc-optin{padding:14px 16px; border:1px solid var(--line-dark); border-radius:10px; background:#fff; gap:6px;}
+.fc-optin .fc-switch{position:relative; display:flex; align-items:center; gap:12px; cursor:pointer;
+  font-size:15px; font-weight:500; letter-spacing:0; text-transform:none; color:var(--ink);}
+.fc-optin .fc-switch input{position:absolute; left:0; top:50%; transform:translateY(-50%); width:44px; height:26px; margin:0; padding:0; opacity:0; cursor:pointer; border:0;}
+.fc-switch-track{position:relative; flex:none; width:44px; height:26px; border-radius:13px; background:#cfc5b8; transition:background .15s;}
+.fc-switch-track::after{content:''; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .15s;}
+.fc-optin .fc-switch input:checked + .fc-switch-track{background:var(--gold-deep);}
+.fc-optin .fc-switch input:checked + .fc-switch-track::after{transform:translateX(18px);}
+.fc-optin .fc-switch input:focus-visible + .fc-switch-track{outline:2px solid var(--gold-deep); outline-offset:2px;}
+.fc-optin-help{margin:0; font-size:13px; line-height:1.55; color:var(--ink);}
+.fc-optin-muted{opacity:0.65; font-size:12.5px;}
+.fc-optin-warn{margin:4px 0 0; padding:8px 10px; font-size:13px; line-height:1.5; color:#7a3b12; background:#fbefe3; border-left:3px solid #b5651d; border-radius:4px;}
+.fc-price{margin-top:8px; display:flex; flex-direction:column; gap:6px;}
+.fc-price label{font-size:12px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.8;}
+.fc-price input{max-width:220px; width:100%; box-sizing:border-box;}
+.fc-example{opacity:0.8;}
+.fc-optin-warn[hidden], .fc-price[hidden]{display:none;}
+/* The listing page: near the refund policy. */
+.fc-available{margin:6px 0 0; font-size:12.5px; color:#2f5c2a;}
+/* Search → More filters: "Free cancellation available". */
+.more-filters-dropdown .search-field label.fc-filter,
+.pill-search .more-filters-dropdown .search-field label.fc-filter{display:flex; align-items:center; gap:10px; font-size:14px; letter-spacing:0; text-transform:none; font-weight:500; color:var(--ink); cursor:pointer; padding:6px 0;}
+.more-filters-dropdown .search-field label.fc-filter input,
+.pill-search .more-filters-dropdown .search-field label.fc-filter input{width:18px; height:18px; margin:0; padding:0; border:0; flex:none; accent-color:var(--gold-deep);}
+/* An option the page hides (e.g. free cancellation when it isn't offered)
+   must really go: .ag-opt's display:flex would otherwise win over [hidden]. */
+.ag-opt[hidden], .fc-available[hidden]{display:none;}

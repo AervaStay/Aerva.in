@@ -84,6 +84,7 @@ const { refundSubunitForInr } = require('./_currency');
 const { verifyRazorpaySignature } = require('./_razorpay-verify');
 const { COUPON_RELEASE_DELAY_MINUTES, sendCouponEmail } = require('./_coupons');
 const { loadPayoutSummary } = require('./_payouts');
+const cohostCoupon = require('./_cohost-coupon');
 const { safeRefund, refundAcrossPayments, hasChangePayments } = require('./_refunds');
 const { respondChange } = require('./_booking-changes');
 const { respondDispute } = require('./_stay-disputes');
@@ -1512,7 +1513,7 @@ module.exports = async (req, res) => {
       const me = (await sql`SELECT host_id, name, email FROM guests WHERE id = ${accountId}`)[0] || {};
       const rows = await sql`
         SELECT p.id, p.payee_type, COALESCE(to_jsonb(p)->>'kind', 'booking') AS kind, p.gross, p.commission, p.cohost_shares, p.deductions, p.tds, p.tds_rate, p.pan_furnished, p.net,
-               p.sent_at, p.reference, COALESCE(o.confirmation_code, '#' || o.id) AS code, o.suite_name, o.arrival, o.departure
+               p.deducted_penalty_ids, p.sent_at, p.reference, COALESCE(o.confirmation_code, '#' || o.id) AS code, o.suite_name, o.arrival, o.departure
         FROM payouts p JOIN orders o ON o.id = p.order_id
         WHERE p.status = 'sent' AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') >= ${start}::timestamp AND (p.sent_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp
           AND ((p.payee_type = 'host' AND p.host_id = ${me.host_id || 0}) OR (p.payee_type = 'cohost' AND p.payee_guest_id = ${accountId}))
@@ -1520,17 +1521,31 @@ module.exports = async (req, res) => {
       const q = (v) => { const t = v == null ? '' : String(v); return /[",\n]/.test(t) ? '"' + t.replace(/"/g, '""') + '"' : t; };
       const d = (v) => v ? new Date(v).toLocaleDateString('en-CA', { timeZone: 'Asia/Kolkata' }) : '';
       const n = (v) => (Math.round(Number(v || 0) * 100) / 100).toFixed(2);
-      const head = ['Payout ID', 'As', 'Type', 'Booking', 'Listing', 'Check-in', 'Check-out', 'Gross (INR)', 'Aerva commission (INR)', 'Co-host shares (INR)', 'Deductions (INR)', 'TDS (INR)', 'TDS rate %', 'PAN given', 'Net paid (INR)', 'Sent on', 'Bank reference'];
+      // A coupon a co-host paid and the host agreed to cover (_cohost-coupon.js)
+      // is a transfer between the two payouts, not income: it has its own
+      // column (− for the host, + for the co-host) and is in neither Gross
+      // nor Deductions, so Net = Gross − commission − co-host shares −
+      // deductions − TDS + coupon reimbursement on every row.
+      const head = ['Payout ID', 'As', 'Type', 'Booking', 'Listing', 'Check-in', 'Check-out', 'Gross (INR)', 'Aerva commission (INR)', 'Co-host shares (INR)', 'Deductions (INR)', 'TDS (INR)', 'TDS rate %', 'PAN given', 'Coupon reimbursement (INR)', 'Net paid (INR)', 'Sent on', 'Bank reference', 'Notes'];
       const lines = [`Aerva payout statement — ${me.name || me.email || ''} — ${m[1]}-${m[2]}`, '', head.join(',')];
-      const tot = { gross: 0, commission: 0, cohost: 0, deductions: 0, tds: 0, net: 0 };
+      const tot = { gross: 0, commission: 0, cohost: 0, deductions: 0, tds: 0, net: 0, reimb: 0 };
+      const rupees = (v) => '₹' + (Math.round(Number(v || 0) * 100) / 100).toLocaleString('en-IN');
+      let anyReimb = false;
       for (const r of rows) {
-        lines.push([r.id, r.payee_type === 'host' ? 'Host' : 'Co-host', r.kind === 'deposit' ? 'Deposit compensation' : 'Booking', r.code, r.suite_name, d(r.arrival), d(r.departure),
-          n(r.gross), n(r.commission), n(r.cohost_shares), n(r.deductions), n(r.tds), n(r.tds_rate), r.pan_furnished ? 'Yes' : 'No', n(r.net), d(r.sent_at), r.reference || ''].map(q).join(','));
-        tot.gross += Number(r.gross) || 0; tot.commission += Number(r.commission) || 0; tot.cohost += Number(r.cohost_shares) || 0;
-        tot.deductions += Number(r.deductions) || 0; tot.tds += Number(r.tds) || 0; tot.net += Number(r.net) || 0;
+        const isReimb = r.kind === cohostCoupon.PAYOUT_KIND;
+        const taken = isReimb ? [] : await cohostCoupon.deductionLines(sql, r.deducted_penalty_ids || []);
+        const takenSum = taken.reduce((t, x) => t + x.amount, 0);
+        const gross = isReimb ? 0 : Number(r.gross) || 0, deductions = (Number(r.deductions) || 0) - takenSum, reimb = isReimb ? Number(r.gross) || 0 : -takenSum;
+        const note = isReimb ? `Coupon for booking ${r.code}: +${rupees(r.gross)} (reimbursed by host)` : taken.map(x => `${x.label}: −${rupees(x.amount)}`).join('; ');
+        if (isReimb || taken.length) anyReimb = true;
+        lines.push([r.id, r.payee_type === 'host' ? 'Host' : 'Co-host', r.kind === 'deposit' ? 'Deposit compensation' : isReimb ? 'Coupon reimbursed by host' : 'Booking', r.code, r.suite_name, d(r.arrival), d(r.departure),
+          n(gross), n(r.commission), n(r.cohost_shares), n(deductions), n(r.tds), n(r.tds_rate), r.pan_furnished ? 'Yes' : 'No', n(reimb), n(r.net), d(r.sent_at), r.reference || '', note].map(q).join(','));
+        tot.gross += gross; tot.commission += Number(r.commission) || 0; tot.cohost += Number(r.cohost_shares) || 0;
+        tot.deductions += deductions; tot.tds += Number(r.tds) || 0; tot.net += Number(r.net) || 0; tot.reimb += reimb;
       }
-      lines.push(['Total', '', '', '', '', '', '', n(tot.gross), n(tot.commission), n(tot.cohost), n(tot.deductions), n(tot.tds), '', '', n(tot.net), '', ''].map(q).join(','));
+      lines.push(['Total', '', '', '', '', '', '', n(tot.gross), n(tot.commission), n(tot.cohost), n(tot.deductions), n(tot.tds), '', '', n(tot.reimb), n(tot.net), '', '', ''].map(q).join(','));
       lines.push('', 'TDS is deducted under section 194-O and credited against your PAN; it shows in your Form 26AS. Questions: raise a request in Aerva Support at aerva.in/index.html?view=help');
+      if (anyReimb) lines.push('Coupon reimbursement: a guest’s cancellation coupon paid by a co-host and covered by the host, moved by Aerva between their two payouts. It is a reimbursement, not income: no commission, no fee and no TDS, and the TDS base of both payouts is unchanged. Please confirm the treatment with your CA.');
       res.setHeader('Content-Type', 'text/csv; charset=utf-8');
       res.setHeader('Content-Disposition', `attachment; filename="aerva-payouts-${m[1]}-${m[2]}.csv"`);
       return res.status(200).send('\ufeff' + lines.join('\r\n'));
@@ -1570,11 +1585,45 @@ module.exports = async (req, res) => {
         listing: r.suite_name, arrival: r.arrival, departure: r.departure,
         // A deposit dispute paid to the host is its own payout (payouts.kind,
         // migration_payout_kinds.sql) — labelled like _payouts.js does.
-        kind: r.kind === 'deposit' ? 'deposit' : /^adjustment/.test(r.kind) ? 'adjustment' : /^rest/.test(r.kind) ? 'rest' : 'booking',
-        label: r.kind === 'deposit' ? 'Security deposit compensation' : /^adjustment/.test(r.kind) ? 'Booking changed after payout' : /^rest/.test(r.kind) ? 'Rest of booking payout' : 'Booking payout' })) });
+        kind: r.kind === 'deposit' ? 'deposit' : r.kind === cohostCoupon.PAYOUT_KIND ? 'cohost-coupon' : /^adjustment/.test(r.kind) ? 'adjustment' : /^rest/.test(r.kind) ? 'rest' : 'booking',
+        label: r.kind === 'deposit' ? 'Security deposit compensation' : r.kind === cohostCoupon.PAYOUT_KIND ? 'Coupon reimbursed by host' : /^adjustment/.test(r.kind) ? 'Booking changed after payout' : /^rest/.test(r.kind) ? 'Rest of booking payout' : 'Booking payout' })) });
     } catch (err) {
       console.error('payouts view failed:', err);
       return res.status(500).json({ error: 'Could not load payouts right now.' });
+    }
+  }
+
+  // ---- A coupon a co-host paid: asking the host to cover it (_cohost-coupon.js) ----
+  // Always the signed-in account itself, never "as" a host (no ?actingHost):
+  //   GET  ?cohostCoupons=1 → { toAnswer: requests for me as the host,
+  //                            mine: { askable, requests } as a co-host }
+  //   POST { cohostCouponAsk: { orderId, note } }        the co-host asks (within 30 days)
+  //   POST { cohostCouponAnswer: { requestId, accept } } the host's own account answers
+  if (req.method === 'GET' && (req.query || {}).cohostCoupons === '1' && req.query.actingHost === undefined) {
+    try {
+      const host = await cohostCoupon.forHost(sql, accountId);
+      const mine = await cohostCoupon.forCohost(sql, accountId);
+      return res.status(200).json({ available: host.available && mine.available, answerDays: cohostCoupon.ANSWER_DAYS, askDays: cohostCoupon.ASK_DAYS, noteMax: cohostCoupon.NOTE_MAX,
+        toAnswer: host.requests, mine: { askable: mine.askable || [], requests: mine.requests || [] } });
+    } catch (err) {
+      console.error('cohostCoupons failed:', err);
+      return res.status(500).json({ error: 'Could not load this right now.' });
+    }
+  }
+  if (req.method === 'POST' && req.body && (req.body.cohostCouponAsk || req.body.cohostCouponAnswer) && (req.query || {}).actingHost === undefined) {
+    try {
+      if (req.body.cohostCouponAsk) {
+        const b = req.body.cohostCouponAsk;
+        const request = await cohostCoupon.ask(sql, { orderId: b.orderId, cohostGuestId: accountId, note: b.note, from: 'later' });
+        return res.status(200).json({ success: true, request });
+      }
+      const b = req.body.cohostCouponAnswer;
+      if (typeof b.accept !== 'boolean') return res.status(400).json({ error: 'Choose Accept or Decline.' });
+      const out = await cohostCoupon.answer(sql, { requestId: b.requestId, guestId: accountId, accept: b.accept });
+      return res.status(200).json({ success: true, ...out });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('cohost coupon request failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json(Object.assign({ error: err.isUserFacing ? err.message : 'Could not do that right now. Please try again.' }, err.extra || {}));
     }
   }
 
@@ -3238,9 +3287,11 @@ module.exports = async (req, res) => {
       catch (e) { /* stays policy */ }
       if (loaded.error) return res.status(200).json({ canCancel: false, message: loaded.error, reasons, isExperience });
       const used = await hostCancellationsLastYear(sql, loaded.guest.host_id);
-      const held = (await sql`SELECT amount FROM coupons WHERE source_order_id = ${orderId} AND status = 'reserved' ORDER BY id DESC LIMIT 1`)[0];
+      const held = (await sql`SELECT amount, to_jsonb(coupons)->>'paid_by_guest_id' AS paid_by FROM coupons WHERE source_order_id = ${orderId} AND status = 'reserved' ORDER BY id DESC LIMIT 1`)[0];
       const couponAmount = held ? Number(held.amount) : await cancellationCouponAmount(loaded.order, orderId);
       const terms = await cancelTerms(loaded.order, orderId);
+      // A co-host paying the coupon may ask the host to cover it (_cohost-coupon.js).
+      const canAskHost = !!cohostActor && terms.couponNeeded !== false && couponAmount > 0 && (!held || Number(held.paid_by) === Number(accountId)) && await cohostCoupon.ready(sql);
       return res.status(200).json({
         late: terms.late, asCredit: terms.asCredit, couponNeeded: terms.couponNeeded, pairExperience: terms.pairExperience, sameDayGrace: terms.sameDayGrace,
         canCancel: used < HOST_CANCELLATIONS_PER_YEAR || terms.sameDayGrace,
@@ -3248,6 +3299,7 @@ module.exports = async (req, res) => {
         cancellationsUsed: used, cancellationsLimit: HOST_CANCELLATIONS_PER_YEAR,
         couponAmount, couponPaid: !!held, canDeductFromPayout: false, // the host always pays the coupon before cancelling
         couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES,
+        canAskHost, askHostNoteMax: cohostCoupon.NOTE_MAX, askHostAnswerDays: cohostCoupon.ANSWER_DAYS,
         reasons, isExperience
       });
     } catch (err) {
@@ -3305,7 +3357,9 @@ module.exports = async (req, res) => {
       if (payLater && cohostActor) return [400, { error: 'Co-hosts pay for the guest’s coupon before cancelling.', needsCoupon: true }];
       if (!held && !payLater) {
         const amount = await cancellationCouponAmount(loaded.order, orderId);
-        return [402, { error: `Pay the guest’s cancellation coupon (₹${amount.toLocaleString('en-IN')}) to cancel.`, needsCoupon: true, amount }];
+        // A co-host may ask the host to cover it (a tick box, before paying).
+        return [402, { error: `Pay the guest’s cancellation coupon (₹${amount.toLocaleString('en-IN')}) to cancel.`, needsCoupon: true, amount,
+          canAskHost: !!cohostActor && amount > 0 && await cohostCoupon.ready(sql), askHostNoteMax: cohostCoupon.NOTE_MAX, askHostAnswerDays: cohostCoupon.ANSWER_DAYS }];
       }
       const amountLater = held ? 0 : await cancellationCouponAmount(loaded.order, orderId);
 
@@ -3317,7 +3371,19 @@ module.exports = async (req, res) => {
       // its code (it is only emailed to the guest).
       if (held) {
         await scheduleCancellationCoupon(held.id, orderId);
-        return [200, { success: true, couponAmount: Number(held.amount), paid: 'now', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES, asCredit: terms.asCredit }];
+        // The co-host ticked "Ask the host to cover this coupon": the request
+        // goes to the host now. The booking is cancelled whatever happens here.
+        let askHost;
+        if (cohostActor && req.body.cancelBooking.askHost === true) {
+          try {
+            const rq = await cohostCoupon.ask(sql, { orderId, cohostGuestId: accountId, note: req.body.cancelBooking.askNote, from: 'cancel' });
+            askHost = { asked: true, requestId: rq.id, amount: rq.amount, answerBy: rq.answerBy };
+          } catch (err) {
+            if (!err.isUserFacing) console.error('co-host coupon request not sent (booking cancelled):', orderId, err);
+            askHost = { asked: false, error: err.isUserFacing ? err.message : 'The booking is cancelled, but the host could not be asked right now. You can ask from your earnings page within 30 days.' };
+          }
+        }
+        return [200, { success: true, couponAmount: Number(held.amount), paid: 'now', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES, asCredit: terms.asCredit, ...(askHost ? { askHost } : {}) }];
       }
       const issued = await issueCouponChargedToNextPayout(loaded.order, orderId, loaded.guest.host_id, amountLater);
       return [200, { success: true, couponAmount: issued.amount, paid: 'next_payout', couponReleaseMinutes: COUPON_RELEASE_DELAY_MINUTES }];
@@ -4119,6 +4185,9 @@ module.exports = async (req, res) => {
              experience_available_from, experience_available_until,
              -- read by "Clone listing" (aerva.js) to copy the pet policy and deposit
              pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
+             -- "Offer free cancellation to guests": resuming a draft or cloning keeps it
+             COALESCE((to_jsonb(listings)->>'free_cancel_offered')::boolean, false) AS free_cancel_offered,
+             (to_jsonb(listings)->>'free_cancel_fee')::int AS free_cancel_fee,
              -- resuming a draft keeps these (_listing-special.js); read this
              -- way so the dashboard loads before the migration
              COALESCE(to_jsonb(listings)->'special_highlights', '[]'::jsonb) AS special_highlights,

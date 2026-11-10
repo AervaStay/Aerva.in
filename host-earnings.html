@@ -250,7 +250,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
-<script src="aerva-cohost.js?v=2026-11-09a"></script>
+<script src="aerva-cohost.js?v=2026-11-11b"></script>
 </head>
 <body>
 
@@ -1011,7 +1011,15 @@
     }).then(async r => ({ ok: r.ok, status: r.status, data: await r.json().catch(() => ({})) }));
     const cancelNow = async (extra) => {
       const r = await post({ cancelBooking: Object.assign({ orderId, reasonCode, details: reason }, extra || {}) });
-      if(r.ok){ loadListings(); if(typeof loadPayoutDeductions === 'function') loadPayoutDeductions(); return true; }
+      if(r.ok){
+        // The co-host asked the host to cover the coupon: say what happened.
+        if(r.data.askHost){
+          window.__askHostNotice = r.data.askHost.asked
+            ? 'Booking cancelled. Your host has been asked to cover the ' + inr(r.data.askHost.amount) + ' coupon; you will hear here and by email.'
+            : 'Booking cancelled. ' + (r.data.askHost.error || 'The host could not be asked right now — you can ask below within 30 days.');
+        }
+        loadListings(); if(typeof loadPayoutDeductions === 'function') loadPayoutDeductions(); if(typeof loadCohostCoupons === 'function') loadCohostCoupons(); return true;
+      }
       show(r.data.error || 'Could not cancel this booking. Please try again.');
       return false;
     };
@@ -1033,9 +1041,20 @@
       }
       box.innerHTML = '<p style="font-size:14.5px; margin:0 0 6px;"><strong>Guest’s cancellation coupon: ' + inr(amount) + ' (10% of the booking).</strong></p>'
         + '<p style="font-size:13.5px; margin:0 0 12px; opacity:0.8;">Your guest is refunded (or, within 48 hours of check-in, everything they paid is held for them as Aerva credit) and gets this coupon by email 15 minutes later. The coupon is not refundable. This cannot be undone.</p>'
+        // A co-host may ask the host to cover it (optional; they still pay it now).
+        + (isCohostMode && first.data.canAskHost
+          ? '<label style="display:flex; gap:10px; align-items:flex-start; font-size:14.5px; margin:0 0 6px; cursor:pointer;"><input type="checkbox" data-ask-host style="margin-top:3px; width:18px; height:18px; flex:0 0 auto;"><span><strong>Ask the host to cover this coupon (' + inr(amount) + ')</strong></span></label>'
+            + '<p style="font-size:13px; margin:0 0 10px 28px; opacity:0.75;">Optional. You still pay it now. Your host has ' + (Number(first.data.askHostAnswerDays) || 7) + ' days to accept or decline. If they accept, ' + inr(amount) + ' is added to your next payout; if not, nothing moves through Aerva.</p>'
+            + '<div data-ask-note-wrap style="display:none; margin:0 0 12px 28px;"><label for="askNote-' + orderId + '" style="display:block; font-size:13px; opacity:0.75; margin-bottom:4px;">A short note to the host (optional)</label>'
+            + '<textarea id="askNote-' + orderId + '" data-ask-note rows="2" maxlength="' + (Number(first.data.askHostNoteMax) || 300) + '" style="width:100%; box-sizing:border-box; padding:9px 11px; border:1px solid #ddd0bc; border-radius:8px; font:inherit; font-size:14px;" placeholder="Why you had to cancel"></textarea></div>'
+          : '')
         + '<div style="display:flex; gap:8px; flex-wrap:wrap;">'
         + '<button type="button" class="btn-small" data-choice="now">Pay ' + inr(amount) + ' now and cancel</button>'
         + '</div>';
+      const askBox = box.querySelector('[data-ask-host]');
+      if(askBox) askBox.addEventListener('change', () => { box.querySelector('[data-ask-note-wrap]').style.display = askBox.checked ? 'block' : 'none'; });
+      // What the last step sends along: the tick and the note, when ticked.
+      const askExtra = () => (askBox && askBox.checked) ? { askHost: true, askNote: (box.querySelector('[data-ask-note]').value || '').trim() } : undefined;
       if(box.querySelector('[data-choice="later"]')) box.querySelector('[data-choice="later"]').addEventListener('click', async () => {
         box.querySelectorAll('button').forEach(b => { b.disabled = true; });
         if(await cancelNow({ payLater: true })) box.remove(); else box.querySelectorAll('button').forEach(b => { b.disabled = false; });
@@ -1043,7 +1062,7 @@
       box.querySelector('[data-choice="now"]').addEventListener('click', async () => {
         const buy = await post({ buyCouponOrder: { bookingId: orderId } });
         if(!buy.ok){ show(buy.data.error || 'Could not start the coupon payment.'); return; }
-        if(buy.data.alreadyPaid){ if(await cancelNow()) box.remove(); return; }
+        if(buy.data.alreadyPaid){ if(await cancelNow(askExtra())) box.remove(); return; }
         if(!window.Razorpay){ show('Payment is not available right now. Please try again in a moment.'); return; }
         new window.Razorpay({
           key: buy.data.keyId, amount: buy.data.amount * 100, currency: 'INR', order_id: buy.data.razorpayOrderId,
@@ -1051,7 +1070,7 @@
           handler: async (resp) => {
             const v = await post({ verifyCouponPayment: { couponId: buy.data.couponId, ...resp } });
             if(!v.ok){ show(v.data.error || 'Could not confirm the coupon payment. Please raise a request in Aerva Support (Help → Raise a request).'); return; }
-            if(await cancelNow()) box.remove();
+            if(await cancelNow(askExtra())) box.remove();
           }
         }).open();
       });
@@ -1545,11 +1564,72 @@ async function loadMyPayouts(){
     const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     box.innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500; font-size:22px; margin:0 0 8px;">Payouts</h2>'
       + list.map(p => `<a href="index.html?payout=${Number(p.id)}" style="display:flex; justify-content:space-between; gap:12px; padding:12px 0; border-top:1px solid #f0e9df; color:inherit; text-decoration:none; font-size:14.5px;">
-          <span><strong>${inr(p.amount)}</strong>${p.mine ? (p.as === 'cohost' ? ' · to you, as co-host' : ' · to you') : ' · to ' + esc(p.payeeName || (p.as === 'cohost' ? 'co-host' : 'host'))}<br><span style="opacity:0.7;">${p.kind === 'deposit' ? 'Security deposit compensation · ' : ''}${esc(p.listing || '')} · ${esc(day(p.arrival))} – ${esc(day(p.departure))}</span></span>
+          <span><strong>${inr(p.amount)}</strong>${p.mine ? (p.as === 'cohost' ? ' · to you, as co-host' : ' · to you') : ' · to ' + esc(p.payeeName || (p.as === 'cohost' ? 'co-host' : 'host'))}<br><span style="opacity:0.7;">${p.kind === 'deposit' ? 'Security deposit compensation · ' : p.kind === 'cohost-coupon' ? 'Coupon reimbursed by host · ' : ''}${esc(p.listing || '')} · ${esc(day(p.arrival))} – ${esc(day(p.departure))}</span></span>
           <span style="opacity:0.7; text-align:right;">Sent ${esc(day(p.sentAt))}${p.arrivingBy ? '<br>Arriving by ' + esc(day(p.arrivingBy)) : ''}</span></a>`).join('');
   }catch(err){ /* leave the page as it is */ }
 }
 if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadMyPayouts); else loadMyPayouts();
+</script>
+<script>
+// Coupons this account paid as a co-host (a cancellation within 48 hours of
+// check-in): ask the host to cover one, within 30 days, and see what the
+// host answered. Always this account's own (never routed as the host):
+// host-listings.js ?cohostCoupons=1 / cohostCouponAsk (api/_cohost-coupon.js).
+async function loadCohostCoupons(){
+  const token = (function(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } })();
+  if(!token) return;
+  const API = (window.AERVA_API || 'https://aerva-in.vercel.app') + '/api/host-listings';
+  const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+  const inr = (n) => '₹' + Number(n || 0).toLocaleString('en-IN');
+  const day = (v) => { const d = new Date(v); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'Asia/Kolkata' }); };
+  const stay = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }); };
+  let box = document.getElementById('cohostCouponSection');
+  try{
+    const res = await fetch(API + '?cohostCoupons=1', { headers: { 'Authorization': 'Bearer ' + token } });
+    const data = await res.json();
+    const mine = (res.ok && data.available && data.mine) || { askable: [], requests: [] };
+    const notice = window.__askHostNotice || ''; window.__askHostNotice = '';
+    if(!mine.askable.length && !mine.requests.length && !notice){ if(box) box.remove(); return; }
+    if(!box){
+      box = document.createElement('section');
+      box.id = 'cohostCouponSection';
+      box.style.cssText = 'margin:0 0 28px; background:#fff; border:1px solid #ece4d8; border-radius:12px; padding:16px 18px;';
+      const after = document.getElementById('myPayoutsSection') || document.getElementById('payoutDeductionNote') || document.querySelector('.wrap .top-row');
+      if(after) after.after(box); else (document.querySelector('.wrap') || document.body).prepend(box);
+    }
+    const state = (r) => r.status === 'pending' ? 'Asked on ' + esc(day(r.askedAt)) + ' · waiting for ' + esc(r.hostName) + ' (until ' + esc(day(r.answerBy)) + ')'
+      : r.status === 'accepted' ? '<strong>Accepted.</strong> ' + esc(inr(r.amount)) + ' is deducted from the host’s next payout and paid to you then, with nothing taken off.'
+      : r.status === 'reimbursed' ? '<strong>Reimbursed by host:</strong> +' + esc(inr(r.amount)) + (r.cohostPayoutId ? ' · <a href="index.html?payout=' + Number(r.cohostPayoutId) + '" style="color:#8a6c39;">payout</a> (shows once it is sent)' : '')
+      : r.status === 'declined' ? '<strong>Declined by the host.</strong> Nothing moves through Aerva; you can settle it with the host directly.'
+      : r.status === 'expired' ? '<strong>No answer in ' + (Number(data.answerDays) || 7) + ' days.</strong> Nothing moves through Aerva; you can settle it with the host directly.'
+      : 'Closed: nothing moves through Aerva. You can settle it with the host directly.';
+    const head = (x) => '<strong>' + esc(x.listing) + '</strong> · ' + esc(stay(x.arrival)) + ' – ' + esc(stay(x.departure)) + ' · ' + esc(x.guestFirstName) + '<br><span style="opacity:0.7;">Booking ' + esc(x.booking) + ' · cancelled ' + esc(day(x.cancelledAt)) + ' · coupon you paid: ' + esc(inr(x.amount)) + '</span>';
+    box.innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500; font-size:22px; margin:0 0 4px;">Coupons you paid as a co-host</h2>'
+      + '<p style="font-size:13.5px; opacity:0.75; margin:0 0 8px;">You can ask the host to cover a coupon within ' + (Number(data.askDays) || 30) + ' days of the cancellation, once per booking. If they accept, it is added to your next payout.</p>'
+      + (notice ? '<p role="status" style="font-size:14px; margin:0 0 8px; padding:10px 12px; background:#faf6ef; border-radius:8px;">' + esc(notice) + '</p>' : '')
+      + mine.askable.map(a => '<div data-ask-row="' + Number(a.orderId) + '" style="padding:12px 0; border-top:1px solid #f0e9df; font-size:14.5px;">' + head(a)
+          + '<div style="margin-top:8px;"><label for="askLater-' + Number(a.orderId) + '" style="display:block; font-size:13px; opacity:0.75; margin-bottom:4px;">A short note to the host (optional)</label>'
+          + '<textarea id="askLater-' + Number(a.orderId) + '" rows="2" maxlength="' + (Number(data.noteMax) || 300) + '" style="width:100%; box-sizing:border-box; padding:9px 11px; border:1px solid #ddd0bc; border-radius:8px; font:inherit; font-size:14px;"></textarea>'
+          + '<button type="button" class="btn-small" data-ask-later="' + Number(a.orderId) + '" style="margin-top:8px;">Ask the host to cover this coupon (' + esc(inr(a.amount)) + ')</button>'
+          + '<span style="display:block; font-size:12.5px; opacity:0.65; margin-top:6px;">You can ask until ' + esc(day(a.askBy)) + '.</span>'
+          + '<p data-ask-err style="display:none; color:#a3402f; font-size:13.5px; margin:6px 0 0;"></p></div></div>').join('')
+      + mine.requests.map(r => '<div style="padding:12px 0; border-top:1px solid #f0e9df; font-size:14.5px;">' + head(r) + '<div style="margin-top:6px;">' + state(r) + '</div></div>').join('');
+    box.querySelectorAll('[data-ask-later]').forEach(btn => btn.addEventListener('click', async () => {
+      const orderId = Number(btn.dataset.askLater);
+      const row = box.querySelector('[data-ask-row="' + orderId + '"]');
+      const err = row.querySelector('[data-ask-err]');
+      btn.disabled = true; err.style.display = 'none';
+      try{
+        const r = await fetch(API, { method: 'POST', headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + token },
+          body: JSON.stringify({ cohostCouponAsk: { orderId, note: (document.getElementById('askLater-' + orderId).value || '').trim() } }) });
+        const d = await r.json().catch(() => ({}));
+        if(r.ok){ window.__askHostNotice = 'Your host has been asked. You will hear here and by email.'; loadCohostCoupons(); return; }
+        err.textContent = d.error || 'Could not send this right now. Please try again.'; err.style.display = 'block'; btn.disabled = false;
+      }catch(e){ err.textContent = 'Could not send this right now. Please try again.'; err.style.display = 'block'; btn.disabled = false; }
+    }));
+  }catch(err){ /* leave the page as it is */ }
+}
+if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadCohostCoupons); else loadCohostCoupons();
 </script>
 <script>
 // Guest cancellation requests. Each shows only the choice for that

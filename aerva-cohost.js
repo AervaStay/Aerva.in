@@ -45,7 +45,7 @@
   // Must match the co-host allowlists in guest-profile.js.
   var MESSAGE_MODES = ['myConversations', 'conversationMessages', 'hostConversationMessages', 'unreadMessageCount', 'send', 'unsend', 'react', 'translate', 'conversationTemplates'];
   var TEMPLATE_MODES = ['templates', 'saveTemplate', 'deleteTemplate', 'myListingsGuidance', 'saveListingGuidance'];
-  var COHOST_ADMIN = ['inviteCohost', 'updateCohost', 'removeCohost', 'resendCohostInvite', 'acceptCohostInvite', 'declineCohostInvite', 'leaveCohost', 'saveCohostDetails', 'savePayoutProfile', 'proposeCommission'];
+  var COHOST_ADMIN = ['inviteCohost', 'updateCohost', 'removeCohost', 'resendCohostInvite', 'acceptCohostInvite', 'declineCohostInvite', 'leaveCohost', 'saveCohostDetails', 'savePayoutProfile', 'proposeCommission', 'cohostCouponAsk', 'cohostCouponAnswer'];
 
   function bodyJson(init){
     try{ return init && typeof init.body === 'string' ? JSON.parse(init.body) : null; }catch(e){ return null; }
@@ -64,6 +64,14 @@
     (list || []).forEach(function(c){ if(c && c.id != null) hostConvIds[String(c.id)] = true; });
     try{ sessionStorage.setItem(HOST_CONVS_KEY, JSON.stringify(Object.keys(hostConvIds))); }catch(e){}
   }
+  // A limited co-host without messages (or templates) access: those
+  // requests stay their own — their own trips' messages and unread count —
+  // instead of being routed to the host and refused. Unknown permissions
+  // (an older saved acting-host entry): routed as before; the server decides.
+  function mayUse(perm){
+    if(acting.access !== 'limited' || !Array.isArray(acting.permissions)) return true;
+    return acting.permissions.indexOf(perm) !== -1;
+  }
   // Modes that name one conversation: routed only when it is the host's.
   var PER_CONVERSATION = ['conversationMessages', 'hostConversationMessages', 'send', 'unsend', 'react', 'conversationTemplates'];
 
@@ -81,7 +89,8 @@
           var isConversationList = false;
           if(isProfileApi){
             var mode = u.searchParams.get('mode') || (body && body.mode);
-            route = MESSAGE_MODES.indexOf(mode) !== -1 || TEMPLATE_MODES.indexOf(mode) !== -1;
+            route = (MESSAGE_MODES.indexOf(mode) !== -1 && mayUse('messages')) || (TEMPLATE_MODES.indexOf(mode) !== -1 && mayUse('templates'))
+              || (mode === 'conversationTemplates' && mayUse('templates'));
             if(route && PER_CONVERSATION.indexOf(mode) !== -1){
               var convId = u.searchParams.get('conversationId') || (body && body.conversationId);
               if(body && body.role === 'guest') route = false;            // their own trip
@@ -96,7 +105,9 @@
             // Managing co-hosts, or one's own co-hosting, is never done
             // "as" someone else.
             // Nor are one's own payouts (as host or co-host): personal, like myCohosting.
-            if(u.searchParams.get('cohosts') || u.searchParams.get('myCohosting') || u.searchParams.get('myPayouts') || u.searchParams.get('myPayoutProfile') || u.searchParams.has('ifsc') || u.searchParams.has('payoutDetail')) route = false;
+            // Nor is a coupon one paid as a co-host (asking the host to cover it), or
+            // answering such a request as the host: always one's own account.
+            if(u.searchParams.get('cohosts') || u.searchParams.get('myCohosting') || u.searchParams.get('cohostCoupons') || u.searchParams.get('myPayouts') || u.searchParams.get('myPayoutProfile') || u.searchParams.has('ifsc') || u.searchParams.has('payoutDetail')) route = false;
             if(body && COHOST_ADMIN.some(function(k){ return body[k]; })) route = false;
           }
           if(route){

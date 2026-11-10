@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-10w"></script>
+<script src="aerva-policies.js?v=2026-11-11b"></script>
 </head>
 <body>
 
@@ -758,8 +758,11 @@
     <p style="opacity:0.7; font-size:14px;">Paid on their own, separate from the booking payout: what a host is paid from a guest’s deposit after a dispute is decided, what a host or co-host is owed when a booking grew after its payout was sent, and the rest of a booking’s payout that was held while a guest’s request made during the stay was open (only the first night is paid until it is settled). When a booking shrinks after its payout was sent, the difference is deducted from the payee’s next payout instead (listed below with the coupons).</p>
     <div id="depositPayoutsList"><p style="opacity:0.6;">Loading…</p></div>
     <h2 style="margin-top:40px;">Amounts to deduct from hosts and co-hosts</h2>
-    <p style="opacity:0.7; font-size:14px;">When a host or co-host cancels without paying for the guest’s 10% coupon, the coupon still goes to the guest and whoever cancelled owes the amount: from the host’s next payout, or from the co-host’s own share. Deduct it, then mark it recovered. Over 6 months unrecovered: decide whether to chase it or write it off.</p>
+    <p style="opacity:0.7; font-size:14px;">Amounts a host or co-host owes Aerva: money recovered after a refund or a check-in promise decision, and older cancellation coupons from before 10 Nov 2026 (since then the host pays the 10% coupon before any cancellation, so no new coupon amounts appear here). They are taken from the host’s next payout, or from the co-host’s own share; mark each one recovered. Over 6 months unrecovered: decide whether to chase it or write it off.</p>
     <div id="penaltiesList"><p style="opacity:0.6;">Loading…</p></div>
+    <h2 style="margin-top:40px;">Co-host coupon requests</h2>
+    <p style="opacity:0.7; font-size:14px;">A co-host who cancels within 48 hours of check-in pays the guest’s 10% coupon themselves, and may ask the host to cover it (within 30 days; the host has 7 days to answer). If the host accepts, the amount is deducted from the host’s next payout and paid to the co-host once that payout is sent — Aerva only moves it between the two: no commission, no fee, no TDS. Declined or unanswered: nothing moves. For information only; nothing to do here.</p>
+    <div id="cohostCouponList"><p style="opacity:0.6;">Loading…</p></div>
     <h2 style="margin-top:40px;">Booking payouts</h2>
     <p style="opacity:0.7; font-size:14px;">The 200 most recent paid bookings: the host payout (after Aerva’s commission), each co-host’s share, and what the host keeps, with where each is paid. “Hold” means that person’s bank details are not approved yet.</p>
     <div id="payoutsList"><p style="opacity:0.6;">Loading…</p></div>
@@ -1384,6 +1387,7 @@
         ${cloneAlertHtml}
         <div class="meta">${metaLine}</div>
         <div class="meta" style="opacity:0.6;">Submitted ${escAdmin(fmtDate(l.created_at))}</div>
+        ${!isExperience ? `<div class="meta" data-free-cancel="${l.free_cancel_offered === true ? (Number(l.free_cancel_fee) >= 100 ? 'on' : 'no-price') : 'off'}">Refund policy: ${escAdmin(l.cancellation_policy === 'firm' ? 'Firm' : 'Flexible')} · Free cancellation add-on: <strong>${l.free_cancel_offered === true ? (Number(l.free_cancel_fee) >= 100 ? `Offered at ₹${escAdmin(Math.round(Number(l.free_cancel_fee)).toLocaleString('en-IN'))} per booking` : 'Not offered (switched on, no price set)') : 'Not offered'}</strong> <span style="opacity:0.6;">(the host’s choice — no review needed; each booking pays it kept between 5% and 30% of the stay price)</span></div>` : ''}
         ${addressHtml}
         <div class="desc">${escAdmin(l.description)}</div>
         ${specialReviewHtml(l)}
@@ -2258,14 +2262,23 @@
       const dps = data.depositPayouts || [];
       document.getElementById('depositPayoutsList').innerHTML = dps.length ? dps.map(p => `
         <div class="listing" style="padding:12px 16px; margin-bottom:8px; font-size:14px;${p.status === 'failed' || p.status === 'due' ? ' border-left:3px solid #a3402f;' : ''}">
-          <strong>${escAdmin(p.listing || '')}</strong> · booking #${Number(p.orderId)} · ${p.kind === 'deposit' ? 'deposit compensation' : p.kind === 'rest' ? 'rest of the booking payout (held while a guest’s request was open)' : 'booking changed after payout'} · ${p.payeeType === 'cohost' ? 'co-host' : 'host'} <strong>${escAdmin(p.payeeName || p.hostName || '')}</strong> · <strong>${payInr(p.net)}</strong>
+          <strong>${escAdmin(p.listing || '')}</strong> · booking #${Number(p.orderId)} · ${p.kind === 'deposit' ? 'deposit compensation' : p.kind === 'cohost-coupon' ? 'cancellation coupon reimbursed by the host (no commission, no TDS)' : p.kind === 'rest' ? 'rest of the booking payout (held while a guest’s request was open)' : 'booking changed after payout'} · ${p.payeeType === 'cohost' ? 'co-host' : 'host'} <strong>${escAdmin(p.payeeName || p.hostName || '')}</strong> · <strong>${payInr(p.net)}</strong>
           ${depositPayoutControl(p)}
         </div>`).join('') : '<p style="opacity:0.6;">No other payouts.</p>';
+      const ccs = data.cohostCouponRequests || [];
+      const ccState = { pending: 'Waiting for the host', accepted: 'Accepted: waiting for the host’s next payout', reimbursed: 'Deducted from the host; payout to the co-host created', declined: 'Declined by the host: nothing moves', expired: 'No answer in 7 days: nothing moves', closed: 'Closed: the host’s amount was written off, nothing moves' };
+      document.getElementById('cohostCouponList').innerHTML = data.cohostCouponsAvailable === false ? '<p style="opacity:0.6;">Not available yet: apply the database update 2026-11-10-08-cohost-coupon-requests.sql.</p>'
+        : ccs.length ? ccs.map(c => `
+        <div class="listing" style="padding:12px 16px; margin-bottom:8px; font-size:14px;">
+          <strong>${escAdmin(c.listing || '')}</strong> · booking ${escAdmin(c.booking || '')} (#${Number(c.orderId)}) · ${payDate(c.arrival)} → ${payDate(c.departure)} · <strong>${payInr(c.amount)}</strong>
+          <div style="margin-top:4px;">Co-host <strong>${escAdmin(c.cohostName || '')}</strong> asked host <strong>${escAdmin(c.hostName || '')}</strong> on ${payDate(c.askedAt)}${c.note ? ' — “' + escAdmin(c.note) + '”' : ''}</div>
+          <div style="margin-top:4px; opacity:0.8;">${escAdmin(ccState[c.status] || c.status)}${c.status === 'pending' ? ' (until ' + payDate(c.answerBy) + ')' : c.decidedAt ? ' · ' + payDate(c.decidedAt) : ''}${c.hostPayoutId ? ' · host payout #' + Number(c.hostPayoutId) : ''}${c.cohostPayoutId ? ' · co-host payout #' + Number(c.cohostPayoutId) : ''}</div>
+        </div>`).join('') : '<p style="opacity:0.6;">No requests.</p>';
       const pens = data.penalties || [];
       document.getElementById('penaltiesList').innerHTML = pens.length ? pens.map(p => `
         <div class="listing" style="padding:14px 18px; margin-bottom:10px; font-size:14px;${p.overSixMonths ? ' border-left:3px solid #a3402f;' : ''}">
           ${p.payer === 'cohost' ? `Co-host <strong>${escAdmin(p.payerName)}</strong> (for host ${escAdmin(p.hostName || '')})` : `<strong>${escAdmin(p.hostName || 'Host #' + p.hostId)}</strong>`} owes <strong>${payInr(p.amount)}</strong>
-          · ${p.kind === 'overpaid' ? 'overpaid: ' + escAdmin(p.booking || '') + ' (booking #' + (Number(p.orderId) || '—') + ') was reduced after its payout was sent, on ' + payDate(p.createdAt) + ' — deducted from their next payout automatically' : 'cancelled ' + escAdmin(p.booking || '') + ' (booking #' + (Number(p.orderId) || '—') + ') on ' + payDate(p.createdAt)}
+          · ${p.kind === 'cohost_coupon' ? 'agreed to cover the cancellation coupon their co-host paid for ' + escAdmin(p.booking || '') + ' (booking #' + (Number(p.orderId) || '—') + '), on ' + payDate(p.createdAt) + ' — deducted from their next payout automatically; the co-host is paid once it is taken' : p.kind === 'overpaid' ? 'overpaid: ' + escAdmin(p.booking || '') + ' (booking #' + (Number(p.orderId) || '—') + ') was reduced after its payout was sent, on ' + payDate(p.createdAt) + ' — deducted from their next payout automatically' : 'cancelled ' + escAdmin(p.booking || '') + ' (booking #' + (Number(p.orderId) || '—') + ') on ' + payDate(p.createdAt)}
           ${p.overSixMonths ? '<span style="color:#a3402f;"> · over 6 months — decide</span>' : ''}
           <div style="margin-top:8px; display:flex; gap:8px; flex-wrap:wrap; align-items:center;">
             <button class="approve-btn" onclick="settlePenalty(${Number(p.id)}, 'recovered')">Recovered from payout</button>
@@ -2979,8 +2992,28 @@
       t.timings ? `<div><strong>Timeline</strong><br>First reply: ${t.timings.firstResponseMinutes != null ? escAdmin(supDur(t.timings.firstResponseMinutes)) : `<span style="color:${new Date(t.timings.firstResponseDueAt) < new Date() ? '#a3402f' : 'inherit'};">due by ${escAdmin(supDate(t.timings.firstResponseDueAt))}</span>`}<br>Resolved: ${t.timings.resolvedMinutes != null ? 'after ' + escAdmin(supDur(t.timings.resolvedMinutes)) : '—'}</div>` : '',
       `<div><strong>Request</strong><br>${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}<br>Status: ${escAdmin(labels[t.status] || t.status)}<br>Raised ${escAdmin(supDate(t.created_at))}${t.first_response_at ? '<br>First reply ' + escAdmin(supDate(t.first_response_at)) : '<br><span style="color:#a3402f;">No reply yet</span>'}</div>`,
       t.order_id ? `<div><strong>Booking #${Number(t.order_id)}</strong>${t.confirmation_code ? ' · ' + escAdmin(t.confirmation_code) : ''}<br>${escAdmin(t.suite_name || '')}<br>${escAdmin(day(t.arrival))} → ${escAdmin(day(t.departure))}<br>${escAdmin(t.booking_status || '')}${t.total != null ? ' · ₹' + Number(t.total).toLocaleString('en-IN') : ''}${t.booking_guest_id != null && Number(t.booking_guest_id) !== Number(t.guest_id) ? '<br><em>Raised by the host of this booking</em>' : ''}</div>` : '',
-      t.property_name ? `<div><strong>Listing${t.listing_id ? ' #' + Number(t.listing_id) : ''}</strong><br>${escAdmin(t.property_name)}<br>${escAdmin(t.listing_status || '')}</div>` : ''
+      t.property_name ? `<div><strong>Listing${t.listing_id ? ' #' + Number(t.listing_id) : ''}</strong><br>${escAdmin(t.property_name)}<br>${escAdmin(t.listing_status || '')}</div>` : '',
+      supBookingsHtml(d)
     ].filter(Boolean).join('');
+  }
+  // The person's bookings (as a guest; for a host, the bookings at their
+  // listings), so a request can be looked into without leaving it.
+  function supBookingsHtml(d){
+    const B = d.bookings || {}, asGuest = B.asGuest || [], asHost = B.asHost || [];
+    if(!d.ticket.guest_id) return '';
+    const WHEN = { now: 'Staying now', upcoming: 'Upcoming', past: 'Stay ended', cancelled: 'Cancelled' };
+    const row = (b, host) => `<tr${b.thisRequest ? ' style="background:#fbf3e3;"' : ''}>
+        <td><strong>${escAdmin(b.code || '#' + Number(b.id))}</strong>${b.thisRequest ? '<br><span class="tds-sub">this request</span>' : ''}</td>
+        <td>${escAdmin(b.suite || '')}${host && b.guestName ? '<br><span class="tds-sub">Guest: ' + escAdmin(b.guestName) + '</span>' : ''}</td>
+        <td style="white-space:nowrap;">${escAdmin(b.arrival)} → ${escAdmin(b.departure)}<br><span class="tds-sub">${Number(b.nights)} night${Number(b.nights) === 1 ? '' : 's'} · ${Number(b.guests)} guest${Number(b.guests) === 1 ? '' : 's'}</span></td>
+        <td>${escAdmin(WHEN[b.when] || b.status)}${b.when === 'cancelled' && b.cancelledBy ? '<br><span class="tds-sub">by ' + escAdmin(b.cancelledBy) + (b.refundPercent != null ? ' · ' + Number(b.refundPercent) + '% refunded' : '') + '</span>' : ''}${b.openChange ? '<br><span class="sup-flag sup-late">Change open</span>' : ''}${b.openCancel ? '<br><span class="sup-flag sup-late">Cancellation asked</span>' : ''}</td>
+        <td style="white-space:nowrap;">${b.total != null ? '₹' + Number(b.total).toLocaleString('en-IN') : ''}${b.deposit ? '<br><span class="tds-sub">deposit ₹' + Number(b.deposit).toLocaleString('en-IN') + (b.depositStatus ? ' · ' + escAdmin(b.depositStatus) : '') + '</span>' : ''}</td>
+        <td><button type="button" class="lk-link" onclick="switchTab('lookup'); lkOpen('booking', ${Number(b.id)})">Open ›</button></td></tr>`;
+    const table = (title, list, host) => `<div style="margin-top:6px;"><strong>${title}</strong>${list.length
+      ? `<div style="overflow-x:auto;"><table class="tds-table" style="width:100%; margin-top:6px; font-size:13.5px;"><thead><tr><th>Code</th><th>Place</th><th>Dates</th><th>Status</th><th>Total</th><th></th></tr></thead><tbody>${list.map(b => row(b, host)).join('')}</tbody></table></div>`
+      : '<br><span class="tds-sub">None.</span>'}</div>`;
+    return `<div style="grid-column:1 / -1;">${table('Their bookings as a guest' + (asGuest.length === 10 ? ' (latest 10)' : ''), asGuest, false)}${asHost.length ? table('Bookings at their listings' + (asHost.length === 10 ? ' (latest 10)' : ''), asHost, true) : ''}
+      <div class="lk-links" style="margin-top:6px;"><button type="button" class="lk-link" onclick="switchTab('lookup'); lkOpen('guest', ${Number(d.ticket.guest_id)})">Open their account in Lookup ›</button></div></div>`;
   }
   // The timeline, oldest first. Redrawn on its own by the live updates, so
   // whatever is being typed below it is never lost.
@@ -3840,7 +3873,7 @@ function lkBookingHtml(d){
           <label class="lk-check"><input type="checkbox" id="lkFee" onchange="lkHidePreview(); document.getElementById('lkFeeWhyWrap').style.display = this.checked ? '' : 'none';"> Also refund Aerva’s service fee${Number(b.guest_service_fee) ? ` (${lkInr(b.guest_service_fee)})` : ''} — only for Aerva’s mistake or an exceptional case</label>
           <label class="lk-wide" id="lkFeeWhyWrap" style="display:none;">Why the service fee is refunded (required, recorded)<textarea id="lkFeeWhy" maxlength="500" placeholder="e.g. Aerva's own error charged the guest twice"></textarea></label>
           <label class="lk-check" title="Use when Aerva cancels for the host (e.g. a host emergency within 48 hours)"><input type="checkbox" id="lkHostCount"> Count as the host’s cancellation</label>
-          <label class="lk-check lk-wide" title="A host who has used their 3 cancellations a year asks Aerva to cancel"><input type="checkbox" id="lkForHost" onchange="lkHidePreview(); ['lkPct','lkFee','lkHostCount'].forEach(i => { const e = document.getElementById(i); if(e) e.disabled = this.checked; });"> Cancel for the host (over their limit): the host is asked to confirm in a support request first. On their confirmation, everything the guest paid — price, GST and Aerva’s fee — is held for them as Aerva credit (refundable at any time), and the deposit is refunded. Within 48 hours of check-in, you then issue the guest a 10% coupon (paid by Aerva, deducted from the host’s next payout)</label>
+          <label class="lk-check lk-wide" title="A host who has used their 3 cancellations a year asks Aerva to cancel"><input type="checkbox" id="lkForHost" onchange="lkHidePreview(); ['lkPct','lkFee','lkHostCount'].forEach(i => { const e = document.getElementById(i); if(e) e.disabled = this.checked; });"> Cancel for the host (over their limit): the host is asked to confirm in a support request first. On their confirmation, everything the guest paid — price, GST and Aerva’s fee — is held for them as Aerva credit (refundable at any time), and the deposit is refunded. Within 48 hours of check-in (when the host confirms), the host must first pay the guest’s 10% coupon to confirm; it is then sent to the guest automatically. Aerva does not pay it or deduct it later</label>
           <label class="lk-wide">Reason (the guest and host see this)<textarea id="lkCancelReason" maxlength="400" placeholder="e.g. Host emergency — flooding in the area; full refund agreed"></textarea></label>
           <button type="button" class="lk-btn is-ghost" onclick="lkCancelPreview(${Number(b.id)})">Preview the refund</button>
           <button type="button" class="lk-btn is-danger" id="lkCancelBtn" onclick="lkCancel(${Number(b.id)})">Cancel booking</button>
@@ -3856,7 +3889,7 @@ function lkBookingHtml(d){
           <button type="button" class="lk-btn" id="lkRefundBtn" onclick="lkRefund(${Number(b.id)}, ${Number(m.refundable)})">Refund</button>
         </div><p class="lk-msg" id="lkRefundMsg"></p></div>` : ''}
     </div>` : ''}
-    ${(d.hostCancel || []).length ? `<div class="lk-actions"><h3>Cancelling for the host</h3>${d.hostCancel.map(c => `<p>Request <strong>${lkEsc(c.ref || '#' + c.id)}</strong> · asked ${lkDay(c.created_at)} · ${{ pending: 'waiting for the host to confirm', confirmed: 'confirmed by the host — booking cancelled', declined: 'declined by the host', failed: 'confirmed, but the cancellation failed — check Refunds', withdrawn: 'withdrawn' }[c.status] || lkEsc(c.status)}${c.status === 'confirmed' ? (Number(c.coupon_amount) > 0 ? (c.coupon_issued_at ? ` · coupon of ${lkInr(c.coupon_amount)} issued ${lkDay(c.coupon_issued_at)}` : ` · <strong>coupon of ${lkInr(c.coupon_amount)} to issue</strong>`) : ' · no coupon (more than 48 hours before check-in)') : ''}</p>${c.status === 'confirmed' && Number(c.coupon_amount) > 0 && !c.coupon_issued_at && (window.ADMIN_ROLE || 'admin') === 'admin' ? `<button type="button" class="lk-btn" id="lkIssueCoupon" onclick="lkIssueHostCoupon(${Number(b.id)}, ${Number(c.coupon_amount)})">Issue the coupon (${lkInr(c.coupon_amount)}) — paid by Aerva, deducted from the host’s next payout</button><p class="lk-msg" id="lkIssueMsg"></p>` : ''}`).join('')}</div>` : ''}
+    ${(d.hostCancel || []).length ? `<div class="lk-actions"><h3>Cancelling for the host</h3>${d.hostCancel.map(c => `<p>Request <strong>${lkEsc(c.ref || '#' + c.id)}</strong> · asked ${lkDay(c.created_at)} · ${{ pending: 'waiting for the host to confirm', confirmed: 'confirmed by the host — booking cancelled', declined: 'declined by the host', failed: 'confirmed, but the cancellation failed — check Refunds', withdrawn: 'withdrawn' }[c.status] || lkEsc(c.status)}${c.status === 'confirmed' ? (Number(c.coupon_amount) > 0 ? ` · ${c.coupon_issued_by === 'paid by the host' ? 'the host paid' : 'coupon'} ${lkInr(c.coupon_amount)} for the guest’s coupon${c.coupon_issued_at ? ', sent ' + lkDay(c.coupon_issued_at) : ''}` : ' · no coupon (more than 48 hours before check-in)') : ''}</p>`).join('')}</div>` : ''}
     <div id="lkPropose"></div>
     <div id="lkRecords"></div>
     <div class="lk-grid">
@@ -3885,7 +3918,7 @@ async function lkCancelPreview(id){
       + `${!d.feeRefunded && d.feeKept ? `; the ${lkInr(d.feeKept)} service fee is kept` : ''}.`)
       + `${d.alreadyRefunded ? ` ${lkInr(d.alreadyRefunded)} refunded earlier counts toward this, so that much less goes out now.` : ''}`
       + ` Host is paid <strong>${lkInr(d.hostPayout)}</strong>.${(d.items || []).length > 1 ? ` Cancels: ${d.items.map(lkEsc).join(' + ')}.` : ''}`
-      + `${(document.getElementById('lkForHost') || {}).checked ? (d.couponForGuest ? ` Check-in is within 48 hours: once the host confirms, issue the guest a <strong>${lkInr(d.couponForGuest)}</strong> coupon (paid by Aerva, deducted from the host’s next payout).` : ' No coupon: check-in is more than 48 hours away.') : ''}`;
+      + `${(document.getElementById('lkForHost') || {}).checked ? (d.couponForGuest ? ` Check-in is within 48 hours: to confirm, the host must first pay the guest’s <strong>${lkInr(d.couponForGuest)}</strong> coupon (10%); it is then sent to the guest automatically. Aerva does not pay it.` : ' No coupon now: check-in is more than 48 hours away (if the host confirms within 48 hours, they pay the 10% coupon first).') : ''}`;
     box.style.display = 'block';
     return d;
   }catch(err){ msg.textContent = err.message; msg.className = 'lk-msg is-err'; return null; }
@@ -3895,27 +3928,17 @@ async function lkCancel(id){
   if(reason.length < 5){ msg.textContent = 'Write the reason first — the guest and host are told it.'; msg.className = 'lk-msg is-err'; return; }
   const p = await lkCancelPreview(id); if(!p) return;
   const forHost = !!(document.getElementById('lkForHost') || {}).checked;
-  if(!confirm(forHost ? `Ask the host to confirm this cancellation? Nothing is cancelled until they confirm in the support request raised for them; then the guest gets ${lkInr((p.heldAsCredit || 0) + (p.refundCash || 0))} back as Aerva credit (deposit to their card)${p.couponForGuest ? `, and you issue the ${lkInr(p.couponForGuest)} coupon (deducted from the host’s next payout)` : ''}.` : `Cancel this booking and refund ${lkInr(p.refundCash)} to the guest${p.couponBack ? ` (+ ${lkInr(p.couponBack)} coupon)` : ''}? This cannot be undone.`)) return;
+  if(!confirm(forHost ? `Ask the host to confirm this cancellation? Nothing is cancelled until they confirm in the support request raised for them; then the guest gets ${lkInr((p.heldAsCredit || 0) + (p.refundCash || 0))} back as Aerva credit (deposit to their card)${p.couponForGuest ? `, after the host pays the guest’s ${lkInr(p.couponForGuest)} coupon (Aerva does not pay it)` : ''}.` : `Cancel this booking and refund ${lkInr(p.refundCash)} to the guest${p.couponBack ? ` (+ ${lkInr(p.couponBack)} coupon)` : ''}? This cannot be undone.`)) return;
   const btn = document.getElementById('lkCancelBtn'); btn.disabled = true; btn.textContent = forHost ? 'Asking the host…' : 'Cancelling…';
   try{
     const d = await lkPost(lkCancelBody(id, false));
     if(d.awaitingHost){
-      msg.textContent = `Request ${d.ref} raised for the host. Nothing is cancelled until they confirm it in the Resolution Center${d.couponAmount ? `; a ${lkInr(d.couponAmount)} coupon would then be yours to issue` : ''}.`; msg.className = 'lk-msg is-ok';
+      msg.textContent = `Request ${d.ref} raised for the host. Nothing is cancelled until they confirm it in the Resolution Center${d.couponAmount ? `; within 48 hours of check-in they pay the guest’s ${lkInr(d.couponAmount)} coupon to confirm` : ''}.`; msg.className = 'lk-msg is-ok';
       setTimeout(lkLoadDetail, 1400); return;
     }
-    msg.textContent = `Cancelled. ${lkInr(d.refundCash)} refunded${d.couponBack ? ` + ${lkInr(d.couponBack)} coupon` : ''}${d.couponForGuest ? `; a ${lkInr(d.couponForGuest)} coupon goes to the guest in 15 minutes, deducted from the host’s next payout` : ''}. Guest and host emailed.`; msg.className = 'lk-msg is-ok';
+    msg.textContent = `Cancelled. ${lkInr(d.refundCash)} refunded${d.couponBack ? ` + ${lkInr(d.couponBack)} coupon` : ''}. Guest and host emailed.`; msg.className = 'lk-msg is-ok';
     setTimeout(lkLoadDetail, 1400);
   }catch(err){ msg.textContent = err.message; msg.className = 'lk-msg is-err'; btn.disabled = false; btn.textContent = 'Cancel booking'; }
-}
-async function lkIssueHostCoupon(id, amount){
-  const msg = document.getElementById('lkIssueMsg'); msg.className = 'lk-msg';
-  if(!confirm(`Issue the guest a ${lkInr(amount)} coupon now? Aerva pays it, and it is deducted from the host’s next payout.`)) return;
-  const btn = document.getElementById('lkIssueCoupon'); btn.disabled = true;
-  try{
-    const d = await lkPost({ issueHostCancelCoupon: { orderId: id } });
-    msg.textContent = `Issued: the guest gets the ${lkInr(d.amount)} coupon by email in about 15 minutes. It is deducted from the host’s next payout.`; msg.className = 'lk-msg is-ok';
-    setTimeout(lkLoadDetail, 1400);
-  }catch(err){ msg.textContent = err.message; msg.className = 'lk-msg is-err'; btn.disabled = false; }
 }
 async function lkRefund(id, max){
   const msg = document.getElementById('lkRefundMsg'); msg.className = 'lk-msg';
@@ -4061,7 +4084,7 @@ function lkListingHtml(d){
         <div class="lk-links">${l.host_guest_id ? `<button type="button" class="lk-link" onclick="lkOpen('guest', ${Number(l.host_guest_id)})">Open host account ›</button>` : ''}
         <a class="lk-link" style="text-decoration:none;" href="index.html?${isExp ? 'experience' : 'listing'}=${Number(l.id)}" target="_blank" rel="noopener">View on the site ↗</a></div></div>
       <div class="lk-card"><h4>Listing</h4>${lkKv('Address', lkEsc(l.formatted_address || '—'))}${!isExp && l.nightly_rate ? lkKv('Nightly rate', lkInr(l.nightly_rate)) : ''}
-        ${l.max_guests ? lkKv('Max guests', Number(l.max_guests)) : ''}${lkKv('Cancellation policy', lkEsc(l.cancellation_policy || 'flexible'))}${lkKv('Upcoming bookings', upcoming.length)}</div>
+        ${l.max_guests ? lkKv('Max guests', Number(l.max_guests)) : ''}${lkKv('Cancellation policy', lkEsc(l.cancellation_policy || 'flexible'))}${!isExp ? lkKv('Free cancellation add-on', l.free_cancel_offered === true ? (Number(l.free_cancel_fee) >= 100 ? `Offered at ${lkInr(Math.round(Number(l.free_cancel_fee)))} per booking (host’s price, kept between 5% and 30% of each stay)` : 'Not offered — switched on, no price set') : 'Not offered') : ''}${lkKv('Upcoming bookings', upcoming.length)}</div>
     </div>
     ${actions.length && (window.ADMIN_ROLE || 'admin') === 'admin' ? `<div class="lk-actions"><h3>Act directly (admin)</h3><p>Blocking or removing hides the listing from guests at once and emails the host. Existing bookings are not cancelled — open each one below to cancel it if needed.${upcoming.length ? ` <strong>This listing has ${upcoming.length} upcoming booking${upcoming.length === 1 ? '' : 's'}.</strong>` : ''}</p>
       <div class="lk-act"><div class="lk-form">

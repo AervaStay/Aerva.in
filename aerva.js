@@ -2211,6 +2211,9 @@
       priceRow.style.display = 'none';
       priceInput.required = false;
       priceResortNote.style.display = 'block';
+      // A resort's rooms are booked without the free cancellation add-on.
+      const fcField = document.getElementById('listFreeCancelField');
+      if(fcField){ fcField.style.display = 'none'; document.getElementById('listFreeCancelOffered').checked = false; syncListFreeCancel(); }
       // Max Guests is per-room only for a Resort (see submit-listing.js,
       // which already doesn't require this field there) — removed from
       // view entirely rather than just made optional. A field a host
@@ -2232,6 +2235,8 @@
       guestsRow.style.display = '';
       guestsSelect.required = true;
       guestsResortNote.style.display = 'none';
+      const fcField = document.getElementById('listFreeCancelField');
+      if(fcField){ fcField.style.display = ''; syncListFreeCancel(); }
     }
     // Fixed categories genuinely differ by property type (see
     // currentFixedRoomSpaces above) — rebuilt here so switching between
@@ -2413,6 +2418,57 @@
     return { urls: results.map(r => r ? r.url : null), hashes: results.map(r => r ? r.hash : null) };
   }
 
+  // ---- Free cancellation price (owner, 10 Nov 2026) ----
+  // Switched on, the host sets a fixed ₹ amount per booking; each booking
+  // pays it kept between 5% and 30% of its stay price (api/_pricing.js
+  // freeCancelCharge — the same rule, so the example matches checkout).
+  let listFreeCancelNeedsPrice = false;   // switched on before hosts set a price (a resumed draft / clone)
+  function listFreeCancelCharge(fixed, subtotal){
+    const f = Math.round(Number(fixed)), sub = Number(subtotal);
+    if(!(f > 0) || !(sub > 0)) return 0;
+    const lo = Math.ceil(sub * 5 / 100), hi = Math.floor(sub * 30 / 100);
+    return hi < lo ? Math.max(0, hi) : Math.min(hi, Math.max(lo, f));
+  }
+  function listFreeCancelProblem(){
+    const t = document.getElementById('listFreeCancelOffered'), fee = document.getElementById('listFreeCancelFee');
+    if(!t || !fee || !t.checked || document.getElementById('listType').value === 'Resort') return '';
+    const raw = fee.value.trim(), n = Number(raw);
+    if(raw === '') return 'Enter the price guests pay for free cancellation (₹100 or more), or turn free cancellation off.';
+    if(!Number.isInteger(n) || n < 100 || n > 100000) return 'Enter the free cancellation price as a whole amount between ₹100 and ₹1,00,000.';
+    return '';
+  }
+  function syncListFreeCancel(){
+    const t = document.getElementById('listFreeCancelOffered'), fee = document.getElementById('listFreeCancelFee');
+    const wrap = document.getElementById('listFreeCancelPriceWrap'), ex = document.getElementById('listFreeCancelExample');
+    if(!t || !fee || !wrap || !ex) return;
+    const on = t.checked;
+    wrap.hidden = !on;
+    const warn = document.getElementById('listFreeCancelNeedsPrice');
+    if(warn) warn.hidden = !(on && listFreeCancelNeedsPrice && !(Number(fee.value) >= 100));
+    const nightly = hostAmountToInr(document.getElementById('listPrice').value);
+    const fixed = Math.round(Number(fee.value));
+    if(!on || !(nightly > 0) || !(fixed >= 100) || fixed > 100000){
+      ex.textContent = on && !(nightly > 0) && fixed >= 100 ? 'Enter the nightly rate above to see an example.' : '';
+      return;
+    }
+    const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
+    const two = nightly * 2, week = nightly * 7;
+    ex.textContent = `For example, on a 2-night stay of ${inr(two)}, guests would pay ${inr(listFreeCancelCharge(fixed, two))}; on a 7-night stay of ${inr(week)}, ${inr(listFreeCancelCharge(fixed, week))}.`;
+  }
+  // Sets the switch and price from a saved listing (resuming a draft, cloning).
+  function setListFreeCancel(src){
+    const t = document.getElementById('listFreeCancelOffered'), fee = document.getElementById('listFreeCancelFee');
+    if(t) t.checked = !!src && src.free_cancel_offered === true;
+    if(fee) fee.value = src && Number(src.free_cancel_fee) > 0 ? String(Math.round(Number(src.free_cancel_fee))) : '';
+    listFreeCancelNeedsPrice = !!src && src.free_cancel_offered === true && !(Number(src.free_cancel_fee) >= 100);
+    syncListFreeCancel();
+  }
+  ['listFreeCancelOffered', 'listFreeCancelFee', 'listPrice', 'listPricingCurrency'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el){ el.addEventListener('input', syncListFreeCancel); el.addEventListener('change', syncListFreeCancel); }
+  });
+  syncListFreeCancel();
+
   async function saveListing(isDraft){
     const confirmEl = listingForm.querySelector('.listing-confirm');
     const draftConfirmEl = listingForm.querySelector('.listing-draft-confirm');
@@ -2438,6 +2494,15 @@
     if(specialProblem){
       errorEl.textContent = specialProblem;
       errorEl.style.display = 'block';
+      return;
+    }
+    // Free cancellation on: its price is required, drafts included (the server refuses it too).
+    const fcProblem = listFreeCancelProblem();
+    if(fcProblem){
+      errorEl.textContent = fcProblem;
+      errorEl.style.display = 'block';
+      const fcFee = document.getElementById('listFreeCancelFee');
+      if(fcFee) fcFee.focus();
       return;
     }
 
@@ -2723,6 +2788,10 @@
           allowedPetTypes: petFriendlyYes.checked ? collectCheckedValues('PetTypes') : [],
           petFee: petFriendlyYes.checked ? hostAmountToInr(document.getElementById('listPetFee').value) : '',
           securityDeposit: hostAmountToInr(document.getElementById('listSecurityDeposit').value),
+          // "Offer free cancellation to guests" — off unless ticked (drafts too).
+          freeCancelOffered: !!(document.getElementById('listFreeCancelOffered') || {}).checked && document.getElementById('listType').value !== 'Resort',
+          // Its fixed ₹ price per booking (kept when switched off, for switching back on).
+          freeCancelFee: (() => { const v = ((document.getElementById('listFreeCancelFee') || {}).value || '').trim(); return v === '' ? null : Number(v); })(),
           hostName: document.getElementById('listHostName').value,
           hostPhone: document.getElementById('listHostPhone').value,
           latitude: document.getElementById('listLatitude').value,
@@ -2911,6 +2980,7 @@
         if(box) box.checked = true;
       });
       document.getElementById('listSecurityDeposit').value = draft.security_deposit || '';
+      setListFreeCancel(draft);
       if(draft.pet_friendly){
         petFriendlyYes.checked = true;
         document.getElementById('listMaxPets').value = draft.max_pets_allowed || '';
@@ -3470,6 +3540,7 @@
       if(box) box.checked = true;
     });
     document.getElementById('listSecurityDeposit').value = source.security_deposit || '';
+    setListFreeCancel(source);
     if(source.pet_friendly){
       petFriendlyYes.checked = true;
       document.getElementById('listMaxPets').value = source.max_pets_allowed || '';
@@ -5503,12 +5574,19 @@
       if(l.max_pets_allowed && Number(l.max_pets_allowed) < guestCounts.pets) return false;
     }
     if(!passesBadgeFilter(l, 'stay')) return false;
+    // "Free cancellation available": the host offers the add-on (not a
+    // Resort — its rooms book without it).
+    const fcFilter = document.getElementById('freeCancelFilter');
+    if(fcFilter && fcFilter.checked && !(l.free_cancel_offered === true && l.property_type !== 'Resort')) return false;
     return true;
   }
 
   // Experiences have no nightly rate or pet policy, so the badge filter
   // is the only one that applies to them.
   function passesExperienceFilters(e){
+    // Experiences never have the free cancellation add-on.
+    const fcFilter = document.getElementById('freeCancelFilter');
+    if(fcFilter && fcFilter.checked) return false;
     return !!e && passesBadgeFilter(e, 'experience');
   }
 
@@ -8585,6 +8663,7 @@
         <span class="inbox-status-tag ${tag.cls}">${esc(tag.label)}</span>
         <h3 class="bd-title">${esc(conv.property_name || 'Your stay')}</h3>
         <p class="bd-sub">${esc([place, isHostView ? 'Guest: ' + (conv.counterpart_name || conv.guest_email || 'Guest') : 'Hosted by ' + (conv.counterpart_name || 'your host')].filter(Boolean).join(' · '))}</p>
+        ${conv.order_id && conv.confirmation_code ? `<p class="bd-sub" style="margin-top:4px;">Booking code: <strong style="letter-spacing:0.04em;">${esc(conv.confirmation_code)}</strong></p>` : ''}
         ${conv.inquiry && !conv.order_id ? `
         <div class="bd-section">
           <div class="bd-section-title">Asked about</div>
@@ -8612,7 +8691,12 @@
             : `<p class="bd-note">Message ${esc(conv.counterpart_name || 'your host')} right here. For your safety, keep every conversation and payment on Aerva.</p>`}
         </div>
         ${!isHostView && conv.order_id ? `<a class="bd-link" href="index.html?view=my-bookings">View booking in My Bookings</a>` : ''}
-        ${isHostView && conv.order_id && conv.booking_status === 'paid' ? `
+        ${isHostView && conv.order_id && conv.booking_status === 'paid' && conv.host_cancel_state === 'support' ? `
+        <div class="bd-section">
+          <div class="bd-section-title">Cancel this booking</div>
+          <p class="bd-note">Check-in time has passed, so only Aerva can cancel this booking now. If you truly cannot host this guest, <a href="index.html?view=help&new=1&category=cancellation_refund&order=${encodeURIComponent(conv.order_id)}">raise a request in Aerva Support</a>.</p>
+        </div>` : ''}
+        ${isHostView && conv.order_id && conv.booking_status === 'paid' && (conv.host_cancel_state === 'open' || conv.host_cancel_state === undefined) ? `
         <div class="bd-section hc-cancel" id="hcCancel">
           <div class="bd-section-title">Cancel this booking</div>
           <p class="bd-note">Only if you truly cannot host this guest. You will see exactly what it means before anything happens.</p>
@@ -8727,6 +8811,10 @@
           <p class="hc-cancel-head">Last step: compensate your guest</p>
           <p>${d.couponPaid ? `You have already paid the guest’s ${inr(amount)} coupon. Cancelling now sends it to them.`
             : `Your guest gets a ${inr(amount)} Aerva coupon, paid by you now. The booking is cancelled the moment your payment goes through.`}</p>
+          ${d.canAskHost ? `<label class="hc-check" for="hcAskHost"><input type="checkbox" id="hcAskHost"> <span><strong>Ask the host to cover this coupon (${inr(amount)})</strong></span></label>
+          <p class="bd-note" style="margin:0 0 10px;">Optional. You still pay it now. Your host has ${Number(d.askHostAnswerDays) || 7} days to accept or decline. If they accept, ${inr(amount)} is added to your next payout; if not, nothing moves through Aerva.</p>
+          <div id="hcAskNoteWrap" hidden><label class="hc-label" for="hcAskNote">A short note to the host <span class="hc-opt">(optional)</span></label>
+          <textarea id="hcAskNote" class="hc-input" rows="2" maxlength="${Number(d.askHostNoteMax) || 300}" placeholder="Why you had to cancel"></textarea></div>` : ''}
           <div class="hc-actions hc-col">
             ${d.couponPaid ? `<button type="button" class="hc-btn hc-danger" data-pay="held">Cancel the booking</button>`
               : `<button type="button" class="hc-btn hc-danger" data-pay="now">Pay ${inr(amount)} now and cancel</button>
@@ -8738,8 +8826,12 @@
       const btns = () => body.querySelectorAll('button');
       const busy = (on) => btns().forEach(b => { b.disabled = on; });
       document.getElementById('hcBack').addEventListener('click', () => startHostCancel(conv));
+      // A co-host may ask the host to cover the coupon they are about to pay.
+      const askBox = document.getElementById('hcAskHost');
+      if(askBox) askBox.addEventListener('change', () => { document.getElementById('hcAskNoteWrap').hidden = !askBox.checked; });
+      const askExtra = () => (askBox && askBox.checked) ? { askHost: true, askNote: (document.getElementById('hcAskNote').value || '').trim() } : {};
       const cancelNow = async (extra) => {
-        const r = await api('', { method: 'POST', body: JSON.stringify({ cancelBooking: Object.assign({ orderId: Number(conv.order_id), reasonCode, details }, extra || {}) }) });
+        const r = await api('', { method: 'POST', body: JSON.stringify({ cancelBooking: Object.assign({ orderId: Number(conv.order_id), reasonCode, details }, askExtra(), extra || {}) }) });
         if(r.ok){ done(r.data); return true; }
         err(r.data.error || 'Could not cancel this booking. Please try again.'); busy(false); return false;
       };
@@ -8766,7 +8858,7 @@
     function done(r){
       body.innerHTML = `<div class="hc-done"><p class="hc-cancel-head">Booking cancelled</p>
         <p>The booking is cancelled and your guest has been told${r.couponAmount ? `; they receive the ${inr(r.couponAmount)} coupon you paid for` : ''}.
-</p></div>`;
+</p>${r.askHost ? `<p>${r.askHost.asked ? `Your host has been asked to cover the ${inr(r.askHost.amount)} coupon. You will hear in My Earnings and by email.` : esc(r.askHost.error || 'The host could not be asked right now. You can ask from My Earnings within 30 days.')}</p>` : ''}</div>`;
       conv.booking_status = 'cancelled';
       try{ refreshInboxMessages(); loadInboxConversations(); }catch(e){}
     }
@@ -10269,6 +10361,7 @@
             ${offerLine ? `<div class="offer" style="margin-top:4px;">${offerLine}</div>` : ''}
             ${promoOfferLine ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${promoOfferLine}</div>` : ''}
             ${formatPromotionHint(listing) ? `<div class="offer" style="margin-top:4px; color:#2f5c2a;">${formatPromotionHint(listing)}</div>` : ''}
+            ${listing.free_cancel_offered === true ? '<p class="fc-available" data-free-cancel-line>Free cancellation available at checkout</p>' : ''}
             ${bookStep(1, 'Choose your dates')}
             <div id="availabilityCalendar" data-listing-id="${listing.id}">
               <p style="font-size:13px; opacity:0.6;">Loading availability…</p>
@@ -11300,6 +11393,7 @@
         <p style="font-size:11.5px; opacity:0.55; margin-top:8px;">Checking the exact total…</p>
       </div>
       <p style="font-size:12px; opacity:0.75; margin-top:10px; padding-top:10px; border-top:1px solid var(--line-dark);"><strong>Cancellation:</strong> ${cancellationPolicyText(listing.cancellation_policy)}</p>
+      ${listing.free_cancel_offered === true ? '<p class="fc-available" id="listingFreeCancelAvail">Free cancellation available at checkout</p>' : ''}
     `;
     summaryEl.style.display = 'block';
     if(actionEl) actionEl.style.display = 'block';
@@ -11315,6 +11409,13 @@
       if(q) aervaRefreshSplit({ total: Number(q.total || 0) + Number(q.feeCredit || 0), guests: counts.adults + counts.children });
     }).catch(err => {
       if(!quoteBody.isConnected) return;
+      // The host stopped offering free cancellation while the page was
+      // open: the option goes and the price is checked again without it.
+      if(err && err.reason === 'free_cancel_not_offered'){
+        const t = document.getElementById('listingFreeCancelToggle'), opt = document.getElementById('listingFreeCancelOpt');
+        if(opt) opt.hidden = true;
+        if(t && t.checked){ t.checked = false; aervaRepriceListing(); return; }
+      }
       if(err && err.fromServer) quoteBody.innerHTML = aervaQuoteErrorHtml(err);
       else { const note = quoteBody.querySelector('p:last-child'); if(note) note.textContent = 'We could not check the exact total just now. It is shown again before you pay.'; }
     });
@@ -13762,6 +13863,7 @@
   document.getElementById('badgeFilter').addEventListener('change', applyFiltersAndRender);
   document.getElementById('minPrice').addEventListener('input', applyFiltersAndRender);
   document.getElementById('maxPrice').addEventListener('input', applyFiltersAndRender);
+  { const fcf = document.getElementById('freeCancelFilter'); if(fcf) fcf.addEventListener('change', applyFiltersAndRender); }
   // Debounced, and re-runs a full performSearch() rather than the
   // client-side applyFiltersAndRender() min/max price use — this filter
   // needs the server to check real per-room availability against the
@@ -13800,6 +13902,7 @@
     document.getElementById('minPrice').value = '';
     document.getElementById('maxPrice').value = '';
     document.getElementById('roomsNeeded').value = '';
+    { const fcf = document.getElementById('freeCancelFilter'); if(fcf) fcf.checked = false; }
     document.getElementById('searchStatus').style.display = 'none';
     searchStatusCounts = null;
     searchCenter = null;
@@ -15130,7 +15233,7 @@
           <div class="payout-muted payout-center">${esc(day(p.arrival))} – ${esc(day(p.departure))}<br>${esc(p.listing)}</div>
           <div class="payout-row"><div><div class="payout-label">Booking</div><div class="payout-muted payout-ref">${esc(p.booking)}</div></div></div>
           <div class="payout-label" style="margin-top:14px;">Earnings</div>
-          ${p.lines.map(l => `<div class="payout-line"><span>${esc(l.label)}</span><span>${l.value < 0 ? '−' : ''}${inr(Math.abs(l.value))}</span></div>`).join('')}
+          ${p.lines.map(l => `<div class="payout-line"><span>${esc(l.label)}</span><span style="white-space:nowrap;">${l.value < 0 ? '−' : ''}${inr(Math.abs(l.value))}</span></div>`).join('')}
           <div class="payout-line payout-total"><span>Total (INR)</span><span>${inr(p.amount)}</span></div>
           ${p.note ? `<p class="payout-muted" style="margin:12px 0 0; font-size:13px;">${esc(p.note)}</p>` : ''}
         </div>`;
@@ -15211,7 +15314,7 @@ function aervaQuote(slot, body){
     .then(async r => {
       const d = await r.json().catch(() => ({}));
       if(aervaQuoteSeq[slot] !== n) return null;                 // a newer quote was asked for
-      if(!r.ok) throw Object.assign(new Error(d.error || 'We could not work out the price just now.'), { fromServer: r.status < 500 });
+      if(!r.ok) throw Object.assign(new Error(d.error || 'We could not work out the price just now.'), { fromServer: r.status < 500, reason: d.reason || null });
       return d;
     }, err => { if(aervaQuoteSeq[slot] !== n) return null; throw err; });
 }
@@ -15794,7 +15897,7 @@ function openReportProblem(orderId, listingName){
     <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 6px;">Report a problem</h2>
     <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}</p>
     <p class="step-help">Tell your host and Aerva what is wrong, with photos. Aerva decides after hearing your host.</p>
-    <p class="step-help" id="rpPromise" style="background:#f4eadc; border-radius:8px; padding:10px 12px;"><strong>Aerva’s check-in promise:</strong> if the place does not exist, or is not as listed or not available when you arrive, Aerva treats it as urgent. If Aerva confirms it, you are offered other places nearby (you pay only any difference; if it costs less, the difference comes back as Aerva credit) — or everything you paid is refunded in full, including Aerva’s service fee.</p>
+    <p class="step-help" id="rpPromise" style="background:#f4eadc; border-radius:8px; padding:10px 12px;"><strong>Aerva’s check-in promise:</strong> if the place does not exist, or is not as listed or not available when you arrive, report it now, on your check-in day (no later than 10 AM the next day). Waiting can cost you your booking payment. Aerva treats it as urgent. If Aerva confirms it, you are offered other places nearby (you pay only any difference; if it costs less, the difference comes back as Aerva credit) — or everything you paid is refunded in full, including Aerva’s service fee.</p>
     <label class="payout-label" for="rpReason">What is the problem?</label>
     <select id="rpReason" style="${field}">
       <option value="arrival_fake">On arrival: the property does not exist</option>
@@ -16188,7 +16291,7 @@ function aervaBookingGlance(b){
     }
     if(b.can_change !== false) items.push(`Change dates, guests or add-ons, or move nights to another property of this host: until 10 AM on ${next} (the property’s time). Before check-in a cheaper change refunds the difference; leaving early after check-in gives nothing back for the nights you don’t stay.`);
     if(!b.stay_window_closed) items.push(`Report a problem during the stay: by 10 AM on ${next}, with photos.`);
-    items.push('Aerva’s check-in promise: if on arrival the place does not exist, or is not as listed or not available, report it at once (with a photo). Aerva moves you to another place (you pay only any difference) or refunds everything, including the service fee.');
+    items.push('Aerva’s check-in promise: if on arrival the place does not exist, or is not as listed or not available, report it on your check-in day, no later than 10 AM the next day (with a photo) — waiting can cost you your booking payment. Aerva moves you to another place (you pay only any difference) or refunds everything, including the service fee.');
   }
   return `<details class="booking-glance" style="margin:8px 0 0; font-size:13.5px;" onclick="event.stopPropagation()">
     <summary style="cursor:pointer; color:var(--gold-text);">Your booking at a glance</summary>
@@ -16656,10 +16759,14 @@ function aervaShowFreeCancelOffer(q){
   if(!opt || !t) return;
   const st = q && Array.isArray(q.stays) ? q.stays[0] : null;
   const fc = st && st.freeCancel;
+  // The summary's "Free cancellation available at checkout" line goes when
+  // these dates can't have it (check-in within 48 hours).
+  const avail = document.getElementById('listingFreeCancelAvail');
+  if(avail) avail.hidden = !(fc && fc.offered);
   if(!fc || !fc.offered){ opt.hidden = true; if(t.checked){ t.checked = false; } return; }
   opt.hidden = false;
   document.getElementById('listingFreeCancelTitle').textContent = `Free cancellation (until ${fc.untilLabel}) — ${fmtGuest(fc.fee)} + GST`;
-  document.getElementById('listingFreeCancelText').textContent = `${fc.percent}% of the booking price. Cancel before ${fc.untilLabel} (the property’s time, 48 hours before check-in) for a full refund of the booking price, its GST and any deposit, at once, with no wait for your host. The add-on and Aerva’s service fee are not refunded. After that, the listing’s refund policy applies.`;
+  document.getElementById('listingFreeCancelText').textContent = `The host’s price for this stay. Cancel before ${fc.untilLabel} (the property’s time, 48 hours before check-in) for a full refund of the booking price, its GST and any deposit, at once, with no wait for your host. The add-on and Aerva’s service fee are not refunded. After that, the listing’s refund policy applies.`;
 }
 document.addEventListener('change', (e) => {
   if(e.target && e.target.id === 'listingFreeCancelToggle'){ aervaSyncBookOptions(e); aervaRepriceListing(); }

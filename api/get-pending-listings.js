@@ -960,8 +960,9 @@ module.exports = async (req, res) => {
       // forHost: Aerva cancels for the host (a host over their 3 cancellations
       // a year, or who cannot cancel themselves): everything the guest paid
       // is refunded (price, GST, Aerva's fee, deposit), it counts as the
-      // host's cancellation, and the guest gets the 10% coupon, deducted
-      // from the host's next payout. Admins only.
+      // host's cancellation, and, within 48 hours of check-in, the host must
+      // first pay the guest's 10% coupon to confirm (Aerva never pays it or
+      // deducts it from a payout). Admins only.
       const forHost = b.forHost === true;
       if (forHost && ADMIN_ROLE !== 'admin') return res.status(403).json({ error: 'Only an admin can cancel for the host.' });
       const pct = forHost ? 100 : Number(b.refundPercent);
@@ -985,18 +986,11 @@ module.exports = async (req, res) => {
       return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not cancel this booking. Nothing was refunded unless Admin → Refunds shows it.' });
     }
   }
-  // POST { issueHostCancelCoupon: { orderId } } — after a host confirmed Aerva
-  // cancelling for them within 48 hours of check-in: issue the guest's coupon.
-  // Aerva pays it; it is deducted from the host's next payout. Admins only.
+  // POST { issueHostCancelCoupon } — removed (owner, 10 Nov 2026): Aerva no
+  // longer issues the coupon for a host. The host pays it when confirming
+  // (_host-cancel-confirm.js). Answered so an older admin page gets a clear message.
   if (req.method === 'POST' && req.body && req.body.issueHostCancelCoupon) {
-    try {
-      if (ADMIN_ROLE !== 'admin') return res.status(403).json({ error: 'Only an admin can issue this coupon.' });
-      const r = await require('./_host-cancel-confirm').issueCoupon(sql, { orderId: Number(req.body.issueHostCancelCoupon.orderId) || 0, adminLabel: ADMIN_ACTOR });
-      return res.status(200).json({ success: true, ...r });
-    } catch (err) {
-      if (!err.isUserFacing) console.error('issueHostCancelCoupon failed:', err);
-      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not issue the coupon.' });
-    }
+    return res.status(410).json({ error: 'Aerva no longer issues this coupon. Within 48 hours of check-in the host pays it when confirming the cancellation, and it is sent to the guest automatically.' });
   }
   if (req.method === 'POST' && req.body && req.body.adminPartialRefund) {
     try {
@@ -2192,6 +2186,10 @@ module.exports = async (req, res) => {
         if (!upd.length) return res.status(404).json({ error: 'That amount is not owed any more.' });
         await logAudit(sql, { action: action === 'recovered' ? 'host_penalty_recovered' : 'host_penalty_written_off', success: true, actorType: 'admin', ...ADMIN_AUDIT,
           targetType: 'host', targetId: upd[0].host_id, metadata: { penaltyId: upd[0].id, amount: Number(upd[0].amount), note: why || null } });
+        // A coupon the host agreed to cover for a co-host (_cohost-coupon.js):
+        // recovered → the co-host's payout is created now; written off →
+        // the request is closed and nothing is paid to the co-host.
+        await require('./_cohost-coupon').settleDeducted(sql);
         return res.status(200).json({ success: true });
       } catch (err) {
         console.error('settleHostPenalty failed:', err);
@@ -2709,14 +2707,19 @@ module.exports = async (req, res) => {
       try {
         couponForfeitTotal = Math.round(Number((await sql`SELECT COALESCE(SUM(forfeited_amount), 0) AS t FROM coupons WHERE status = 'redeemed'`)[0].t) || 0);
       } catch (err) { /* column not added yet */ }
+      // Co-hosts' requests that the host cover a cancellation coupon, and
+      // where each stands (read-only; _cohost-coupon.js).
+      let cohostCoupons = { available: false, requests: [] };
+      try { cohostCoupons = await require('./_cohost-coupon').adminList(sql); } catch (err) { console.error('co-host coupon requests unavailable:', err.message); }
       await logAudit(sql, { action: 'admin_viewed_payouts', success: true, actorType: 'admin', ...ADMIN_AUDIT,
         metadata: { bookings: orders.length, pendingProfiles: pendingProfiles.length } });
       return res.status(200).json({
         couponForfeitTotal,
+        cohostCouponRequests: cohostCoupons.requests, cohostCouponsAvailable: cohostCoupons.available,
         automaticPayouts: razorpayxReady(),
         depositPayouts: depositPayouts.map(p => ({ id: p.id, orderId: p.order_id, status: p.status, net: Number(p.net), reference: p.reference, sentAt: p.sent_at,
           failure: p.failure_reason, attempts: p.attempts, autoEligible: p.auto_eligible, listing: p.suite_name, hostName: p.host_name,
-          kind: p.kind === 'deposit' ? 'deposit' : /^rest/.test(p.kind || '') ? 'rest' : 'adjustment', payeeType: p.payee_type, payeeName: p.payee_type === 'cohost' ? p.payee_name : p.host_name })),
+          kind: p.kind === 'deposit' ? 'deposit' : p.kind === 'cohost-coupon' ? 'cohost-coupon' : /^rest/.test(p.kind || '') ? 'rest' : 'adjustment', payeeType: p.payee_type, payeeName: p.payee_type === 'cohost' ? p.payee_name : p.host_name })),
         refunds: openRefunds.map(r => ({ id: r.id, orderId: r.order_id, kind: r.kind, amount: Number(r.amount) / 100, currency: r.charge_currency || 'INR', status: r.status,
           failure: r.failure_reason, attempts: r.attempts, listing: r.suite_name, guestEmail: r.guest_email, createdAt: r.created_at,
           // A cancellation whose refund failed was never cancelled: retried by cancelling again.
@@ -2949,7 +2952,10 @@ module.exports = async (req, res) => {
              l.commission_rate, l.created_at,
              l.listing_type, l.hosting_listing_id, l.experience_category,
              l.experience_price_unit, l.experience_duration_hours,
-             l.pending_room_photos,
+             l.pending_room_photos, COALESCE(to_jsonb(l)->>'cancellation_policy', 'flexible') AS cancellation_policy,
+             -- the host's choice, shown read-only (2026-11-10-06-free-cancel-optin.sql; missing = off)
+             COALESCE((to_jsonb(l)->>'free_cancel_offered')::boolean, false) AS free_cancel_offered,
+             (to_jsonb(l)->>'free_cancel_fee')::int AS free_cancel_fee,
              -- reviewed with the listing (_listing-special.js); before the migration these read empty
              COALESCE(to_jsonb(l)->'special_highlights', '[]'::jsonb) AS special_highlights,
              to_jsonb(l)->>'special_story' AS special_story,

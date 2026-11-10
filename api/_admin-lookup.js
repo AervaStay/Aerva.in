@@ -180,6 +180,8 @@ async function listingDetail(sql, id) {
     SELECT l.id, l.property_name, l.city, to_jsonb(l)->>'area' AS area, l.status, COALESCE(l.listing_type, 'stay') AS listing_type,
            l.host_id, l.host_name, l.host_email, l.host_phone, l.created_at, l.nightly_rate, l.max_guests,
            to_jsonb(l)->>'admin_status_reason' AS admin_status_reason, to_jsonb(l)->>'cancellation_policy' AS cancellation_policy,
+           COALESCE((to_jsonb(l)->>'free_cancel_offered')::boolean, false) AS free_cancel_offered,
+           (to_jsonb(l)->>'free_cancel_fee')::int AS free_cancel_fee,
            l.formatted_address, (SELECT id FROM guests WHERE host_id = l.host_id ORDER BY id LIMIT 1) AS host_guest_id
     FROM listings l WHERE l.id = ${Number(id) || 0}`)[0];
   if (!l) throw userError('Listing not found.', 404);

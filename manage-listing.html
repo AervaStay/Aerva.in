@@ -223,6 +223,23 @@
   .room-active-toggle input:checked + .room-active-toggle-box{border-color:#8a6c39;}
   .room-active-toggle input:checked + .room-active-toggle-box::after{opacity:1; transform:scale(1);}
 
+  /* "Offer free cancellation to guests": a switch over a real checkbox. */
+  .fc-optin{padding:14px 16px; border:1px solid #ddd0bc; background:#fff;}
+  .fc-optin .fc-switch{position:relative; display:flex; align-items:center; gap:12px; cursor:pointer;
+    font-size:15px; font-weight:500; letter-spacing:0; text-transform:none; color:#1c1a17;}
+  .fc-optin .fc-switch input{position:absolute; left:0; top:50%; transform:translateY(-50%); width:44px; height:26px; margin:0; padding:0; opacity:0; cursor:pointer; border:0;}
+  .fc-switch-track{position:relative; flex:none; width:44px; height:26px; border-radius:13px; background:#cfc5b8; transition:background .15s;}
+  .fc-switch-track::after{content:''; position:absolute; top:3px; left:3px; width:20px; height:20px; border-radius:50%; background:#fff; box-shadow:0 1px 2px rgba(0,0,0,.25); transition:transform .15s;}
+  .fc-optin .fc-switch input:checked + .fc-switch-track{background:#8a6c39;}
+  .fc-optin .fc-switch input:checked + .fc-switch-track::after{transform:translateX(18px);}
+  .fc-optin .fc-switch input:focus-visible + .fc-switch-track{outline:2px solid #8a6c39; outline-offset:2px;}
+  .fc-optin-help{margin:0; font-size:13px; line-height:1.55; color:#1c1a17;}
+  .fc-optin-warn{margin:8px 0 0; padding:8px 10px; font-size:13px; line-height:1.5; color:#7a3b12; background:#fbefe3; border-left:3px solid #b5651d;}
+  .fc-optin-warn[hidden], .fc-price[hidden]{display:none;}
+  .fc-price{margin-top:12px; display:flex; flex-direction:column; gap:6px;}
+  .fc-price input{max-width:220px; width:100%; box-sizing:border-box;}
+  .fc-example{opacity:0.8;}
+
   .listing-map-preview{width:100%; height:220px; background:#e9e2d6; border:1px solid #ddd0bc; margin-top:10px;}
   .listing-map-preview .leaflet-container{font-family:'Jost', sans-serif;}
   /* OpenStreetMap's license requires this stay visible — it can't be
@@ -263,7 +280,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
-<script src="aerva-cohost.js?v=2026-11-09a"></script>
+<script src="aerva-cohost.js?v=2026-11-11b"></script>
 <script src="aerva-photo-location.js?v=2026-11-07a"></script>
 <script src="aerva-special.js?v=2026-11-10a"></script>
 </head>
@@ -406,6 +423,25 @@
         </select>
         <p class="price-history-note" id="cancellationPolicyNote"></p>
         <p class="price-history-note">Applies to new bookings only — every booking keeps the policy it was paid under. In every guest cancellation Aerva's service fee is non-refundable and the deposit is refunded in full. What the guest is not refunded is paid to you, less Aerva's commission, on the usual payout day.</p>
+      </div>
+
+      <!-- The host's choice, off by default (api/update-listing-pricing.js freeCancelOffered). -->
+      <div class="field fc-optin" id="freeCancelField">
+        <label class="fc-switch" for="freeCancelOffered">
+          <input type="checkbox" id="freeCancelOffered" role="switch" aria-describedby="freeCancelHelp">
+          <span class="fc-switch-track" aria-hidden="true"></span>
+          <span class="fc-switch-text">Offer free cancellation to guests</span>
+        </label>
+        <p class="fc-optin-help" id="freeCancelHelp">Guests can pay a price you set to cancel for a full refund (except Aerva’s fee and that price) until 48 hours before check-in. You keep the price, less Aerva’s commission. If they cancel in time, you don’t get the stay price.</p>
+        <p class="fc-optin-warn" id="freeCancelNeedsPrice" role="status" hidden>Set a price to keep offering free cancellation. Until you do, guests can’t add it.</p>
+        <!-- Its price: a fixed ₹ amount per booking (api/update-listing-pricing.js freeCancelFee). -->
+        <div class="fc-price" id="freeCancelPriceWrap" hidden>
+          <label for="freeCancelFee">Free cancellation price (₹ per booking) <span style="color:#a3402f;">*</span></label>
+          <input id="freeCancelFee" type="number" min="100" max="100000" step="1" inputmode="numeric" placeholder="e.g. 1500" aria-describedby="freeCancelFeeRule freeCancelExample">
+          <p class="fc-optin-help" id="freeCancelFeeRule">Guests pay this amount per booking. For very short or very long stays it is kept between 5% and 30% of the stay price.</p>
+          <p class="fc-optin-help fc-example" id="freeCancelExample" aria-live="polite"></p>
+        </div>
+        <p class="price-history-note">You can change this any time. It applies to new bookings only — a booking that already has free cancellation keeps what it paid.</p>
       </div>
 
       <div class="field" id="sameDayField">
@@ -1712,6 +1748,42 @@
     if(pricingCurrency === 'INR' || !currencyRatesLoaded || !currencyRates[pricingCurrency]) return amountInr;
     return Math.round(amountInr * currencyRates[pricingCurrency] * 100) / 100;
   }
+  // ---- Free cancellation price (owner, 10 Nov 2026) ----
+  // A fixed ₹ amount per booking; each booking pays it kept between 5% and
+  // 30% of its stay price (api/_pricing.js freeCancelCharge — same rule).
+  let freeCancelNeedsPrice = false;
+  function freeCancelChargeFor(fixed, subtotal){
+    const f = Math.round(Number(fixed)), sub = Number(subtotal);
+    if(!(f > 0) || !(sub > 0)) return 0;
+    const lo = Math.ceil(sub * 5 / 100), hi = Math.floor(sub * 30 / 100);
+    return hi < lo ? Math.max(0, hi) : Math.min(hi, Math.max(lo, f));
+  }
+  function freeCancelPriceProblem(){
+    if(document.getElementById('freeCancelField').style.display === 'none') return '';
+    if(!document.getElementById('freeCancelOffered').checked) return '';
+    const raw = document.getElementById('freeCancelFee').value.trim();
+    const n = Number(raw);
+    if(raw === '') return 'Enter the price guests pay for free cancellation (₹100 or more), or turn free cancellation off.';
+    if(!Number.isInteger(n) || n < 100 || n > 100000) return 'Enter the free cancellation price as a whole amount between ₹100 and ₹1,00,000.';
+    return '';
+  }
+  function syncFreeCancelPrice(){
+    const on = document.getElementById('freeCancelOffered').checked;
+    const fee = document.getElementById('freeCancelFee');
+    document.getElementById('freeCancelPriceWrap').hidden = !on;
+    document.getElementById('freeCancelNeedsPrice').hidden = !(on && freeCancelNeedsPrice && !(Number(fee.value) >= 100));
+    const ex = document.getElementById('freeCancelExample');
+    const nightly = toInr(document.getElementById('nightlyRate').value);
+    const fixed = Math.round(Number(fee.value));
+    if(!on || !(nightly > 0) || !(fixed >= 100) || fixed > 100000){ ex.textContent = ''; return; }
+    const inr = (n) => '₹' + Math.round(n).toLocaleString('en-IN');
+    const two = nightly * 2, week = nightly * 7;
+    ex.textContent = `For example, on a 2-night stay of ${inr(two)}, guests would pay ${inr(freeCancelChargeFor(fixed, two))}; on a 7-night stay of ${inr(week)}, ${inr(freeCancelChargeFor(fixed, week))}.`;
+  }
+  ['freeCancelOffered', 'freeCancelFee', 'nightlyRate'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el){ el.addEventListener('input', syncFreeCancelPrice); el.addEventListener('change', syncFreeCancelPrice); }
+  });
   function toInr(amountInSelected){
     const num = Number(amountInSelected) || 0;
     if(pricingCurrency === 'INR' || !currencyRatesLoaded || !currencyRates[pricingCurrency]) return Math.round(num);
@@ -1896,6 +1968,13 @@
         document.getElementById('manageSpecialWrap').style.display = '';
       }
       document.getElementById('cancellationPolicy').value = l.cancellation_policy === 'firm' ? 'firm' : 'flexible';
+      // Free cancellation add-on: stays only (a Resort's rooms book without it).
+      document.getElementById('freeCancelOffered').checked = l.free_cancel_offered === true;
+      document.getElementById('freeCancelFee').value = Number(l.free_cancel_fee) > 0 ? String(Math.round(Number(l.free_cancel_fee))) : '';
+      // Switched on before hosts set the price: not offered until they set one.
+      freeCancelNeedsPrice = l.free_cancel_offered === true && !(Number(l.free_cancel_fee) >= 100);
+      document.getElementById('freeCancelField').style.display = (l.listing_type === 'experience' || l.property_type === 'Resort') ? 'none' : '';
+      syncFreeCancelPrice();
       document.getElementById('sameDayUntil').value = String([18, 19, 20, 21, 22, 23, 24].includes(Number(l.same_day_until)) ? Number(l.same_day_until) : 24);
       document.getElementById('sameDayField').style.display = l.listing_type === 'experience' ? 'none' : '';
       describeCancellationPolicy();
@@ -2078,6 +2157,15 @@
       return;
     }
 
+    // Free cancellation switched on: its price is required (₹100 – ₹1,00,000).
+    const fcProblem = freeCancelPriceProblem();
+    if(fcProblem){
+      errorMsg.textContent = fcProblem;
+      errorMsg.style.display = 'block';
+      document.getElementById('freeCancelFee').focus();
+      return;
+    }
+
     const specialProblem = manageSpecialEditor ? manageSpecialEditor.problem() : '';
     if(specialProblem){
       errorMsg.textContent = specialProblem;
@@ -2124,6 +2212,8 @@
           paidAmenities: paidAmenityRows,
           securityDeposit: toInr(document.getElementById('securityDeposit').value),
           cancellationPolicy: document.getElementById('cancellationPolicy').value,
+          freeCancelOffered: document.getElementById('freeCancelOffered').checked,
+          freeCancelFee: document.getElementById('freeCancelFee').value.trim() === '' ? null : Number(document.getElementById('freeCancelFee').value),
           sameDayUntil: Number(document.getElementById('sameDayUntil').value) || 24,
           petFriendly: petFriendlyYes.checked ? true : (petFriendlyNo.checked ? false : null),
           maxPetsAllowed: petFriendlyYes.checked ? document.getElementById('maxPetsAllowed').value : '',
