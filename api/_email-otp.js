@@ -140,7 +140,7 @@ async function sendEmailChangedNotice(oldEmail, newEmail) {
   const html = `<div style="font-family:sans-serif; max-width:440px;">
     <h2 style="font-family:Georgia,serif; margin:0 0 6px;">Your Aerva email was changed</h2>
     <p style="color:#4a453e; margin:0 0 12px;">The email address on your Aerva account is now <strong>${maskEmail(newEmail)}</strong>. Messages and sign-in will use the new address from now on.</p>
-    <p style="font-size:13.5px; color:#6e675d; margin:0;">If you did not do this, ${signinHelpLink({ problem: 'email_changed' }, 'tell us through “Can’t sign in?” in Aerva Support')} straight away — you do not need to sign in — and we will lock the account.</p>
+    <p style="font-size:13.5px; color:#6e675d; margin:0;">If you did not do this, ${signinHelpLink({ problem: 'email_changed' }, 'tell us through “Can’t sign in?” in the Resolution Center')} straight away — you do not need to sign in — and we will lock the account.</p>
   </div>`;
   try {
     const res = await fetch('https://api.resend.com/emails', {

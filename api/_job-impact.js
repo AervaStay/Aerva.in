@@ -38,6 +38,22 @@ const IMPACT = {
     });
     return dedupe(out);
   }),
+  // Payments held until the guest's details are verified: confirmed, reminded, extended, refunded.
+  guest_verification: (sql, since) => safe(async () => {
+    const rows = await sql`SELECT action, metadata FROM audit_log WHERE created_at >= ${since}
+                           AND action IN ('held_booking_confirmed', 'held_booking_reminder', 'held_booking_extended', 'held_booking_lapsed', 'held_payment_refunded')`;
+    const out = [];
+    rows.forEach(r => {
+      const m = r.metadata || {};
+      const who = { who: 'Guest', name: m.email || ('Guest #' + (m.guestId || '')), email: m.email || '' };
+      if (r.action === 'held_booking_confirmed') out.push({ ...who, what: 'Details verified: booking confirmed' });
+      else if (r.action === 'held_booking_reminder') out.push({ ...who, what: m.which === 'hour' ? 'Reminder: 1 hour left to complete their details' : 'Reminder: complete your details to confirm the booking' });
+      else if (r.action === 'held_booking_extended') out.push({ ...who, what: 'ID with Aerva at the deadline: the booking keeps waiting' });
+      else if (r.action === 'held_booking_lapsed') out.push({ ...who, what: `Details not verified in time: no booking, ${inr((m.amountPaise || 0) / 100)} refunded in full` });
+      else if (r.action === 'held_payment_refunded') out.push({ ...who, what: `Refunded ${inr((m.amountPaise || 0) / 100)} (details not verified)` });
+    });
+    return dedupe(out);
+  }),
   // Gift reminders and cancellation notices.
   gift_reminders: (sql, since) => safe(async () => {
     const rows = await sql`SELECT action, metadata FROM audit_log WHERE created_at >= ${since} AND action IN ('gift_reminder_sent', 'gift_cancel_notice')`;

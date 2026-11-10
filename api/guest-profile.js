@@ -227,6 +227,16 @@ function cohostOwnsTemplate(ctx, t) {
 const UNSEND_MINUTES = 60;
 // Smileys a person can put on the other side's message.
 const REACTIONS = ['👍', '❤️', '😊', '🙏', '😂', '👌'];
+// A gift's recipient and a group booking's friends use the booking's Messages
+// but never see its money (_gifts.js): amounts are hidden in Aerva's notices —
+// the 'system' ones and the automatic ones posted in the host's name
+// ("Booking changed. … Paid: ₹…", "Transfer accepted. … pay the difference of ₹…").
+const AUTO_NOTICE_RE = /^(Booking (changed|transferred)\.|(Transfer|Change) accepted\.|The change was not made|Aerva has decided|I’d like to (move part of|change) this booking\.)/;
+function hideMoneyForShared(text, senderType) {
+  const t = String(text || '');
+  if (senderType !== 'system' && !AUTO_NOTICE_RE.test(t)) return t;
+  return t.replace(/(₹|Rs\.?|INR)\s?[\d,]+(\.\d+)?/g, 'an amount');
+}
 function unsentView(m) {
   if (!Array.isArray(m.photos) || !m.photos.length) delete m.photos;
   if (!m.guest_reaction) delete m.guest_reaction;
@@ -273,11 +283,47 @@ module.exports = async (req, res) => {
       const out = req.body.mode === 'verifyId'
         ? await idVerify.verifyDocument(sql, logAudit, guestId, req.body)
         : await idVerify.verifyAadhaarZip(sql, logAudit, guestId, req.body);
+      // The same proof counts for bookings when it meets the same rules: an
+      // accepted type, in the profile's name, 18 or over (_guest-verify.js).
+      if (req.body.mode === 'verifyId') {
+        out.bookingVerified = await require('./_guest-verify').adoptFromIdVerify(sql, razorpayClient(), guestId, { docType: String(req.body.docType || ''), dob: req.body.dob, verification: out.verification });
+      }
       return res.status(200).json(Object.assign({ success: true }, out));
     } catch (err) {
       if (err.isUserFacing) return res.status(err.status || 400).json({ error: err.message });
       console.error('ID verification failed:', err);
       return res.status(500).json({ error: 'ID verification is not available right now. Please try again later.' });
+    }
+  }
+
+  // ---- A verified profile: name, phone code, photo ID (_guest-verify.js) ----
+  // A booking is only confirmed once all three are done (owner, 10 Nov 2026).
+  // GET ?mode=verification → the three steps, and any payments waiting on them
+  // POST { mode: 'sendPhoneCode' }                 → a code by SMS to the account's number
+  // POST { mode: 'checkPhoneCode', code }          → confirms the number
+  // POST { mode: 'checkGuestId', files: [{ type, data }] } → the instant ID check (the image is never stored)
+  // POST { mode: 'sendGuestIdForReview', url }     → "Send it to Aerva to check instead"
+  // Each answer carries `confirmed`: the waiting payments that became bookings.
+  const GV_MODES = ['sendPhoneCode', 'checkPhoneCode', 'checkGuestId', 'sendGuestIdForReview'];
+  if ((req.method === 'GET' && (req.query || {}).mode === 'verification') || (req.method === 'POST' && req.body && GV_MODES.includes(req.body.mode))) {
+    if ((req.query || {}).actingHost !== undefined) return res.status(403).json({ error: 'Open this from your own account.' });
+    const GV = require('./_guest-verify');
+    try {
+      if (req.method === 'GET') return res.status(200).json(await GV.statusFor(sql, razorpayClient(), guestId));
+      const b = req.body, ip = getClientIp(req);
+      let out;
+      if (b.mode === 'sendPhoneCode') out = await GV.sendPhoneCode(sql, { guestId, ip });
+      else if (b.mode === 'checkPhoneCode') out = await GV.confirmPhoneCode(sql, razorpayClient(), { guestId, code: b.code, ip });
+      else if (b.mode === 'checkGuestId') out = await GV.checkGuestId(sql, razorpayClient(), { guestId, files: b.files });
+      else out = await GV.sendForReview(sql, { guestId, url: b.url });
+      return res.status(200).json(Object.assign(out, { status: await GV.statusFor(sql, razorpayClient(), guestId) }));
+    } catch (err) {
+      if (err.isUserFacing) {
+        return res.status(err.status || 400).json({ error: err.message, needs: err.needs || undefined, canSendForReview: err.canSendForReview || undefined,
+          undecided: err.undecided || undefined, refusal: err.refusal || undefined, withAerva: err.withAerva || undefined, attemptsLeft: err.attemptsLeft });
+      }
+      console.error('guest verification failed:', err);
+      return res.status(500).json({ error: 'Could not do this right now. Please try again.' });
     }
   }
 
@@ -444,9 +490,10 @@ module.exports = async (req, res) => {
     const mode = req.query.mode;
     try {
       // ---- What this account still needs to book ----
-      // GET ?mode=bookingRequirements — a phone number, nothing more.
-      // Aerva does not ask guests for an ID: the host checks one at
-      // check-in, as the law requires of them.
+      // GET ?mode=bookingRequirements — a confirmed email and a phone number
+      // are what it takes to START a checkout (_guest-id.js). What it takes
+      // for the booking to be CONFIRMED — name, phone code, photo ID — is
+      // GET ?mode=verification (_guest-verify.js).
       if (mode === 'bookingRequirements') {
         return res.status(200).json(await idSummary(sql, guestId));
       }
@@ -609,7 +656,7 @@ module.exports = async (req, res) => {
           // No price for a recipient or a friend: amounts in Aerva's notices are hidden,
           // and the booking's cards (cancel, change, dispute) are the organiser's or buyer's.
           return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, shared,
-            messages: messages.map(m => m.sender_type === 'system' ? Object.assign({}, m, { display_text: String(m.display_text || '').replace(/(₹|Rs\.?|INR)\s?[\d,]+(\.\d+)?/g, 'an amount') }) : m),
+            messages: messages.map(m => Object.assign({}, m, { display_text: hideMoneyForShared(m.display_text, m.sender_type) })),
             booking: { orderId: order.id, confirmationCode: order.confirmation_code || null, arrival: order.arrival, departure: order.departure, guests: order.guests, nights: order.nights, status: order.status },
             reviewPrompt: null, cancellation: null, change: null, dispute: null });
         }
@@ -658,7 +705,10 @@ module.exports = async (req, res) => {
                  -- not whichever side happens to be looking at this row.
                  COALESCE(g.name, c.guest_email) AS guest_display_name,
                  o.arrival, o.departure, o.status AS booking_status, to_jsonb(o)->>'confirmation_code' AS confirmation_code,
-                 o.nights, o.guests, o.subtotal, o.gst, o.payout_amount,
+                 o.nights, o.guests, o.subtotal, o.gst, GREATEST(0, o.total - COALESCE((to_jsonb(o)->>'coupon_discount')::numeric, 0)) AS guest_total,
+                 -- the host's own part: after their co-hosts' shares, as in My Earnings
+                 GREATEST(0, o.payout_amount - COALESCE((SELECT SUM(s.amount) FROM order_cohost_shares s WHERE s.order_id = o.id), 0)) AS payout_amount,
+                 COALESCE((to_jsonb(o)->>'free_cancel_fee')::int, 0) AS free_cancel_fee, COALESCE((to_jsonb(o)->>'free_cancel_gst')::int, 0) AS free_cancel_gst,
                  (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today,
                  COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}) AS listing_tz, to_jsonb(l)->>'check_in_time' AS listing_check_in_time,
                  (SELECT CASE WHEN to_jsonb(m)->>'unsent_at' IS NOT NULL THEN 'Message unsent' ELSE display_text END
@@ -714,8 +764,10 @@ module.exports = async (req, res) => {
           // The host's payout is the host's business: never to a guest, and
           // never to a co-host (payouts are the host's alone).
           if (c.my_role !== 'host' || actingCtx) delete c.payout_amount;
+          // What the guest paid in all (service fee and deposit included): the guest's own view only.
+          if (c.my_role === 'host' || c.guest_id !== guestId) delete c.guest_total;
           // A gift's recipient or a group's friend: never the price.
-          if (c.my_role !== 'host' && sharedIds.has(Number(c.order_id)) && c.guest_id !== guestId) { delete c.subtotal; delete c.gst; c.shared = true; }
+          if (c.my_role !== 'host' && sharedIds.has(Number(c.order_id)) && c.guest_id !== guestId) { delete c.subtotal; delete c.gst; c.shared = true; c.guest_email = null; if (c.last_message) c.last_message = hideMoneyForShared(c.last_message, 'system'); }
           // Nor what the guest paid for the stay: the host's payout is that
           // less commission, so it is the host's earnings by another name.
           if (actingCtx) { delete c.subtotal; delete c.gst; }
@@ -824,6 +876,14 @@ module.exports = async (req, res) => {
           `;
         }
         const myRole = isHost ? 'host' : 'guest';
+        // A gift's recipient or a group's friend (the inbox opens threads here): as in
+        // mode 'conversation' — no amounts, and the booking's cards (cancel, change,
+        // dispute, review) stay with the organiser or buyer.
+        if (sharedView && !isHost) {
+          return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), myRole, shared: sharedView,
+            messages: messages.map(m => Object.assign({}, m, { display_text: hideMoneyForShared(m.display_text, m.sender_type) })),
+            reviewPrompt: null, cancellation: null, change: null, dispute: null });
+        }
         return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messages, myRole, reviewPrompt: await threadReviewPrompt(sql, conversationId, myRole),
                                       cancellation: await cancellationCard(sql, conversationId, myRole),
                                       change: await changeCard(sql, conversationId, myRole),
@@ -1099,6 +1159,9 @@ module.exports = async (req, res) => {
       // "Gifted to you" (no money, no actions), and groups still open.
       await require('./_group-bookings').decorateBookings(sql, guestId, bookings);
       await require('./_gifts').decorateBookings(sql, guestId, bookings);
+      // Payments waiting for this guest's details to be verified (no booking
+      // exists yet), with the deadline; and those that lapsed (_guest-verify.js).
+      if (!actingCtx) await require('./_guest-verify').decorateBookings(sql, razorpayClient(), guestId, bookings);
 
       // Published, non-reverted only — a held review must not move a
       // guest's standing any more than it shows on a listing.
@@ -1231,7 +1294,7 @@ module.exports = async (req, res) => {
           if (!err.isUserFacing) console.error('refundFeeCredit failed:', err);
           // The payment gateway refused (_refunds.js): its message is written for
           // Aerva's team (booking, Admin → Refunds). The credit is untouched.
-          if (err.isUserFacing && err.status === 502) return res.status(502).json({ error: 'The refund could not be made right now. Your Aerva credit is still here and nothing was charged — please try again later, or contact Aerva Support.' });
+          if (err.isUserFacing && err.status === 502) return res.status(502).json({ error: 'The refund could not be made right now. Your Aerva credit is still here and nothing was charged — please try again later, or raise a request in the Resolution Center (Help → Raise a request).' });
           return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not refund it right now. Please try again in a little while.' });
         }
       }
@@ -1358,7 +1421,7 @@ module.exports = async (req, res) => {
           return res.status(200).json(await CP.acceptOffer(sql, razorpayClient(), { orderId, guestId, option: Number(b.option) }));
         } catch (err) {
           if (!err.isUserFacing) console.error(mode + ' failed:', err);
-          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now. Please try again, or contact Aerva Support.' });
+          return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now. Please try again, or raise a request in the Resolution Center (Help → Raise a request).' });
         }
       }
 
@@ -1491,6 +1554,14 @@ module.exports = async (req, res) => {
           if (before && String(before.phone || '').trim() === e164) return res.status(200).json({ phone: e164 });
           await sql`UPDATE guests SET phone = ${e164} WHERE id = ${guestId}`;
           try { await sql`UPDATE guests SET phone_verified = false WHERE id = ${guestId}`; } catch (e) { /* before migration_session_version.sql */ }
+          // A new number is not a confirmed number: its SMS confirmation is
+          // cleared (the database does the same for any change of phone —
+          // 2026-11-10-09-guest-verification.sql; this is for the record).
+          try { await sql`UPDATE guests SET phone_verified_at = NULL, phone_verified_number = NULL WHERE id = ${guestId} AND phone_verified_number IS DISTINCT FROM phone`; } catch (e) { /* before that update */ }
+          if (before && String(before.phone || '').trim()) {
+            await logAudit(sql, { action: 'guest_phone_changed', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId,
+              metadata: { phoneVerificationCleared: true, ip: getClientIp(req) } });
+          }
           return res.status(200).json({ phone: e164, verified: false });
         } catch (err) {
           if (/unique|duplicate/i.test(err.message)) return res.status(409).json({ error: 'That number is already on another Aerva account.' });
@@ -1512,7 +1583,8 @@ module.exports = async (req, res) => {
         const bad = nameProblem(first, 'first') || nameProblem(last, 'last');
         if (bad) return res.status(400).json({ error: bad });
         const full = first + ' ' + last;
-        const before = (await sql`SELECT name, to_jsonb(guests)->>'first_name' AS first_name, to_jsonb(guests)->>'last_name' AS last_name
+        const before = (await sql`SELECT name, to_jsonb(guests)->>'first_name' AS first_name, to_jsonb(guests)->>'last_name' AS last_name,
+                                         (to_jsonb(guests)->>'guest_id_verified_at') IS NOT NULL AS id_verified
                                   FROM guests WHERE id = ${guestId}`)[0];
         if (!before) return res.status(401).json({ error: 'Please log in again.' });
         if (before.first_name === first && before.last_name === last && before.name === full) {
@@ -1529,7 +1601,18 @@ module.exports = async (req, res) => {
           actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId,
           metadata: { from: { firstName: before.first_name || null, lastName: before.last_name || null, name: before.name || null },
                       to: { firstName: first, lastName: last }, ip: getClientIp(req) } });
-        return res.status(200).json({ firstName: first, lastName: last, name: full });
+        // An ID verified for one name is not verified for another: a change
+        // of name clears it (done by the database on any change of name,
+        // 2026-11-10-09-guest-verification.sql). The page is told.
+        let idCleared = false;
+        if (before.id_verified) {
+          try { idCleared = !((await sql`SELECT (to_jsonb(guests)->>'guest_id_verified_at') IS NOT NULL AS v FROM guests WHERE id = ${guestId}`)[0] || {}).v; } catch (e) { idCleared = false; }
+          if (idCleared) await logAudit(sql, { action: 'guest_id_cleared', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId, metadata: { reason: 'name_changed' } });
+        }
+        // A name added while a payment waits for the guest's details may be the last step.
+        let confirmed = [];
+        try { confirmed = await require('./_guest-verify').confirmHoldsFor(sql, razorpayClient(), guestId); } catch (e) { confirmed = []; }
+        return res.status(200).json({ firstName: first, lastName: last, name: full, idVerificationCleared: idCleared, confirmed });
       }
 
       // ---- Changing a booking ----

@@ -203,7 +203,7 @@ async function assertChangeable(sql, o, guestId, requestedAt = null) {
   // Split by a transfer: no part can be changed again (owner's rule, 9 Nov 2026).
   if (o.transfer_change_id) throw userError(require('./_booking-transfers').LOCKED);
   if (o.status !== 'paid' || (o.stayRow && o.stayRow.status !== 'paid')) throw userError('Only a confirmed booking can be changed.');
-  if ((o.charge_currency || 'INR') !== 'INR') throw userError('This booking cannot be changed online. Please raise a request in Aerva Support (Help → Raise a request).');
+  if ((o.charge_currency || 'INR') !== 'INR') throw userError('This booking cannot be changed online. Please raise a request in the Resolution Center (Help → Raise a request).');
   if (!beforeCutoff(o, requestedAt)) throw userError(CLOSED);
 }
 
@@ -237,12 +237,12 @@ async function changeOptions(sql, orderId, guestId) {
       // max_guests is text ("3–4", "12+"): the highest number is the cap.
       maxGuests: parseMaxGuests(o.max_guests) > 0 ? parseMaxGuests(o.max_guests) : null,
       petFriendly: o.pet_friendly === true, maxPets: o.max_pets_allowed != null ? Number(o.max_pets_allowed) : null,
-      petTypes: Array.isArray(o.allowed_pet_types) ? o.allowed_pet_types : [], petFee: Number(o.pet_fee) || 0,
+      petTypes: Array.isArray(o.allowed_pet_types) && o.allowed_pet_types.length ? o.allowed_pet_types : (o.pet_friendly === true ? ['Dog', 'Cat'] : []), petFee: Number(o.pet_fee) || 0,
       amenities: amenities.map(a => ({ id: a.id, name: a.name, price: Number(a.price) }))
     } : { maxGuests: null, petFriendly: false, maxPets: 0, petTypes: [], petFee: 0, amenities: [] },
     openChange: open,
     // Another property of the same host the nights could move to (_booking-transfers.js).
-    canTransfer: o.kind === 'stay' && T.transferOpen(o) && !(await T.payoutSent(sql, o.id)) && await otherPropertiesOf(sql, o),
+    canTransfer: o.kind === 'stay' && !o.group_booking_id && T.transferOpen(o) && !(await T.payoutSent(sql, o.id)) && await otherPropertiesOf(sql, o),
     onlyTransfer,
     lastNight: (() => { const d = new Date(o.departureStr + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1); return d.toISOString().slice(0, 10); })()
   };
@@ -344,6 +344,13 @@ async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
     q.keepPaid = true;
     newTotal = o.totalNow;
   }
+  // A confirmed group (split-payment) booking is non-refundable if plans change
+  // (_group-bookings.js, the policy "Gift and Group Bookings"): a change that
+  // costs less would refund part of it to the payers — the same thing by
+  // another door (and the accounts' group receipts no longer matched).
+  if (o.group_booking_id && newTotal < o.totalNow) {
+    throw userError('This is a non-refundable group booking, so a change that lowers its price cannot be made online. You can keep the booking as it is, or raise a request in the Resolution Center (Help → Raise a request).');
+  }
   if (arrival !== o.arrivalStr || departure !== o.departureStr) parts.push(`Dates: ${niceDate(o.arrivalStr)} – ${niceDate(o.departureStr)} → ${niceDate(arrival)} – ${niceDate(departure)}`);
   if (guests !== Number(o.guests)) parts.push(`Guests: ${o.guests} → ${guests}`);
   const oldPets = Array.isArray(o.pet_types) ? o.pet_types.length : 0;
@@ -430,7 +437,7 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
     const fcFee = Math.round(Number(d.freeCancelFee) || 0), fcGst = Math.round(Number(d.freeCancelGst) || 0), fcCommission = Math.round(Number(d.freeCancelCommission) || 0);
     const commission = stayCommission + fcCommission;
     let releaseAt = null;
-    if (d.depositAmount > 0) releaseAt = require('./_deposits').releaseDateFor(input.departure);   // the host has 24 hours from check-out (_deposits.js)
+    if (d.depositAmount > 0) { const x = new Date(input.departure + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 7); releaseAt = x.toISOString().slice(0, 10); }
     return { commission, releaseAt, total: Math.round(d.subtotal + d.gst + d.guestServiceFee + Number(d.depositAmount) + fcFee + fcGst),
              payout: Math.round(d.subtotal + fcFee - commission),
              rate: d.subtotal > 0 ? Number(((stayCommission / d.subtotal) * 100).toFixed(2)) : 0 };

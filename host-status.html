@@ -225,7 +225,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
-<script src="aerva-cohost.js?v=2026-11-11b"></script>
+<script src="aerva-cohost.js?v=2026-11-11d"></script>
 </head>
 <body>
 
@@ -1050,7 +1050,9 @@
     const box = document.getElementById('statusBookingsList');
     if(!box) return;
     const all = [];
-    (data.rows || []).forEach(row => (row.bookings || []).forEach(b => all.push({ ...b, label: row.label })));
+    // Dates held while a guest's details are verified are on the calendar
+    // only: they are not bookings yet (no guest, code or money to list).
+    (data.rows || []).forEach(row => (row.bookings || []).forEach(b => { if(!b.waiting_details) all.push({ ...b, label: row.label }); }));
     all.sort((x, y) => (x.start_date < y.start_date ? 1 : x.start_date > y.start_date ? -1 : 0)); // newest first
     const rangeText = `${formatDateLong(data.startDate)} and ${formatDateLong(data.endDate || data.startDate)}`;
     if(!all.length){
@@ -1103,7 +1105,7 @@
   function renderStatusCalendar(data){
     const wrap = document.getElementById('statusCalendarWrap');
     if(!data.rows || !data.rows.length){
-      wrap.innerHTML = '<p class="empty" style="padding:16px;">No approved listings yet.</p>';
+      wrap.innerHTML = '<p class="empty" style="padding:16px;">No approved stays yet. Status shows stays only; experiences are managed from My Collection.</p>';
       return;
     }
     const start = new Date(data.startDate + 'T00:00:00Z');
@@ -1155,6 +1157,7 @@
             : booking && booking.guest_email ? booking.guest_email.split('@')[0] : 'Booked';
           innerHtml = `<span class="cal-day-guest">${esc(shortName)}</span>`;
           cellTitle = `${row.label} — ${dateStr}: ${booking ? (booking.guest_name || booking.guest_email || 'Booked') : 'Booked'}`;
+          if(booking && booking.waiting_details) innerHtml = '<span class="cal-day-guest" style="opacity:0.75;">Waiting</span>';
         } else if(status === 'blocked' && row.dayImportedFrom && row.dayImportedFrom[i]){
           // Booked on another site and brought in by calendar sync. Only
           // that site can free it, so it opens a read-only note.
@@ -1214,6 +1217,18 @@
     const b = window.statusBookingLookup[idx];
     if(!b) return;
     const fmtDate = formatDateLong;
+    // Dates held while a guest's details are verified (api/_guest-verify.js):
+    // not a booking yet — no guest, no code, no money shown.
+    if(b.waiting_details){
+      document.getElementById('statusBookingDetailContent').innerHTML = `
+        <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">${esc(b.label || '')}</p>
+        <p style="font-size:16px; font-weight:600; margin:0 0 8px;">Waiting for the guest’s details</p>
+        <p style="margin:4px 0;"><strong>Dates:</strong> ${fmtDate(b.start_date)} – ${fmtDate(b.end_date)}${b.nights ? ` (${Number(b.nights)} night${Number(b.nights) === 1 ? '' : 's'})` : ''}</p>
+        ${b.guests ? `<p style="margin:4px 0;"><strong>Guests:</strong> ${esc(b.guests)}</p>` : ''}
+        <p style="margin:8px 0 0; color:#6e675d; font-size:13.5px; line-height:1.5;">The guest has paid and these dates are held. The booking is confirmed once their details are verified — you get the confirmation, the guest’s name and number then.${b.waiting_until ? ` If they are not verified by ${esc(b.waiting_until)}, the dates are released.` : ''}</p>`;
+      openPopover(document.getElementById('statusBookingDetailOverlay'), lastClickedCell);
+      return;
+    }
     document.getElementById('statusBookingDetailContent').innerHTML = `
       <p style="font-size:11px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.55; margin:0 0 4px;">Booking Detail</p>
       <p style="font-size:16px; font-weight:600; margin:0 0 8px;">${esc(b.label || 'Booking')}</p>

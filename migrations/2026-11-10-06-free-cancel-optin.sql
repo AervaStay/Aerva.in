@@ -1,0 +1,12 @@
+-- 2026-11-10-06-free-cancel-optin.sql — the host chooses, per listing, whether
+-- guests may buy the free cancellation add-on (owner, 10 Nov 2026).
+-- Safe to run more than once.
+--
+-- listings.free_cancel_offered  "Offer free cancellation to guests". Off for
+--   every listing, existing ones included, until the host turns it on (the
+--   list-property form, a draft, or Manage listing). A change applies to NEW
+--   bookings only: a booking keeps the add-on it was bought with (the
+--   orders.free_cancel_* columns, 2026-11-10-01-free-cancellation.sql).
+--   The code reads it through to_jsonb(l)->>'free_cancel_offered', so until
+--   this has run every listing counts as off and the add-on is not offered.
+ALTER TABLE listings ADD COLUMN IF NOT EXISTS free_cancel_offered BOOLEAN NOT NULL DEFAULT false;

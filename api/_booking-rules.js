@@ -219,7 +219,7 @@ async function takeHolds(sql, stays, { guestKey, ip }) {
     const n = (await sql`SELECT count(*)::int AS n FROM booking_holds
                          WHERE guest_key = ${guestKey} AND listing_id = ${lid} AND created_at > now() - interval '24 hours'`)[0].n;
     if (n >= ATTEMPTS_PER_DAY) {
-      throw userError(`You have used all ${ATTEMPTS_PER_DAY} payment attempts for this listing today. Please try again tomorrow, or raise a request in Aerva Support (Help → Raise a request).`, 429);
+      throw userError(`You have used all ${ATTEMPTS_PER_DAY} payment attempts for this listing today. Please try again tomorrow, or raise a request in the Resolution Center (Help → Raise a request).`, 429);
     }
   }
   if (ip) {
@@ -352,6 +352,13 @@ async function heldRoomIds(sql, listingId, arrival, departure) {
   } catch (err) { return new Set(); }
 }
 
+// A calendar date written out for an email ("20 Nov 2026") — never the raw 2026-11-20.
+function niceDay(value) {
+  const s = dateStr(value);
+  if (!s) return '';
+  return new Date(s + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+module.exports.niceDay = niceDay;
 module.exports.HOLD_MINUTES = HOLD_MINUTES;
 module.exports.HOLD_SECONDS = HOLD_SECONDS;
 module.exports.ATTEMPTS_PER_DAY = ATTEMPTS_PER_DAY;

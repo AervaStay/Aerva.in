@@ -53,7 +53,9 @@ async function roleOf(sql, sessionPayload, hasValidSecret) {
 // What each role may call on get-pending-listings.js. Admin: everything.
 // Others: only these request keys (a GET's query keys, a POST's body keys).
 const MODIFIERS = new Set(['q', 'status', 'subject', 'limit', 'offset', 'before', 'ref', 'mine']);
-const AGENT_GET = new Set(['cancellationRequests', 'adminNotes', 'adminSummary', 'adminMe', 'supportCategories', 'supportTickets', 'supportTicket', 'supportTicketLive', 'lookup', 'lookupBooking', 'lookupGuest', 'lookupListing', 'supportActions', 'priceReviews']);
+const AGENT_GET = new Set(['cancellationRequests', 'adminNotes', 'adminSummary', 'adminMe', 'supportCategories', 'supportTickets', 'supportTicket', 'supportTicketLive', 'lookup', 'lookupBooking', 'lookupGuest', 'lookupListing', 'supportActions', 'priceReviews',
+  // Approvals also shows these two lists to every role (read only; the page offers the check-in actions to admins alone and the POSTs stay admin-only).
+  'checkinPromise', 'groupBookings']);
 const AGENT_POST = new Set(['supportReply', 'supportCase', 'supportSuggest', 'raiseForCustomer', 'proposeAction', 'withdrawAction', 'adminSignOutEverywhere']);
 const REVIEWER_POST = new Set([...AGENT_POST, 'reviewAction', 'decidePriceReview', 'decideCancellationRequest']);
 function allowed(role, req) {

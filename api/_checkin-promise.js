@@ -65,7 +65,7 @@ const MAX_OFFERS = 3;
 const MAX_CANDIDATES = 20;
 const CONFIRM_AFTER_CHECKOUT_HOURS = 24;   // a guest may still confirm a listing is real until then
 const ACTIVE = ['open', 'confirmed', 'rebooking', 'refunding'];
-const NOT_READY = 'The check-in promise is not switched on yet. Please try again later, or contact Aerva Support.';
+const NOT_READY = 'The check-in promise is not switched on yet. Please try again later, or raise a request in the Resolution Center (Help → Raise a request).';
 // The host notice that announces the payout timing; its `effective` date is
 // the first arrival date the "until check-out" hold applies to.
 const HOLD_NOTICE_ID = '2026-11-10-checkin-promise';
@@ -129,7 +129,7 @@ async function loadOrder(sql, orderId) {
 async function loadReport(sql, reportId) {
   return (await sql`SELECT * FROM checkin_reports WHERE id = ${Number(reportId) || 0}`)[0] || null;
 }
-function stayLine(o) { return `${o.property_name || o.suite_name} (${dateStr(o.arrival)} → ${dateStr(o.departure)}, booking ${o.code || '#' + o.id})`; }
+function stayLine(o) { return `${o.property_name || o.suite_name} (${niceDate(o.arrival)} → ${niceDate(o.departure)}, booking ${o.code || '#' + o.id})`; }
 
 // The booking as the guest paid for it — kept on the report, so the guest's
 // one summary can show it after the original row is closed.
@@ -481,7 +481,7 @@ async function acceptOffer(sql, razorpay, { orderId, guestId, option }) {
     const same = open.requested && open.requested.kind === 'rebook' && Number(open.requested.option) === Number(option) && open.status === 'awaiting_payment';
     if (same) return { changeId: open.id, pay: Number(open.difference) };
     if (open.requested && open.requested.kind === 'rebook') await sql`UPDATE booking_changes SET status = 'withdrawn', decided_at = now() WHERE id = ${open.id} AND status IN ('pending', 'awaiting_payment')`;
-    else throw userError('Another change is open on this booking. Please contact Aerva Support.', 409);
+    else throw userError('Another change is open on this booking. Please raise a request in the Resolution Center (Help → Raise a request).', 409);
   }
   const qc = await quoteRebook(sql, r.order_id, guestId, { reportId: r.id, option });
   const row = (await sql`INSERT INTO booking_changes (order_id, guest_id, requested, quote, old_total, new_total, difference, summary)
@@ -519,7 +519,7 @@ async function applyRebook(sql, razorpay, change, { paymentId = null } = {}) {
     const total = Math.round(Number(change.new_total));
     const deposit = Number(d.depositAmount || 0);
     let releaseAt = null;
-    if (deposit > 0) releaseAt = require('./_deposits').releaseDateFor(q.to);   // the host has 24 hours from check-out (_deposits.js)
+    if (deposit > 0) { const x = new Date(q.to + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 7); releaseAt = x.toISOString().slice(0, 10); }
     const used = Math.round(Number(o.fee_credit_used) || 0);
     const creditTake = Math.min(used, total);
     claim = await C.claimForCancellation(sql, [o.id]);
@@ -737,7 +737,7 @@ async function decorateGuestBookings(sql, bookings) {
     const ids = bookings.map(b => Number(b.id));
     const reps = await sql`SELECT DISTINCT ON (order_id) * FROM checkin_reports WHERE order_id = ANY(${ids}) ORDER BY order_id, id DESC`;
     const byOrder = new Map(reps.map(r => [Number(r.order_id), r]));
-    const extra = await sql`SELECT o.id, o.checkin_rebook_of, o.guest_confirmed_stay_at, l.checkin_verified_at, l.checkin_blocked_at,
+    const extra = await sql`SELECT o.id, o.checkin_rebook_of, o.guest_confirmed_stay_at, l.checkin_verified_at, l.checkin_blocked_at, to_jsonb(o)->>'group_booking_id' AS group_booking_id,
                                    COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata') AS tz, to_jsonb(l)->>'check_in_time' AS check_in_time, to_jsonb(l)->>'check_out_time' AS check_out_time
                             FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ANY(${ids})`;
     const ex = new Map(extra.map(x => [Number(x.id), x]));
@@ -754,7 +754,10 @@ async function decorateGuestBookings(sql, bookings) {
       const x = ex.get(Number(b.id)) || {};
       if (r && r.status === 'rebooked') { b._hide = true; continue; }
       if (r) {
-        b.checkin = { reportId: r.id, reason: r.reason, status: r.status, statusText: r.status === 'confirmed' && !(r.offers || []).length ? 'Aerva confirmed your report · we are finding you a new place' : STATUS[r.status] || '',
+        b.checkin = { reportId: r.id, reason: r.reason, status: r.status, statusText: r.status === 'confirmed' && !(r.offers || []).length
+            // A group booking is never moved (sendOffers refuses it): every payer is refunded in full.
+            ? (x.group_booking_id ? 'Aerva confirmed your report · a group booking is not moved to another place: every payer is refunded in full to their own payment' : 'Aerva confirmed your report · we are finding you a new place')
+            : STATUS[r.status] || '',
           note: r.status === 'cleared' ? r.decision_note : null,
           offers: r.status === 'confirmed' ? (r.offers || []).map(k => ({ n: k.n, name: k.name, city: k.city, area: k.area, photo: k.photo, distanceKm: k.distanceKm, from: k.from, to: k.to, nights: k.nights,
             subtotal: k.subtotal, gst: k.gst, fee: k.fee, deposit: k.deposit, total: k.total, oldTotal: k.oldTotal, difference: k.difference })) : [],

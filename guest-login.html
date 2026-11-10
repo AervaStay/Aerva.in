@@ -72,7 +72,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
 <link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
-<script src="aerva-cohost.js?v=2026-11-11b"></script>
+<script src="aerva-cohost.js?v=2026-11-11d"></script>
 </head>
 <body>
 
@@ -139,8 +139,9 @@
          a support request without an account (aerva-help.js, signin=1). -->
     <p class="switch-mode" id="cantSignInRow"><a href="index.html?view=help&amp;signin=1" id="cantSignInLink">Can’t sign in?</a></p>
     <p class="switch-mode">New to Aerva? <button type="button" id="showSignup">Create an account</button></p>
-    <!-- Phone login: a code on WhatsApp (guest-phone-auth.js). Shown only
-         while the server says WhatsApp codes are switched on (GET ?status=1). -->
+    <!-- Phone login is built and working (guest-phone-auth.js + the screens
+         below); hidden until Twilio is set up. To show it again, set
+         PHONE_LOGIN_ENABLED = true in the script further down. -->
     <p class="switch-mode" id="phoneLoginRow" style="display:none;"><button type="button" id="showPhoneRequest">Log in with phone instead</button></p>
   </div>
 
@@ -238,7 +239,7 @@
 
   <div id="phoneRequestState" style="display:none;">
     <h1>Log in with phone</h1>
-    <p class="subtitle">We'll send a one-time code to your WhatsApp.</p>
+    <p class="subtitle">We'll text you a one-time code.</p>
     <form id="phoneRequestForm">
       <div class="field">
         <label for="phoneNumber">Phone number</label>
@@ -252,7 +253,7 @@
         <span>I agree to Aerva’s <a href="index.html?view=terms" target="_blank" rel="noopener">Terms of Service</a> and <a href="index.html?view=privacy" target="_blank" rel="noopener">Privacy Policy</a>.
           <span class="consent-hint">Needed only when this number is new to Aerva.</span></span>
       </label>
-      <button type="submit" class="btn" id="phoneRequestBtn">Send code on WhatsApp</button>
+      <button type="submit" class="btn" id="phoneRequestBtn">Send code</button>
       <p class="error" id="phoneRequestError" style="display:none;"></p>
     </form>
     <p class="switch-mode"><button type="button" id="showLoginFromPhone">Log in with email instead</button></p>
@@ -260,7 +261,7 @@
 
   <div id="phoneVerifyState" style="display:none;">
     <h1>Enter your code</h1>
-    <p class="subtitle" id="phoneVerifySubtitle">We sent a code to your WhatsApp.</p>
+    <p class="subtitle" id="phoneVerifySubtitle">We texted a code to your phone.</p>
     <form id="phoneVerifyForm">
       <div class="field">
         <label for="phoneCode">Code</label>
@@ -269,9 +270,7 @@
       <button type="submit" class="btn" id="phoneVerifyBtn">Verify</button>
       <p class="error" id="phoneVerifyError" style="display:none;"></p>
     </form>
-    <p class="switch-mode"><button type="button" id="phoneResendBtn" disabled>Send the code again</button></p>
     <p class="switch-mode"><button type="button" id="backToPhoneRequest">Use a different number</button></p>
-    <p class="switch-mode"><button type="button" id="showLoginFromPhoneVerify">No WhatsApp? Log in with email instead</button></p>
   </div>
 </div>
 
@@ -321,16 +320,9 @@
   // environment variable so guest-auth.js can verify tokens were issued
   // for this exact client id. Until it's filled in, the button below
   // simply shows an error if clicked — nothing else on this page is affected.
-
-  // Phone login (a code on WhatsApp) shows only while the server has it
-  // switched on. Asked once per page load; any failure leaves it hidden.
-  (async function(){
-    try{
-      const r = await fetch(API_BASE + '/api/guest-phone-auth?status=1', { cache: 'no-store' });
-      const d = await r.json();
-      if(r.ok && d && d.available){ const row = document.getElementById('phoneLoginRow'); if(row) row.style.display = ''; }
-    }catch(e){ /* stays hidden */ }
-  })();
+  // Phone login: built, tested, hidden for now (turn on after Twilio setup).
+  const PHONE_LOGIN_ENABLED = false;
+  if(PHONE_LOGIN_ENABLED){ const row = document.getElementById('phoneLoginRow'); if(row) row.style.display = ''; }
 
   const GOOGLE_CLIENT_ID = '431078338314-ii1i2a1elktl6ijfkgmobhs3tsq3ujq7.apps.googleusercontent.com';
 
@@ -834,12 +826,9 @@
       const data = await res.json();
       if(res.ok){
         pendingPhoneNumber = built.e164;
-        document.getElementById('phoneVerifySubtitle').textContent = `We sent a code on WhatsApp to ${built.e164}. It is good for ${data.expiresInMinutes || 10} minutes.`;
+        document.getElementById('phoneVerifySubtitle').textContent = `We texted a code to ${built.e164}.`;
         document.getElementById('phoneCode').value = '';
-        document.getElementById('phoneVerifyError').style.display = 'none';
         showOnly(phoneVerifyState);
-        startPhoneResendTimer(data.resendAfterSeconds || 45);
-        document.getElementById('phoneCode').focus();
       } else {
         showServerError(phoneRequestError, data, 'Something went wrong. Please try again.');
       }
@@ -848,46 +837,8 @@
       phoneRequestError.style.display = 'block';
     }
     phoneRequestBtn.disabled = false;
-    phoneRequestBtn.textContent = 'Send code on WhatsApp';
+    phoneRequestBtn.textContent = 'Send code';
   });
-
-  // "Send the code again" unlocks after the wait the server asks for.
-  let phoneResendTimer = null;
-  function startPhoneResendTimer(seconds){
-    const btn = document.getElementById('phoneResendBtn');
-    let left = Math.max(1, Math.round(seconds));
-    clearInterval(phoneResendTimer);
-    btn.disabled = true;
-    const tick = () => {
-      if(left <= 0){ clearInterval(phoneResendTimer); btn.disabled = false; btn.textContent = 'Send the code again'; return; }
-      btn.textContent = `Send the code again (${left}s)`;
-      left--;
-    };
-    tick();
-    phoneResendTimer = setInterval(tick, 1000);
-  }
-  document.getElementById('phoneResendBtn').addEventListener('click', async function(){
-    if(!pendingPhoneNumber) return;
-    const errEl = document.getElementById('phoneVerifyError');
-    errEl.style.display = 'none';
-    this.disabled = true; this.textContent = 'Sending…';
-    try{
-      const res = await fetch(API_BASE + '/api/guest-phone-auth', { method: 'POST', headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ mode: 'request', phone: pendingPhoneNumber }) });
-      const data = await res.json().catch(() => ({}));
-      if(res.ok){
-        document.getElementById('phoneVerifySubtitle').textContent = `We sent a new code on WhatsApp to ${pendingPhoneNumber}. Use the newest one.`;
-        startPhoneResendTimer(data.resendAfterSeconds || 45);
-        return;
-      }
-      showServerError(errEl, data, 'Could not send the code. Please try again.');
-      startPhoneResendTimer(data.waitSeconds || 45);
-    }catch(e){
-      errEl.textContent = 'Something went wrong. Please try again.'; errEl.style.display = 'block';
-      startPhoneResendTimer(10);
-    }
-  });
-  document.getElementById('showLoginFromPhoneVerify').addEventListener('click', () => showOnly(loginState));
 
   document.getElementById('phoneVerifyForm').addEventListener('submit', async function(e){
     e.preventDefault();

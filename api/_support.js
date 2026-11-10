@@ -218,7 +218,7 @@ async function createRequest(sql, { guestId, category, subject, description, ord
     if (!ticket) throw new Error('could not draw a free reference number');
     // The timeline starts with the request being raised.
     await sql`INSERT INTO support_messages (ticket_id, sender, body, created_at) VALUES (${ticket.id}, 'system',
-                ${`Request raised${raisedBy ? ' by Aerva support (' + (raisedBy.name || raisedBy.email) + ') on the customer’s behalf' : ''}: ${CATEGORIES[category].label}. Reference ${ticket.ref}.${callbackPhone ? ` Call back asked for on ${callbackPhone}.` : ''}`}, now() - interval '1 millisecond')`;
+                ${`Request raised${raisedBy ? ' by Aerva Support (' + (raisedBy.name || raisedBy.email) + ') on the customer’s behalf' : ''}: ${CATEGORIES[category].label}. Reference ${ticket.ref}.${callbackPhone ? ` Call back asked for on ${callbackPhone}.` : ''}`}, now() - interval '1 millisecond')`;
     await sql`INSERT INTO support_messages (ticket_id, sender, body, attachments) VALUES (${ticket.id}, 'user', ${text}, ${JSON.stringify(files)}::jsonb)`;
   } catch (err) {
     if (notReady(err)) throw NOT_READY();
@@ -495,7 +495,7 @@ async function adminList(sql, { status = 'active', q = '' } = {}) {
              (COALESCE(to_jsonb(t)->>'channel', 'web') = 'signed_out') AS signed_out,
              (t.first_response_at IS NULL AND t.status NOT IN ('resolved', 'closed')
                AND t.created_at < now() - make_interval(hours => ${FIRST_RESPONSE_HOURS})) AS overdue,
-             (t.last_user_message_at IS NOT NULL AND (t.last_support_message_at IS NULL OR t.last_user_message_at > t.last_support_message_at)) AS awaiting_us
+             (t.status NOT IN ('resolved', 'closed') AND t.last_user_message_at IS NOT NULL AND (t.last_support_message_at IS NULL OR t.last_user_message_at > t.last_support_message_at)) AS awaiting_us
       FROM support_tickets t LEFT JOIN guests g ON g.id = t.guest_id
       WHERE (${want}::text[] IS NULL OR t.status = ANY(${want}::text[]))
         AND (${term} = '' OR t.ref ILIKE ${'%' + term + '%'} OR t.subject ILIKE ${'%' + term + '%'} OR g.email ILIKE ${'%' + term + '%'} OR g.name ILIKE ${'%' + term + '%'}
@@ -540,10 +540,12 @@ async function adminGet(sql, id) {
       nights: Number(r.nights) || 0, guests: Number(r.guests) || 0, status: r.status, when: r.stay_when, total: r.total == null ? null : Math.round(Number(r.total)),
       deposit: Math.round(Number(r.deposit_amount) || 0), depositStatus: r.deposit_status || null, refundPercent: r.refund_percent == null ? null : Number(r.refund_percent),
       cancelledBy: r.cancelled_by || null, openChange: !!r.open_change, openCancel: !!r.open_cancel, guestName: r.guest_name || null, thisRequest: Number(r.id) === Number(t.order_id) }));
+    // "Today" is the property's own day (India time unless the listing says otherwise), not the database's UTC day:
+    // before 5:30 am a stay starting today read "Upcoming" and one that ended yesterday "Staying now".
     const pick = (who) => sql`
       SELECT o.id, to_jsonb(o)->>'confirmation_code' AS confirmation_code, o.suite_name, o.arrival::text AS arrival_day, o.departure::text AS departure_day, o.nights, o.guests, o.status, o.total,
              to_jsonb(o)->>'deposit_amount' AS deposit_amount, to_jsonb(o)->>'deposit_status' AS deposit_status, to_jsonb(o)->>'refund_percent' AS refund_percent, to_jsonb(o)->>'cancelled_by' AS cancelled_by,
-             CASE WHEN o.status <> 'paid' THEN 'cancelled' WHEN o.departure < CURRENT_DATE THEN 'past' WHEN o.arrival <= CURRENT_DATE THEN 'now' ELSE 'upcoming' END AS stay_when,
+             CASE WHEN o.status <> 'paid' THEN 'cancelled' WHEN o.departure < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date THEN 'past' WHEN o.arrival <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date THEN 'now' ELSE 'upcoming' END AS stay_when,
              EXISTS (SELECT 1 FROM booking_changes c WHERE c.order_id = o.id AND c.status IN ('pending', 'accepted')) AS open_change,
              EXISTS (SELECT 1 FROM cancellation_requests c WHERE c.order_id = o.id AND c.status = 'pending') AS open_cancel,
              gg.name AS guest_name
@@ -552,8 +554,8 @@ async function adminGet(sql, id) {
         AND (${who === 'guest'} OR l.host_id = (SELECT host_id FROM guests WHERE id = ${t.guest_id}))
         AND (${who === 'guest'} OR o.guest_id IS DISTINCT FROM ${t.guest_id})
       ORDER BY (o.id = ${Number(t.order_id) || 0}) DESC,
-               CASE WHEN o.status = 'paid' AND o.departure >= CURRENT_DATE THEN 0 ELSE 1 END,
-               CASE WHEN o.status = 'paid' AND o.departure >= CURRENT_DATE THEN o.arrival END ASC, o.arrival DESC
+               CASE WHEN o.status = 'paid' AND o.departure >= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date THEN 0 ELSE 1 END,
+               CASE WHEN o.status = 'paid' AND o.departure >= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date THEN o.arrival END ASC, o.arrival DESC
       LIMIT 10`;
     try { bookings.asGuest = cols(await pick('guest')); } catch (err) { console.error('support: person bookings', err && err.message); }
     try { bookings.asHost = cols(await pick('host')); } catch (err) { console.error('support: host bookings', err && err.message); }
@@ -989,7 +991,7 @@ async function signedOutNotice(sql, t, { replied = false, closed = false, auto =
   if (!to) return false;
   const key = await issueKey(sql, t.id, 'notice');
   const link = key ? privateLink(t.ref, key) : null;
-  const headline = replied ? `Aerva Support replied to your request ${t.ref}` : `Your request ${t.ref} is now: ${STATUS_LABELS[t.status] || t.status}`;
+  const headline = replied ? `Aerva Support replied to your request ${t.ref}` : closed ? `Your request ${t.ref} is now closed` : `Your request ${t.ref} is now: ${STATUS_LABELS[t.status] || t.status}`;
   return sendEmail(to, replied ? headline : closed ? `Your request ${t.ref} is closed` : headline,
     `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">${esc(replied ? 'Aerva Support replied' : closed ? 'Your request is closed' : 'Your request has an update')}</h2>
      <p>${esc(headline)}${link ? ' — open your request:' : '.'}</p>

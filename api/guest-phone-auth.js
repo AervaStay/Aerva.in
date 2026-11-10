@@ -1,30 +1,32 @@
 // /api/guest-phone-auth.js
-// Phone + code for guests. The code goes by WhatsApp (owner, 10 Nov 2026:
-// Meta's WhatsApp Cloud API, fallback email only — no SMS). Aerva makes,
-// stores (as a hash), sends and checks the code in _phone-otp.js; Twilio is
-// no longer used.
-//
-//   GET  ?status=1                               → { available }
-//     Whether WhatsApp codes are switched on. The sign-in page shows "Log in
-//     with phone" and checkout asks for a code only while this is true.
+// Phone + OTP login for guests, using Twilio Verify — Twilio generates,
+// sends, expires, and rate-limits the OTP itself server-side, so this
+// file never stores or compares a code directly. That's deliberately
+// simpler and safer than rolling a custom OTP system.
 //
 //   POST { mode: 'request', phone }
-//     Sends a 6-digit code on WhatsApp to the number (any common way of
-//     writing it; stored and sent as E.164, e.g. +919876543210).
+//     Triggers an SMS with a one-time code to the given phone number
+//     (E.164 format, e.g. +919876543210).
+//
+//   NOTE: every code Twilio sends costs money, per message. Confirming an
+//   account is therefore done by EMAIL instead (guest-auth.js, mode
+//   'emailOtp…'), which costs nothing — this stays only for hosts and
+//   guests who prefer to sign in with their number.
 //
 //   POST { mode: 'verify', phone, code }        — sign in by phone
 //   POST { mode: 'link', phone, code }           — signed in already:
 //     attaches this verified number to THAT account instead of switching
 //     to another one. Every account ends up linked to a number its owner
-//     proved by code, which is what a host is given to reach the guest.
-//     'verify' finds or creates a guest account by the number and returns a
-//     30-day session token — the same token type/shape as email+password
-//     login, so the existing GET /api/guest-auth session check works for
-//     phone-based logins too.
+//     proved by OTP, which is what a host is given to reach the guest.
+//     Checks the code with Twilio. If correct, finds or creates a guest
+//     account by phone number and returns a 30-day session token — the
+//     same token type/shape as email+password login, so the existing
+//     GET /api/guest-auth session check works for phone-based logins too.
 //
-// Switched on by the WhatsApp settings described in _phone-otp.js plus the
-// database update 2026-11-10-06-whatsapp-otp.sql. Until then every mode is
-// refused with a message pointing to email.
+// Requires env vars: TWILIO_ACCOUNT_SID, TWILIO_AUTH_TOKEN,
+// TWILIO_VERIFY_SERVICE_SID (a Verify Service created in the Twilio
+// console — not the same as a phone number SID), and PHONE_LOGIN_ENABLED
+// = true. Without that flag every mode is refused with a clear message.
 
 require('./_env'); // production vs UAT safety rails — must load first
 const { neon } = require('@neondatabase/serverless');
@@ -33,25 +35,39 @@ const { sessionStatus, newSessionToken, reactivateIfPaused, assertNotSuspended, 
 const { logAudit } = require('./_audit-log');
 const { getClientIp, countRecentAttempts } = require('./_rate-limit');
 const { E164_PATTERN, normalizeToE164, phoneMatchSuffix } = require('./_phone-validation');
-const phoneOtp = require('./_phone-otp');
 
 const sql = neon(process.env.DATABASE_URL);
 
+// Phone sign-in is built but switched off until Twilio is set up (the
+// sign-in page hides it). 'true' or '1' in Vercel turns it on.
 // Same string as TERMS_VERSION in guest-auth.js and guest-login.html.
 const TERMS_VERSION = '1.0 (26 September 2026)';
+const PHONE_LOGIN_ENABLED = /^(1|true|yes|on)$/i.test(String(process.env.PHONE_LOGIN_ENABLED || ''));
 
 const SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — matches email login
 
-// How many codes a number or a connection may ask for is capped in
-// _phone-otp.js (every WhatsApp message is billed). Checking is free, but
-// uncapped it is a brute-force surface against a 6-digit code, so it gets
-// a limit of its own.
+// Twilio Verify rate-limits per DESTINATION number on its own, which
+// stops someone hammering one person's phone. What it does not stop is
+// one script requesting codes for thousands of DIFFERENT numbers — every
+// one of those is a real SMS that Aerva pays for. That's SMS pumping
+// (a.k.a. toll fraud), and the bill lands before anyone notices the
+// traffic. These caps are the actual protection; Twilio's own limits are
+// a second layer underneath, not a substitute.
+const OTP_REQUESTS_PER_IP_PER_HOUR = 10;
+const OTP_REQUESTS_PER_NUMBER_PER_HOUR = 5;
+// Verification is cheap (no SMS sent), but uncapped it's a brute-force
+// surface against a 6-digit code, so it gets a looser limit of its own.
 const OTP_VERIFY_FAILURES_PER_IP_PER_HOUR = 20;
 
 // E.164 shape check, plus the normalizer that accepts the same number
 // written with spaces, dashes, a 00 prefix, or no country code at all —
 // both shared with guest-auth.js's signup so every write to guests.phone
 // lands in one consistent format. See _phone-validation.js.
+
+function twilioAuthHeader() {
+  const creds = `${process.env.TWILIO_ACCOUNT_SID}:${process.env.TWILIO_AUTH_TOKEN}`;
+  return 'Basic ' + Buffer.from(creds).toString('base64');
+}
 
 function safeGuest(guest) {
   return { id: guest.id, email: guest.email, name: guest.name, phone: guest.phone };
@@ -60,23 +76,23 @@ function safeGuest(guest) {
 module.exports = async (req, res) => {
   const allowedOrigin = 'https://aerva.in';
   res.setHeader('Access-Control-Allow-Origin', allowedOrigin);
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+  res.setHeader('Access-Control-Allow-Methods', 'POST, OPTIONS');
   // Authorization: the 'link' mode is used by someone already signed in.
   res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
 
   if (req.method === 'OPTIONS') return res.status(200).end();
-  if (req.method === 'GET') {
-    const st = await phoneOtp.status(sql);
-    res.setHeader('Cache-Control', 'no-store');
-    return res.status(200).json({ available: st.available, channel: 'whatsapp' });
-  }
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
-  // Off until WhatsApp codes are set up (see _phone-otp.js): nothing here
-  // may send a message — or sign anyone in — until then.
-  const st = await phoneOtp.status(sql);
-  if (!st.available) {
-    return res.status(503).json({ error: 'Codes on WhatsApp are not available yet. Please use your email instead.', phoneLoginDisabled: true, emailFallback: true });
+  // Off unless PHONE_LOGIN_ENABLED is set in Vercel: the sign-in page hides
+  // phone login, and every text message is billed, so nothing here may
+  // send one — or sign anyone in — until it is switched on on purpose.
+  if (!PHONE_LOGIN_ENABLED) {
+    return res.status(503).json({ error: 'Logging in by phone is not available. Please log in with your email instead.', phoneLoginDisabled: true });
+  }
+
+  if (!process.env.TWILIO_ACCOUNT_SID || !process.env.TWILIO_AUTH_TOKEN || !process.env.TWILIO_VERIFY_SERVICE_SID) {
+    console.error('Twilio env vars not fully set — phone login cannot work.');
+    return res.status(500).json({ error: 'Phone login is not available right now. Please try email instead.' });
   }
 
   const { mode, phone, code } = req.body || {};
@@ -84,25 +100,82 @@ module.exports = async (req, res) => {
 
   // Accept whatever the person typed and normalize it, rather than
   // rejecting anything that isn't already perfect E.164 — "098765 43210"
-  // and "+91 98765-43210" are the same number, and only the canonical form
-  // is stored or sent.
+  // and "+91 98765-43210" are the same number, and Twilio only ever sees
+  // the canonical form.
   const cleanPhone = normalizeToE164(phone);
   if (!cleanPhone || !E164_PATTERN.test(cleanPhone)) {
     return res.status(400).json({ error: 'Please enter your phone number with country code, like +919876543210.' });
   }
 
-  // ---- Request a code (WhatsApp) ----
+  // ---- Request an OTP ----
   if (mode === 'request') {
+    // Checked BEFORE the Twilio call — the whole point is to not send
+    // (and not pay for) the message in the first place. countRecentAttempts
+    // fails open on a database error, which is the right trade here: a
+    // broken rate-limit check shouldn't lock every real guest out of
+    // logging in.
+    const requestsByIp = await countRecentAttempts(sql, {
+      action: 'guest_phone_otp_requested', windowMinutes: 60, byIp: clientIp, onlyFailures: false
+    });
+    if (requestsByIp >= OTP_REQUESTS_PER_IP_PER_HOUR) {
+      await logAudit(sql, {
+        action: 'guest_phone_otp_blocked', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
+        metadata: { reason: 'ip_rate_limited', ip: clientIp }
+      });
+      return res.status(429).json({ error: 'Too many codes requested from this connection. Please try again later.' });
+    }
+
+    const requestsByNumber = await countRecentAttempts(sql, {
+      action: 'guest_phone_otp_requested', windowMinutes: 60, byActor: cleanPhone, onlyFailures: false
+    });
+    if (requestsByNumber >= OTP_REQUESTS_PER_NUMBER_PER_HOUR) {
+      await logAudit(sql, {
+        action: 'guest_phone_otp_blocked', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
+        metadata: { reason: 'number_rate_limited', ip: clientIp }
+      });
+      return res.status(429).json({ error: 'Too many codes requested for this number. Please try again later.' });
+    }
+
     try {
-      const out = await phoneOtp.sendCode(sql, { phone: cleanPhone, purpose: 'guest', ip: clientIp });
-      return res.status(200).json({ success: true, channel: out.channel, expiresInMinutes: out.expiresInMinutes, resendAfterSeconds: out.resendAfterSeconds });
-    } catch (err) {
-      if (err.isUserFacing) {
-        return res.status(err.status || 400).json({ error: err.message, emailFallback: !!err.emailFallback,
-          notOnWhatsApp: !!err.notOnWhatsApp, waitSeconds: err.waitSeconds || undefined });
+      const verifyRes = await fetch(
+        `https://verify.twilio.com/v2/Services/${process.env.TWILIO_VERIFY_SERVICE_SID}/Verifications`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': twilioAuthHeader(),
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: new URLSearchParams({ To: cleanPhone, Channel: 'sms' })
+        }
+      );
+
+      if (!verifyRes.ok) {
+        let detail;
+        try { detail = await verifyRes.json(); } catch { detail = { message: verifyRes.statusText }; }
+        console.error('Twilio Verify (start) failed:', verifyRes.status, detail);
+        await logAudit(sql, {
+          action: 'guest_phone_otp_requested', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
+          metadata: { reason: 'twilio_error', status: verifyRes.status, ip: clientIp }
+        });
+        // A 4xx here is almost always an invalid/unreachable number.
+        if (verifyRes.status >= 400 && verifyRes.status < 500) {
+          return res.status(400).json({ error: "That phone number couldn't be reached. Please double check it." });
+        }
+        return res.status(500).json({ error: 'Could not send the code right now. Please try again shortly.' });
       }
+
+      await logAudit(sql, {
+        action: 'guest_phone_otp_requested', success: true, actorType: 'guest', actorIdentifier: cleanPhone,
+        metadata: { ip: clientIp }
+      });
+      return res.status(200).json({ success: true });
+    } catch (err) {
       console.error('guest-phone-auth (request) error:', err);
-      return res.status(500).json({ error: 'Could not send the code right now. Please try again shortly, or use your email instead.', emailFallback: true });
+      await logAudit(sql, {
+        action: 'guest_phone_otp_requested', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
+        metadata: { reason: 'server_error', ip: clientIp }
+      });
+      return res.status(500).json({ error: 'Could not send the code right now. Please try again shortly.' });
     }
   }
 
@@ -111,12 +184,12 @@ module.exports = async (req, res) => {
   // they are already signed in to. Both need the same code check first.
   if (mode === 'verify' || mode === 'link') {
     if (!code || typeof code !== 'string') {
-      return res.status(400).json({ error: 'Please enter the 6-digit code from WhatsApp.' });
+      return res.status(400).json({ error: 'Please enter the code you received.' });
     }
 
-    // A 6-digit code is only 10^6 possibilities; each code allows 5 guesses
-    // (_phone-otp.js), but nothing there stops one IP grinding away across
-    // many numbers at once.
+    // A 6-digit code is only 10^6 possibilities; Twilio expires codes and
+    // caps checks per verification, but nothing there stops one IP
+    // grinding away across many numbers at once.
     const failedVerifies = await countRecentAttempts(sql, {
       action: 'guest_phone_otp_verified', windowMinutes: 60, byIp: clientIp, onlyFailures: true
     });
@@ -129,13 +202,27 @@ module.exports = async (req, res) => {
     }
 
     try {
-      const check = await phoneOtp.checkCode(sql, { phone: cleanPhone, purpose: 'guest', code });
-      if (!check.ok) {
+      const checkRes = await fetch(
+        `https://verify.twilio.com/v2/Services/${process.env.TWILIO_VERIFY_SERVICE_SID}/VerificationCheck`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': twilioAuthHeader(),
+            'Content-Type': 'application/x-www-form-urlencoded'
+          },
+          body: new URLSearchParams({ To: cleanPhone, Code: code.trim() })
+        }
+      );
+
+      const checkData = await checkRes.json().catch(() => null);
+
+      if (!checkRes.ok || !checkData || checkData.status !== 'approved') {
+        console.error('Twilio Verify (check) not approved:', checkRes.status, checkData);
         await logAudit(sql, {
           action: 'guest_phone_otp_verified', success: false, actorType: 'guest', actorIdentifier: cleanPhone,
           metadata: { reason: 'code_rejected', ip: clientIp }
         });
-        return res.status(check.status || 401).json({ error: check.error });
+        return res.status(401).json({ error: 'That code is incorrect or has expired. Please request a new one.' });
       }
 
       // Who holds this number now, and did they prove it? A number that was
@@ -169,6 +256,9 @@ module.exports = async (req, res) => {
       const markProved = async (id) => {
         try { await sql`UPDATE guests SET phone_verified = true WHERE id = ${id}`; }
         catch (err) { /* before migration_session_version.sql */ }
+        // The same proof a booking needs (_guest-verify.js): the number on
+        // the account, confirmed by SMS code, with when.
+        await require('./_guest-verify').markPhoneProved(sql, null, id);
       };
 
       // Signed in already: the verified number joins THIS account.

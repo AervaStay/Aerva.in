@@ -390,8 +390,16 @@ function describe(v) {
 async function status(sql, guestId) {
   const [v, account] = await Promise.all([readVerification(sql, guestId), loadAccount(sql, guestId)]);
   const fullName = account ? ([account.first_name, account.last_name].filter(Boolean).join(' ') || account.name || '') : '';
+  // A guest verified for bookings (_guest-verify.js) is shown as verified here too.
+  let shown = describe(v);
+  if (!shown && account && !account.host_id) {
+    try {
+      const g = (await sql`SELECT to_jsonb(g)->>'guest_id_type' AS type, to_jsonb(g)->>'guest_id_last4' AS last4, to_jsonb(g)->>'guest_id_verified_at' AS at FROM guests g WHERE g.id = ${guestId}`)[0];
+      if (g && g.at && g.type) shown = { verified: true, method: 'document', document: (DOC_TYPES.find(d => d.key === g.type) || {}).label || 'ID', name: null, last4: g.last4 || null, verifiedAt: g.at };
+    } catch (err) { /* as before */ }
+  }
   return {
-    verification: describe(v),
+    verification: shown,
     isHost: !!(account && account.host_id),
     suggestedName: fullName,
     docTypes: DOC_TYPES.map(d => ({ key: d.key, label: d.label, numberHint: d.numberHint })),
@@ -409,7 +417,7 @@ async function logAttempt(sql, logAudit, guestId, success, metadata) {
 async function verifyDocument(sql, logAudit, guestId, body) {
   const account = await loadAccount(sql, guestId);
   if (!account) throw userError('Please log in again.', 401);
-  if (await attemptsToday(sql, guestId) >= ATTEMPTS_PER_DAY) throw userError('Too many tries today. Please try again tomorrow, or raise a request in Aerva Support (Help → Raise a request).', 429);
+  if (await attemptsToday(sql, guestId) >= ATTEMPTS_PER_DAY) throw userError('Too many tries today. Please try again tomorrow, or raise a request in the Resolution Center (Help → Raise a request).', 429);
   const input = cleanInput(body || {});
   const files = decodeFiles(body && body.files);
   let read;
@@ -441,7 +449,7 @@ async function verifyAadhaarZip(sql, logAudit, guestId, body) {
   if (!aadhaarZipAvailable()) throw userError('This option is not available right now. Add a photo of your ID instead.', 503);
   const account = await loadAccount(sql, guestId);
   if (!account) throw userError('Please log in again.', 401);
-  if (await attemptsToday(sql, guestId) >= ATTEMPTS_PER_DAY) throw userError('Too many tries today. Please try again tomorrow, or raise a request in Aerva Support (Help → Raise a request).', 429);
+  if (await attemptsToday(sql, guestId) >= ATTEMPTS_PER_DAY) throw userError('Too many tries today. Please try again tomorrow, or raise a request in the Resolution Center (Help → Raise a request).', 429);
   const shareCode = String((body && body.zipPassword) || '').trim();
   if (!shareCode || shareCode.length > 20) throw userError('Enter the share code you chose when downloading the file.');
   let zip;
@@ -482,13 +490,19 @@ async function verifyAadhaarZip(sql, logAudit, guestId, body) {
 // For the profile others see: just whether, and with what kind of ID.
 async function badgeFor(sql, guestId) {
   const v = await readVerification(sql, guestId);
-  return v ? { verified: true, document: v.method === 'aadhaar_offline' ? 'Aadhaar' : ((DOC_TYPES.find(d => d.key === v.docType) || {}).label || 'ID') } : null;
+  if (v) return { verified: true, document: v.method === 'aadhaar_offline' ? 'Aadhaar' : ((DOC_TYPES.find(d => d.key === v.docType) || {}).label || 'ID') };
+  // Verified for bookings (_guest-verify.js: the photo ID a booking needs).
+  try {
+    const g = (await sql`SELECT to_jsonb(g)->>'guest_id_type' AS type, to_jsonb(g)->>'guest_id_verified_at' AS at FROM guests g WHERE g.id = ${guestId}`)[0];
+    if (g && g.at && g.type) return { verified: true, document: (DOC_TYPES.find(d => d.key === g.type) || {}).label || 'ID' };
+  } catch (err) { /* no badge */ }
+  return null;
 }
 
 module.exports = {
   DOC_TYPES, status, verifyDocument, verifyAadhaarZip, readVerification, describe, badgeFor, provesHostAddress, aadhaarZipAvailable,
-  // shared with _pan-verify.js
-  decodeFiles, fetchWithTimeout, userError,
+  // shared with _pan-verify.js and _guest-verify.js
+  decodeFiles, fetchWithTimeout, userError, readDocument,
   // for tests
   namesMatch, sameBirthDate, judgeDocument, aadhaarHash, last4Of
 };

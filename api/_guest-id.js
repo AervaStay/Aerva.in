@@ -1,19 +1,39 @@
-// /api/_guest-id.js — what an account needs before it can book.
+// /api/_guest-id.js — what an account needs before it can START a checkout.
 // Not an endpoint.
 //
 // An Aerva account is ONE email address and ONE phone number
 // (migration_email_otp.sql enforces both):
 //
-//   • the EMAIL is confirmed by a code sent to it (_email-otp.js). Email
-//     costs nothing to send; every SMS or WhatsApp message is billed per
-//     message, which is why the code goes there and not to the phone.
-//   • the PHONE is recorded, not code-checked. It is what the host uses to
-//     reach the guest about the stay, and it goes to them with the guest's
-//     name and the number of guests.
+//   • the EMAIL is confirmed by a code sent to it (_email-otp.js);
+//   • a PHONE number is on the account. It is what the host uses to reach
+//     the guest about the stay, and it goes to them with the guest's name
+//     and the number of guests once the booking is confirmed.
 //
-// Aerva does NOT ask guests for an identity document. The host checks a
-// government photo ID at check-in, which is their duty under the law, and
-// files Form III for foreign guests. Asking twice only costs bookings.
+// These two, with the guest's first and last name (create-order.js), are
+// all that is needed to PAY. What it takes for the booking to be CONFIRMED
+// is decided in _guest-verify.js (owner, 10 Nov 2026):
+//
+//   A booking is only confirmed once the guest's details are submitted and
+//   verified — a VERIFIED PROFILE: first and last name saved, the phone
+//   confirmed with an SMS code (Twilio Verify; guests.phone_verified_at for
+//   that number, cleared when the number changes), and a government photo
+//   ID verified (Aadhaar, passport, driving licence or voter ID; read in
+//   memory and never stored — only the type, the last 4 characters, the
+//   name-match result, when, and the method are kept).
+//
+//   A guest who is already verified books exactly as before. One who is not
+//   pays as before, but the payment is HELD: the dates are kept for them, and
+//   there is no booking, code, host email or payout until the three steps
+//   are done — by the deadline (24 hours, or 10 AM on the check-in day if
+//   earlier; 1 hour for a same-day booking), or everything is refunded.
+//
+//   That applies only once migrations/2026-11-10-09-guest-verification.sql
+//   has run AND the Vercel setting GUEST_VERIFICATION_REQUIRED=1 is on.
+//   Before the update nothing changes; with the update but without the
+//   switch, "Verify phone" and "Verify ID" are optional steps in the Profile.
+//
+// The host STILL checks a government photo ID at check-in, which is their
+// duty under the law, and files Form III for foreign guests.
 
 const userError = (message, status = 400, extra = {}) => Object.assign(new Error(message), { isUserFacing: true, status }, extra);
 
@@ -83,11 +103,12 @@ async function idSummary(sql, guestId) {
 //     const { markIdDeadlineIfMissing } = require('./_guest-id');
 // and calls it at the very end of confirmBooking, keeps working.
 //
-// This file used to drive an identity-document flow: a guest who paid
-// without a valid ID on their account was given a short deadline to add
-// one. That whole feature is gone — the host checks a government photo
-// ID at check-in, which is their duty under the law — so there is no
-// deadline to set and this does nothing.
+// This file used to drive an older identity-document flow: a guest who
+// paid without a valid ID on their account was given a short deadline to
+// add one AFTER the booking was confirmed. That flow is gone; since 10 Nov
+// 2026 an unverified guest's payment is held BEFORE any booking exists
+// (_guest-verify.js holdIfUnverified, called earlier in confirmBooking), so
+// by the time this runs there is nothing left to set and it does nothing.
 //
 // It is NOT removed, and must not be. Deleting the export does not fail
 // at import: destructuring a missing name just yields undefined, and the
@@ -95,6 +116,6 @@ async function idSummary(sql, guestId) {
 // end of confirmBooking — AFTER the booking has been written and the
 // guest charged. The booking would be saved and the guest told their
 // payment failed. Anything calling into this module must keep resolving.
-async function markIdDeadlineIfMissing() { /* no identity document is asked for any more */ }
+async function markIdDeadlineIfMissing() { /* nothing to do: see _guest-verify.js */ }
 
 module.exports = { emailConfirmed, hasPhone, bookingRequirements, assertCanBook, idSummary, markIdDeadlineIfMissing };
