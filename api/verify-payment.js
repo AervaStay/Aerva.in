@@ -11,7 +11,7 @@
 // browser never came back.
 //
 // Security deposit lifecycle (see orders.deposit_status):
-//   'held'     — set when payment is confirmed; released 7 days after
+//   'held'     — set when payment is confirmed; released 24 hours after
 //                departure unless the host raises a concern.
 //   'disputed' — host-listings.js raiseDispute.
 //   'refunded' — _deposits.js (scheduler / admin).

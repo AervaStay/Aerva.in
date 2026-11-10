@@ -385,7 +385,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-11b"></script>
+<script src="aerva-policies.js?v=2026-11-11c"></script>
 </head>
 <body>
 
@@ -614,7 +614,7 @@
   <div id="depositsView" style="display:none;">
     <div class="deposit-section">
       <h3>Auto-Refund Eligible Deposits</h3>
-      <p>Refunds every held deposit past its 7-day window with no dispute raised, in full, to each guest's original payment method. Nothing is refunded for a deposit still within its window or currently disputed.</p>
+      <p>Refunds every held deposit whose host has had 24 hours after check-out with no dispute raised, in full, to each guest's original payment method. Nothing is refunded for a deposit still within its window or currently disputed.</p>
       <button type="button" class="process-btn" id="processDepositsBtn" onclick="processDeposits()">Process Eligible Refunds</button>
       <div class="process-results" id="processResults"></div>
     </div>
@@ -2518,7 +2518,7 @@
     insights: ['Business Insights', 'What happened under each rate — bookings, booking value, Aerva’s fees, new guests and listings, cancellations, ratings and hosts who declined — per day and compared with the rate before; the last 12 months; ratings by part of the stay; support satisfaction; and the latest reviews and feedback. Real bookings only.'],
     accounts: ['Accounts', 'Each month in the shape your CA books it: Aerva’s income (commission and guest service fee only), money received, refunded and paid out, GST on stays and TDS payable, and what Aerva still holds for hosts and guests at month end. Three CSVs for Tally or Zoho Books. Razorpay’s charges come from Razorpay’s own settlement report.'],
     payouts: ['Payouts', 'What each host and co-host is owed per booking, and Mark paid for payouts sent by hand. Also: refunds that need a retry, deposit compensation, cancellation coupons owed by hosts, co-host payout details to review, and the TDS report.'],
-    deposits: ['Security Deposits', 'Deposits are refunded automatically every 15 minutes once the 7-day damage window has ended; the button runs that now. Below: damage claims hosts raised. Set the host’s share; the rest goes back to the guest, and both are emailed.'],
+    deposits: ['Security Deposits', 'Deposits are refunded automatically every 15 minutes once the host’s 24 hours after check-out to report damage have ended; the button runs that now. Below: damage claims hosts raised. Set the host’s share; the rest goes back to the guest, and both are emailed.'],
     support: ['Support', 'Requests from the Resolution Center. Reply within 48 hours; safety requests are listed first. Keep the case record (issue as understood, outcome, how each side behaved) — a request cannot be resolved without it, and every version is kept. Once resolved, the person confirms and rates it, or it reopens; with no answer it closes by itself after 48 hours.'],
     trust: ['Guest Safety', 'Problems guests reported during a stay, with the host’s reply. Decide refund or no refund; the host’s payout for the booking is held until you do. Also: feedback hosts sent from their dashboard.'],
     policy: ['Review Policy', 'Internal rules for reviews, badges and standing, with every threshold. Never shown to guests or hosts.'],

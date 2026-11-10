@@ -527,23 +527,19 @@
           errorEl.textContent = data.error || 'Could not send a verification code. Please try again.';
           errorEl.style.display = 'block';
         } else {
+          // The code goes on WhatsApp (api/_phone-otp.js); it is never shown here.
           otpRow.style.display = 'flex';
           otpMsgEl.style.display = 'block';
-          // otpForTesting exists ONLY because no real SMS provider is
-          // connected yet (see the backend comment) — this line is
-          // exactly what needs to be deleted the moment one is, since
-          // showing the code on-screen defeats the purpose of an OTP
-          // the second real delivery exists.
-          otpMsgEl.textContent = data.otpForTesting
-            ? `No SMS provider connected yet — your test code is ${data.otpForTesting}`
-            : 'A verification code has been sent.';
+          otpMsgEl.style.color = '';
+          otpMsgEl.textContent = `We sent a code on WhatsApp to ${data.sentTo || 'this number'}. It is good for ${data.expiresInMinutes || 10} minutes.`;
+          otpInput.focus();
         }
       } catch(err){
         errorEl.textContent = 'Could not reach the server — please try again.';
         errorEl.style.display = 'block';
       }
       sendBtn.disabled = false;
-      sendBtn.textContent = 'Send verification code';
+      sendBtn.textContent = 'Send code on WhatsApp';
     });
 
     verifyBtn.addEventListener('click', async () => {
@@ -560,7 +556,7 @@
         const res = await fetch(LISTINGS_API_BASE + '/api/host-listings', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + hostSessionToken },
-          body: JSON.stringify({ verifyHostPhoneOtp: { otp } })
+          body: JSON.stringify({ verifyHostPhoneOtp: { otp, countryCode: countrySelect.value, localNumber: localInput.value.trim() } })
         });
         const data = await res.json();
         if(!res.ok){
@@ -7286,7 +7282,7 @@
       <div class="rv-set">${GUEST_REVIEW_FACTORS.map(starRowHtml).join('')}</div>
       <label class="rv-comment-label" for="guestReviewComment">A few words for other hosts</label>
       <textarea id="guestReviewComment" rows="4" maxlength="1000" placeholder="How was it having them stay?"></textarea>
-      ${p.depositHeld ? `<label style="display:flex; gap:10px; align-items:flex-start; margin-top:12px; font-size:14px; cursor:pointer;"><input type="checkbox" id="guestReviewDeposit" style="margin-top:3px; width:18px; height:18px;"> <span>No damage — refund the guest’s ₹${Number(p.depositHeld).toLocaleString('en-IN')} security deposit now. It reaches them in 2 bank working days instead of after 7 days, and you can no longer raise a concern about it.</span></label>` : ''}
+      ${p.depositHeld ? `<label style="display:flex; gap:10px; align-items:flex-start; margin-top:12px; font-size:14px; cursor:pointer;"><input type="checkbox" id="guestReviewDeposit" style="margin-top:3px; width:18px; height:18px;"> <span>No damage — refund the guest’s ₹${Number(p.depositHeld).toLocaleString('en-IN')} security deposit now, instead of when your 24 hours after check-out end. You can no longer report damage on it.</span></label>` : ''}
       <button type="button" class="btn solid" id="guestReviewSend" style="width:100%; margin-top:14px; cursor:pointer;">Send review</button>
       <p class="payout-muted" id="guestReviewMsg" style="margin-top:10px;"></p></div>`;
     const close = () => { ov.remove(); };
@@ -11367,7 +11363,7 @@
     }
     rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee + experienceFee)}</span></div>`);
     if(listing.security_deposit && Number(listing.security_deposit) > 0){
-      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (covers damage and extra cleaning; held up to 7 days)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
+      rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (covers damage and extra cleaning; refunded after check-out unless the host reports damage within 24 hours)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
     }
 
     const grandTotalInr = total + stayTax.gst + (listing.security_deposit ? Number(listing.security_deposit) : 0) + experienceTotal + experienceGst + experienceFee;
@@ -15771,6 +15767,17 @@ async function aervaIdPanel(host, { needs = ['email'], message = '', onDone, pho
   const askEmail = needs.includes('email') && !have.emailConfirmed;
   const askPhone = needs.includes('phone') && !have.hasPhone;
   if(!askEmail && !askPhone){ if(typeof onDone === 'function') onDone(); return; }
+  // The number is confirmed by a code on WhatsApp while that is switched on
+  // (api/guest-phone-auth.js, api/_phone-otp.js). Without WhatsApp — or for
+  // someone not on it — the number is saved as typed, as before.
+  let waOn = false;
+  if(askPhone){
+    try{
+      const r = await fetch(SUITES_API_BASE + '/api/guest-phone-auth?status=1', { cache: 'no-store' });
+      const d = await r.json();
+      waOn = !!(r.ok && d && d.available);
+    }catch(e){}
+  }
 
   host.style.display = 'block';
   host.style.color = '#1c1b19';
@@ -15793,8 +15800,16 @@ async function aervaIdPanel(host, { needs = ['email'], message = '', onDone, pho
     ${askPhone ? `<div id="phoneStep"${askEmail ? ' hidden' : ''}>
       <label class="payout-label" for="needPhone"${askEmail ? ' style="margin-top:14px; display:block;"' : ''}>Mobile number</label>
       <input id="needPhone" type="tel" inputmode="tel" autocomplete="tel" value="${esc(phone || '')}" placeholder="10-digit mobile number" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 6px; border:1px solid #d9cfc2; border-radius:8px; font-size:16px;">
-      <p class="id-note">Your host uses this to reach you about your stay.</p>
-      <button type="button" class="btn solid" id="phoneSave" style="width:100%;">Save and continue</button>
+      <p class="id-note">Your host uses this to reach you about your stay.${waOn ? ' We send a code to this number on WhatsApp to confirm it.' : ''}</p>
+      ${waOn ? `<button type="button" class="btn solid" id="waSend" style="width:100%;">Send code on WhatsApp</button>
+      <div id="waStep2" hidden>
+        <label class="payout-label" for="waCode" style="margin-top:12px; display:block;">Enter the code from WhatsApp</label>
+        <input id="waCode" type="text" inputmode="numeric" autocomplete="one-time-code" maxlength="6" placeholder="6-digit code" style="width:100%; box-sizing:border-box; padding:11px; margin:6px 0 8px; border:1px solid #d9cfc2; border-radius:8px; font-size:18px; letter-spacing:0.18em;">
+        <button type="button" class="btn solid" id="waConfirm" style="width:100%;">Confirm number</button>
+        <button type="button" class="filter-clear" id="waAgain" style="margin-top:8px;" disabled>Send it again</button>
+      </div>
+      <button type="button" class="filter-clear" id="phoneSave" style="margin-top:8px;">Not on WhatsApp? Save the number without a code</button>`
+      : `<button type="button" class="btn solid" id="phoneSave" style="width:100%;">Save and continue</button>`}
     </div>` : ''}
     <p id="needMsg" class="id-note" style="margin:8px 0 0;"></p></div>`;
 
@@ -15879,11 +15894,69 @@ async function aervaIdPanel(host, { needs = ['email'], message = '', onDone, pho
   const phoneBtn = host.querySelector('#phoneSave');
   if(phoneBtn) phoneBtn.addEventListener('click', async (e) => {
     const btn = e.currentTarget;
+    const label = btn.textContent;
     btn.disabled = true; btn.textContent = 'Saving…'; say('');
     const { ok, d } = await post({ mode: 'savePhone', phone: host.querySelector('#needPhone').value });
-    if(!ok){ btn.disabled = false; btn.textContent = 'Save and continue'; return say(d.error || 'Could not save your number.', true); }
+    if(!ok){ btn.disabled = false; btn.textContent = label; return say(d.error || 'Could not save your number.', true); }
     if(typeof onDone === 'function') onDone();
   });
+
+  // Confirming the number by a code on WhatsApp ('link': the proved number
+  // joins this account and is marked confirmed).
+  const waSendBtn = host.querySelector('#waSend');
+  if(waSendBtn){
+    const waPost = (body) => fetch(SUITES_API_BASE + '/api/guest-phone-auth', { method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + guestAuthToken() }, body: JSON.stringify(body) })
+      .then(async r => ({ ok: r.ok, d: await r.json().catch(() => ({})) }));
+    const againBtn = host.querySelector('#waAgain');
+    let timer = null, sentTo = '';
+    const waitThenAllow = (seconds) => {
+      let left = Math.max(1, Math.round(seconds || 45));
+      clearInterval(timer);
+      againBtn.disabled = true;
+      const tick = () => {
+        if(left <= 0){ clearInterval(timer); againBtn.disabled = false; againBtn.textContent = 'Send it again'; return; }
+        againBtn.textContent = `Send it again (${left}s)`; left--;
+      };
+      tick(); timer = setInterval(tick, 1000);
+    };
+    const send = async (btn) => {
+      const phone = host.querySelector('#needPhone').value.trim();
+      if(!phone) return say('Enter your mobile number.', true);
+      const label = btn.textContent;
+      btn.disabled = true; btn.textContent = 'Sending…'; say('');
+      const { ok, d } = await waPost({ mode: 'request', phone });
+      btn.disabled = false; btn.textContent = btn.id === 'waSend' ? 'Send code on WhatsApp' : label;
+      if(!ok){
+        if(btn.id === 'waAgain') waitThenAllow(d.waitSeconds || 45);
+        return say(d.error || 'Could not send the code. Please try again.', true);
+      }
+      sentTo = phone;
+      waSendBtn.style.display = 'none';           // "Send it again" takes over
+      host.querySelector('#waStep2').hidden = false;
+      host.querySelector('#waCode').value = '';
+      host.querySelector('#waCode').focus();
+      waitThenAllow(d.resendAfterSeconds);
+      say(`Code sent on WhatsApp. It is good for ${d.expiresInMinutes || 10} minutes.`);
+    };
+    waSendBtn.addEventListener('click', (e) => send(e.currentTarget));
+    againBtn.addEventListener('click', (e) => send(e.currentTarget));
+    // A different number needs its own code.
+    host.querySelector('#needPhone').addEventListener('input', () => {
+      if(sentTo && host.querySelector('#needPhone').value.trim() !== sentTo){ host.querySelector('#waStep2').hidden = true; waSendBtn.style.display = ''; sentTo = ''; clearInterval(timer); }
+    });
+    host.querySelector('#waConfirm').addEventListener('click', async (e) => {
+      const btn = e.currentTarget;
+      const code = host.querySelector('#waCode').value.trim();
+      if(!/^\d{6}$/.test(code)) return say('Enter the 6-digit code from WhatsApp.', true);
+      btn.disabled = true; btn.textContent = 'Checking…'; say('');
+      const { ok, d } = await waPost({ mode: 'link', phone: sentTo || host.querySelector('#needPhone').value.trim(), code });
+      if(!ok){ btn.disabled = false; btn.textContent = 'Confirm number'; return say(d.error || 'That code did not match.', true); }
+      clearInterval(timer);
+      btn.textContent = 'Confirmed';
+      if(typeof onDone === 'function') onDone();
+    });
+  }
 }
 
 // ---- Guest: report a problem during the stay (api/_stay-disputes.js) ----

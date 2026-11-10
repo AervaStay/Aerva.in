@@ -430,7 +430,7 @@ async function applyChange(sql, razorpay, change, { paymentId = null } = {}) {
     const fcFee = Math.round(Number(d.freeCancelFee) || 0), fcGst = Math.round(Number(d.freeCancelGst) || 0), fcCommission = Math.round(Number(d.freeCancelCommission) || 0);
     const commission = stayCommission + fcCommission;
     let releaseAt = null;
-    if (d.depositAmount > 0) { const x = new Date(input.departure + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 7); releaseAt = x.toISOString().slice(0, 10); }
+    if (d.depositAmount > 0) releaseAt = require('./_deposits').releaseDateFor(input.departure);   // the host has 24 hours from check-out (_deposits.js)
     return { commission, releaseAt, total: Math.round(d.subtotal + d.gst + d.guestServiceFee + Number(d.depositAmount) + fcFee + fcGst),
              payout: Math.round(d.subtotal + fcFee - commission),
              rate: d.subtotal > 0 ? Number(((stayCommission / d.subtotal) * 100).toFixed(2)) : 0 };

@@ -808,7 +808,7 @@
       </div>
       <p id="listPriceResortNote" style="font-size:11.5px; opacity:0.6; margin-top:-8px; margin-bottom:16px; display:none;">Not needed for a Resort — the price shown to guests is worked out automatically from your rooms' own prices below (the lowest one, as a "from" price), so there's nothing redundant to fill in here.</p>
       <div class="field">
-        <label for="listSecurityDeposit"><span id="listSecurityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, refundable, held 7 days after checkout</span></label>
+        <label for="listSecurityDeposit"><span id="listSecurityDepositLabel">Security Deposit (₹)</span> <span style="opacity:0.6; text-transform:none; letter-spacing:0;">— optional, refundable; report damage within 24 hours of check-out</span></label>
         <input id="listSecurityDeposit" name="Security Deposit" type="number" min="0" placeholder="e.g. 2000">
       </div>
       <!-- The host's choice, off by default (api/submit-listing.js freeCancelOffered). -->
@@ -948,7 +948,7 @@
           </div>
           <input type="hidden" id="listHostPhone" name="Phone">
           <p id="listHostPhoneError" style="font-size:11.5px; color:#a3402f; margin-top:4px; display:none;"></p>
-          <button type="button" id="listHostPhoneSendOtpBtn" class="btn" style="display:none; width:auto; padding:7px 16px; font-size:11.5px; margin-top:6px;">Send verification code</button>
+          <button type="button" id="listHostPhoneSendOtpBtn" class="btn" style="display:none; width:auto; padding:7px 16px; font-size:11.5px; margin-top:6px;">Send code on WhatsApp</button>
           <div id="listHostPhoneOtpRow" style="display:none; margin-top:8px; align-items:center; gap:8px;">
             <input type="text" id="listHostPhoneOtpInput" placeholder="6-digit code" maxlength="6" inputmode="numeric" style="width:140px;">
             <button type="button" id="listHostPhoneVerifyOtpBtn" class="btn" style="width:auto; padding:7px 16px; font-size:11.5px;">Verify</button>
@@ -1607,13 +1607,13 @@
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 <script src="aerva-photo-location.js?v=2026-11-07a" defer></script>
-<script src="aerva-policies.js?v=2026-11-11b" defer></script>
+<script src="aerva-policies.js?v=2026-11-11c" defer></script>
 <script src="aerva-help.js?v=2026-11-11b" defer></script>
 <script src="aerva-privacy.js?v=2026-10-10i" defer></script>
 <script src="aerva-id-verify.js?v=2026-11-05a" defer></script>
 <script src="aerva-bank-fields.js?v=2026-10-13a" defer></script>
 <script src="aerva-special.js?v=2026-11-10a" defer></script>
-<script src="aerva.js?v=2026-11-11b" defer></script>
+<script src="aerva.js?v=2026-11-11c" defer></script>
 
 </body>
 </html>

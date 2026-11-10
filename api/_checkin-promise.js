@@ -519,7 +519,7 @@ async function applyRebook(sql, razorpay, change, { paymentId = null } = {}) {
     const total = Math.round(Number(change.new_total));
     const deposit = Number(d.depositAmount || 0);
     let releaseAt = null;
-    if (deposit > 0) { const x = new Date(q.to + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 7); releaseAt = x.toISOString().slice(0, 10); }
+    if (deposit > 0) releaseAt = require('./_deposits').releaseDateFor(q.to);   // the host has 24 hours from check-out (_deposits.js)
     const used = Math.round(Number(o.fee_credit_used) || 0);
     const creditTake = Math.min(used, total);
     claim = await C.claimForCancellation(sql, [o.id]);

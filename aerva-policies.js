@@ -46,8 +46,8 @@ window.AERVA_POLICIES = {
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
-    version: '2026-11-10a',       // booking agreement (guests)
-    hostVersion: '2026-11-10b',    // host agreement — accepted for every listing
+    version: '2026-11-10b',       // booking agreement (guests)
+    hostVersion: '2026-11-10c',    // host agreement — accepted for every listing
     // How hosts already on an earlier version move to this one (_host-agreement.js):
     //   'minor'  — rewording / corrections, same meaning: nothing to do;
     //   'notice' — a material change: told at least 30 days ahead (email +
@@ -70,7 +70,9 @@ window.AERVA_POLICIES = {
       'A gift (“This stay is for someone else”): you pay for and manage the booking, and any refund comes back to you; the person you name is the guest staying and must accept it with their name and phone.',
       'Splitting with friends: the total is split equally per guest. You tick that you’ll pay for any places your friends don’t pay within 2 hours. The place is not held until the last payment: if someone else books it first, everyone is refunded in full. At 2 hours, any unpaid amount is yours to pay within 30 minutes, or nothing is booked and everyone is refunded. Once confirmed, a group booking is non-refundable — every payer ticks this before paying.'
     ],
-    hostRevision: { kind: 'minor' },   // 2026-11-09a, 2026-11-10a and 2026-11-10b: rewording, no notice (owner)
+    hostRevision: { kind: 'minor' },   // 2026-11-09a, 2026-11-10a, 2026-11-10b and 2026-11-10c (deposit 24 hours, unlawful activity): no notice (owner)
+    // Owner, 10 Nov 2026: a host NEVER has to click to accept a revision — an active listing on the
+    // effective date counts as accepted (clause 27). Use 'minor' or 'notice' only; never 'accept'.
     guest: {
       title: 'Booking agreement',
       points: [
@@ -86,7 +88,8 @@ window.AERVA_POLICIES = {
         'You can expect the home or experience to be as described, safe and clean.',
         'Aerva: takes your payment, handles refunds and complaints under Aerva’s Policies, and keeps your booking records.',
         'No violence, threats, verbal abuse, harassment or discrimination of any kind, including on gender.',
-        'Any security deposit is refunded to your original payment method under Aerva’s Security Deposit and Damage Policy, within 7 days of check-out (sooner when no damage is reported). It covers damage and extra cleaning, up to the deposit amount. If damage is reported, you are told and can give your side; Aerva decides how much of the deposit is refunded to you, and its decision is final. Damage above the deposit is between you and the host, and is to be settled directly with the host; Aerva provides no refund or compensation for it.',
+        'Aerva does not support or allow theft, money laundering, terrorism or any other unlawful activity. Never take the law into your own hands: if a situation escalates, call the local authorities (112 in India), then tell Aerva.',
+        'Any security deposit is refunded to your original payment method under Aerva’s Security Deposit and Damage Policy, about 3 days after check-out (sooner when the host confirms there is no damage). It covers damage and extra cleaning, up to the deposit amount. If damage is reported, you are told and can give your side; Aerva decides how much of the deposit is refunded to you, and its decision is final. Damage above the deposit is between you and the host, and is to be settled directly with the host; Aerva provides no refund or compensation for it.',
         'Before a booking is confirmed, nothing you send through Aerva may contain a phone number, email address, social media handle, UPI ID or link to another website. Once it is confirmed, you and the host may share phone numbers, email addresses and photos in Aerva Messages until 15 days after check-out. Links to Aerva pages can be shared at any time.',
         'Aerva provides no support beyond the security deposit and your booking details.',
         'You are responsible for your own safety and for any physical, mental or emotional harm you or your guests cause or suffer that is beyond Aerva’s control.',
@@ -187,7 +190,7 @@ window.AERVA_POLICIES = {
           'For any breach of this agreement or Aerva’s Policies, Aerva may withhold or adjust payouts, pause or remove listings, cancel bookings, and suspend or close your account.'
         ] },
         { title: '16. Security deposits and damage', points: [
-          'If your listing holds a refundable security deposit, Aerva holds it and refunds it to the guest after check-out unless you report damage through Aerva within 7 days of check-out.',
+          'If your listing holds a refundable security deposit, Aerva holds it and refunds it to the guest after check-out unless you report damage through Aerva within 24 hours of the check-out time. Once those 24 hours pass with nothing reported, it is refunded to the guest.',
           'To keep any of the deposit, report the damage through Aerva, say how much of the deposit you ask to keep, and share photos or videos of the damage with Aerva; a report without proof is not accepted, and the deposit is then refunded in full.',
           'Nothing is kept from the deposit until Aerva approves it. Aerva reviews your proof and the guest’s side, and decides fairly how much of the deposit, and what percentage of it, is paid to you. You abide by Aerva’s decision, which is full and final.',
           'The deposit also covers extra cleaning: cleaning you do yourself, or a cleaner or other help you call in, to return the home to how it was. What you are paid for damage and cleaning together can never be more than the deposit.',
@@ -212,7 +215,8 @@ window.AERVA_POLICIES = {
         { title: '20. Nondiscrimination and conduct', points: [
           'You may not decline, cancel, charge differently or treat anyone differently because of race, colour, caste, religion, national origin, ethnicity, disability, sex, gender identity, sexual orientation, marital status or age.',
           'House rules must apply equally to every guest. Accessibility must be described accurately.',
-          'Violence, threats, verbal abuse, harassment and discrimination of any kind are not tolerated and lead to removal from Aerva.'
+          'Violence, threats, verbal abuse, harassment and discrimination of any kind are not tolerated and lead to removal from Aerva.',
+          'Aerva does not support or allow theft, money laundering, terrorism or any other unlawful activity, and you may not use your listing, a booking or a payment for any of them. Never take the law into your own hands: if a situation escalates, call the local authorities (112 in India), then tell Aerva.'
         ] },
         { title: '21. Co-hosts', points: [
           'If you invite co-hosts, you remain responsible for your listing and for everything your co-hosts do on it. Aerva pays each co-host their own share, based on the percentage share you set and they agreed to; any other arrangement between you and a co-host is for you to settle.'
@@ -244,17 +248,14 @@ window.AERVA_POLICIES = {
         ] },
         { title: '27. Revisions', points: [
           'Aerva may revise this agreement and its Policies. Corrections and rewording that do not change their meaning take effect when published, and the date of the last update is changed.',
-          'Aerva tells you of any other revision at least 30 days before it takes effect, by email and in your dashboard, with a short summary of what is changing. Continuing to host after that date means you accept the revised agreement. If you do not accept it, you may end this agreement by deactivating your listings before then.',
-          'Where the law or the nature of a revision requires it, Aerva asks you to accept the revised agreement in your dashboard; you accept it or decline it there.',
+          'Aerva tells you of any other revision at least 30 days before it takes effect, by email and in your dashboard, with a short summary of what is changing. You do not need to do anything to accept it: if any of your listings is still active on that date, you have accepted the revised agreement. If you do not agree, deactivate your listings before then; this agreement then ends.',
           'Commission revisions are announced in advance, as set out in the Commission and fees clause.',
           'Bookings already confirmed keep the commission and fees in force when they were made.'
         ] },
         { title: '28. Termination', points: [
-          'If you decline a revised agreement that Aerva asks you to accept, or do not accept it within 30 days of Aerva’s notice, this agreement ends. Your listings are deactivated and removed from Aerva, and they take no new bookings.',
-          'Confirmed bookings go ahead unless Aerva decides otherwise. Amounts due to you for completed stays are paid to your verified bank account, less any amounts you owe Aerva, such as cancellation coupons, refunds or penalties.',
           'You may end this agreement at any time by deactivating your listings or your hosting. Aerva may end it, or suspend or remove any listing or account, if this agreement, Aerva’s Policies or the law are broken.',
-          'Your account and data are then handled under Aerva’s Deactivating, Removing and Deleting policy. You may delete your account once nothing is open; booking and payment records are kept as the law requires.',
-          'After this agreement ends, you are offered the current agreement each time you sign in. Accepting it (with the commission then in force) before your account is deleted puts back the listings that were deactivated only because the agreement ended. If you do not accept it, the same applies at every later revision.'
+          'Confirmed bookings go ahead unless Aerva decides otherwise. Amounts due to you for completed stays are paid to your verified bank account, less any amounts you owe Aerva, such as cancellation coupons, refunds or penalties.',
+          'Your account and data are then handled under Aerva’s Deactivating, Removing and Deleting policy. You may delete your account once nothing is open; booking and payment records are kept as the law requires.'
         ] },
         { title: '29. General', points: [
           'This agreement, Aerva’s Terms of Service and Aerva’s Policies are the entire agreement between you and Aerva about hosting. If any part is found unenforceable, the rest remains in force.',
@@ -691,10 +692,10 @@ window.AERVA_POLICIES = {
     { id: 'resolution', title: 'Security Deposit and Damage Policy', summary: 'How security deposits are refunded and damage is handled.', sections: [
       { title: 'Security deposit', points: [
         'Some listings hold a refundable security deposit, shown before you pay.',
-        'It is refunded to the original payment method after check-out, unless the host reports damage through Aerva within 7 days of check-out.',
+        'The host has 24 hours from the listing’s check-out time to report damage through Aerva. If nothing is reported, the deposit is refunded to the original payment method as soon as those 24 hours pass; expect it within about 3 days of check-out, though some banks take a few more working days to show it.',
         'The deposit covers damage and extra cleaning — by the host, or a cleaner or other help the host calls in — up to the deposit amount, never more.',
         'To keep any of the deposit, the host must report it through Aerva, say how much they ask to keep, and share photos or videos of the damage with Aerva. Aerva reviews both sides and approves how much of the deposit, and what percentage, is paid to the host; the rest is refunded. Aerva’s decision is fair, full and final, and both the host and the guest abide by it.',
-        'If the host confirms there is no damage when reviewing the guest, the deposit is refunded within 2 bank working days, without waiting for the 7 days.'
+        'If the host confirms there is no damage when reviewing the guest, the deposit is refunded straight away, without waiting for the 24 hours.'
       ]},
       { title: 'Damage above the deposit', points: [
         'Aerva handles damage and cleaning claims only up to the security deposit.',
@@ -789,6 +790,10 @@ window.AERVA_POLICIES = {
         'Do not decline, cancel, charge differently or treat anyone differently because of race, colour, caste, religion, national origin, ethnicity, disability, sex, gender identity, sexual orientation, marital status or age.',
         'Hosts may set rules that apply equally to every guest, such as no smoking or no pets, where the law allows.',
         'Describe accessibility accurately. Do not refuse a guest because of a disability.'
+      ]},
+      { title: 'Unlawful activity and safety', points: [
+        'Aerva does not support, allow or promote theft, money laundering, terrorism or any other unlawful activity. No listing, booking, payment or stay on Aerva may be used for any of them. Accounts involved are removed, and Aerva may report the matter to the authorities.',
+        'Guests and hosts must never take the law into their own hands. If a situation escalates — a dispute, a threat, damage or anything that feels unsafe — step away and call the local authorities (112 in India) first, then tell Aerva.'
       ]}
     ]},
     { id: 'experience-standards', title: 'Experience Standards and Requirements', summary: 'The standards every experience on Aerva must meet.', sections: [
@@ -1035,7 +1040,7 @@ window.AERVA_POLICIES = {
         summary: 'When a deposit is refunded, and what happens if a host reports damage.',
         sections: [
           { title: 'Refund', points: [
-            'A security deposit is refunded to the original payment method within 7 days of check-out, unless damage is reported.',
+            'A security deposit is refunded to the original payment method once the host’s 24 hours after check-out pass with no damage reported — expect it within about 3 days of check-out.',
             'When no damage is reported, it is often refunded sooner.',
             'The deposit covers damage and extra cleaning, up to the deposit amount.'
           ]},
@@ -1160,7 +1165,7 @@ window.AERVA_POLICIES = {
         summary: 'Claiming against a security deposit after a stay.',
         sections: [
           { title: 'How to claim', points: [
-            'Report damage through Aerva within 7 days of check-out, from the booking.',
+            'Report damage through Aerva within 24 hours of the check-out time, from the booking. After that the deposit is refunded to the guest.',
             'Photos or videos of the damage are required, shared through Aerva; a report without them is not accepted. Add a repair or cleaning estimate or invoice if you have one.',
             'Enter how much of the deposit you ask to keep — for damage and extra cleaning, by you or someone you call in — up to the deposit amount.',
             'Aerva reviews your request with the guest’s side and approves how much of the deposit, and what percentage, is paid to you. Aerva’s decision is final.',

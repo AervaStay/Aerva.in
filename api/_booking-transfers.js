@@ -347,7 +347,7 @@ async function applyTransfer(sql, razorpay, change, { paymentId = null } = {}) {
     const a = p.addOn || { fee: 0, gst: 0, commission: 0 };
     const commission = stayCommission + Math.round(Number(a.commission) || 0);
     let releaseAt = null;
-    if (Number(d.depositAmount) > 0) { const x = new Date(p.departure + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 7); releaseAt = x.toISOString().slice(0, 10); }
+    if (Number(d.depositAmount) > 0) releaseAt = require('./_deposits').releaseDateFor(p.departure);   // the host has 24 hours from check-out (_deposits.js)
     return { commission, releaseAt, fee: Math.round(d.guestServiceFee + (p.transferFee || 0)), total: p.total,
              rate: d.subtotal > 0 ? Number(((stayCommission / d.subtotal) * 100).toFixed(2)) : 0, payout: Math.round(d.subtotal + (Number(a.fee) || 0) - commission) };
   };
