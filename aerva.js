@@ -3033,8 +3033,10 @@
         errorEl.innerHTML = `<span role="alert">You already have a draft: <strong>${esc(data.draft.name)}</strong>. You can keep one draft at a time.</span>
           <span style="display:flex; flex-wrap:wrap; gap:10px; margin-top:12px;">
             <button type="button" class="btn solid" data-draft-replace style="width:auto; padding:10px 18px;">Replace it with this one</button>
-            <button type="button" class="btn" data-draft-discard style="width:auto; padding:10px 18px;">Discard this one</button>
-          </span>`;
+            <button type="button" class="btn" data-draft-discard style="width:auto; padding:10px 18px;">Discard this one and open existing draft</button>
+            <button type="button" class="btn" data-draft-cancel style="width:auto; padding:10px 18px;">Cancel</button>
+          </span>
+          <span style="display:block; margin-top:8px; font-size:12.5px; opacity:0.75;">Cancel keeps what you have typed here; nothing is saved.</span>`;
         errorEl.style.display = 'block';
         errorEl.scrollIntoView({ behavior: 'smooth', block: 'center' });
         errorEl.querySelector('[data-draft-replace]').addEventListener('click', () => {
@@ -3042,6 +3044,7 @@
           errorEl.textContent = ''; errorEl.style.display = 'none';
           saveListing(true);
         });
+        errorEl.querySelector('[data-draft-cancel]').addEventListener('click', () => { errorEl.textContent = ''; errorEl.style.display = 'none'; });
         errorEl.querySelector('[data-draft-discard]').addEventListener('click', () => {
           listAutosaveOff = true; listAutosaveClear();   // what was typed for this one is not kept
           window.location.href = 'index.html?view=list-property&edit=' + encodeURIComponent(data.draft.id);

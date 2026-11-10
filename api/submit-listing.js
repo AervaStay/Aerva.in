@@ -886,7 +886,7 @@ module.exports = async (req, res) => {
                                  ORDER BY created_at DESC, id DESC LIMIT 1`)[0];
         if (other) {
           return res.status(409).json({ reason: 'draft_exists', draft: { id: other.id, name: other.property_name || 'Untitled draft' },
-            error: `You already have a draft: “${other.property_name || 'Untitled draft'}”. You can keep one draft at a time — replace it with this one, or discard this one.` });
+            error: `You already have a draft: “${other.property_name || 'Untitled draft'}”. You can keep one draft at a time — replace it with this one, or discard this one and open the existing draft.` });
         }
       }
       // description, host_name and host_phone are NOT NULL (schema.sql); a
