@@ -2674,7 +2674,41 @@
   });
   syncListFreeCancel();
 
+  // A problem with one field: the message is shown next to that field too (and
+  // the field is brought into view), not only beside the buttons at the
+  // bottom — a jump up the page with no visible reason helps nobody.
+  function listFieldProblem(fieldId, message){
+    listingForm.querySelectorAll('.list-field-problem').forEach(n => n.remove());
+    const el = fieldId && typeof fieldId === 'object' ? fieldId : (fieldId ? document.getElementById(fieldId) : null);
+    if(!el || !message) return;
+    const note = document.createElement('p');
+    note.className = 'list-field-problem'; note.setAttribute('role', 'alert');
+    note.style.cssText = 'color:#a3402f; font-size:13.5px; margin:6px 0 0;';
+    note.textContent = message;
+    (el.closest('.field') || el.parentNode).appendChild(note);
+    try{ el.scrollIntoView({ behavior: 'smooth', block: 'center' }); el.focus({ preventScroll: true }); }catch(e){ try{ el.focus(); }catch(e2){} }
+    const clear = () => { note.remove(); el.removeEventListener('input', clear); el.removeEventListener('change', clear); };
+    el.addEventListener('input', clear); el.addEventListener('change', clear);
+  }
+  // The browser's own check (a required field left empty, a time typed only
+  // in part) stops the form before saveListing runs and only jumps to the
+  // field: say what is wrong there, and beside the buttons.
+  let listInvalidShown = false;
+  listingForm.addEventListener('invalid', (e) => {
+    if(listInvalidShown) return;
+    listInvalidShown = true; setTimeout(() => { listInvalidShown = false; }, 400);
+    const el = e.target;
+    const labelEl = el.closest('.field') ? el.closest('.field').querySelector('label') : null;
+    const label = labelEl ? labelEl.textContent.replace(/\*/g, '').replace(/\s+/g, ' ').trim().replace(/[?:.\s]+$/, '') : 'this field';
+    const msg = el.type === 'time' ? `${label}: please enter the full time — hour, minutes and AM or PM.`
+      : (el.validity && el.validity.valueMissing) ? `Please fill in: ${label}.`
+      : `${label}: ${el.validationMessage || 'please check this field.'}`;
+    const errorEl = listingForm.querySelector('.listing-error');
+    if(errorEl){ errorEl.style.color = ''; errorEl.textContent = msg; errorEl.style.display = 'block'; }
+    listFieldProblem(el, msg);
+  }, true);
   async function saveListing(isDraft){
+    listFieldProblem(null);
     const confirmEl = listingForm.querySelector('.listing-confirm');
     const draftConfirmEl = listingForm.querySelector('.listing-draft-confirm');
     const errorEl = listingForm.querySelector('.listing-error');
@@ -2709,8 +2743,7 @@
     if(fcProblem){
       errorEl.textContent = fcProblem;
       errorEl.style.display = 'block';
-      const fcFee = document.getElementById('listFreeCancelFee');
-      if(fcFee) fcFee.focus();
+      listFieldProblem('listFreeCancelFee', fcProblem);
       return;
     }
 
@@ -2721,10 +2754,10 @@
       // to fix, not just an arbitrary one.
       const isResortSubmission = document.getElementById('listType').value === 'Resort';
       const requiredChecks = [
-        { value: document.getElementById('listLatitude').value, message: 'Please select your property\'s location from the address suggestions.' },
-        { value: document.getElementById('listCity').value.trim(), message: 'Please enter the city.' },
-        { value: document.getElementById('listArea').value.trim(), message: 'Please enter the area.' },
-        { value: document.getElementById('listPincode').value.trim(), message: 'Please enter the PIN/postal code.' },
+        { value: document.getElementById('listLatitude').value, field: 'listLocationSearch', message: 'Please select your property\'s location from the address suggestions.' },
+        { value: document.getElementById('listCity').value.trim(), field: 'listCity', message: 'Please enter the city.' },
+        { value: document.getElementById('listArea').value.trim(), field: 'listArea', message: 'Please enter the area.' },
+        { value: document.getElementById('listPincode').value.trim(), field: 'listPincode', message: 'Please enter the PIN/postal code.' },
         // Skipped for a Resort — that field is hidden entirely there
         // (see the listType change handler), since its price is
         // computed automatically from room prices instead of typed in
@@ -2732,15 +2765,16 @@
         // property type, which blocked every Resort submission outright
         // the moment the field was hidden — an empty, hidden field can
         // never satisfy a check that doesn't know to skip it.
-        ...(isResortSubmission ? [] : [{ value: document.getElementById('listPrice').value, message: 'Please enter the expected nightly rate.' }]),
-        { value: (document.getElementById('listCheckInTime') || { value: 'x' }).value, message: 'Please set the check-in time.' },
-        { value: (document.getElementById('listCheckOutTime') || { value: 'x' }).value, message: 'Please set the check-out time.' },
-        { value: document.getElementById('listDescription').value.trim(), message: 'Please tell us a bit about the property.' }
+        ...(isResortSubmission ? [] : [{ value: document.getElementById('listPrice').value, field: 'listPrice', message: 'Please enter the expected nightly rate.' }]),
+        { value: (document.getElementById('listCheckInTime') || { value: 'x' }).value, field: 'listCheckInTime', message: 'Please set the check-in time.' },
+        { value: (document.getElementById('listCheckOutTime') || { value: 'x' }).value, field: 'listCheckOutTime', message: 'Please set the check-out time.' },
+        { value: document.getElementById('listDescription').value.trim(), field: 'listDescription', message: 'Please tell us a bit about the property.' }
       ];
       for(const check of requiredChecks){
         if(!check.value){
           errorEl.textContent = check.message;
           errorEl.style.display = 'block';
+          listFieldProblem(check.field, check.message);
           return;
         }
       }
@@ -3062,6 +3096,8 @@
         // they are, so clicking again just retries from here, not from scratch.
         errorEl.textContent = data.error || 'Could not save your listing. Please try again.';
         errorEl.style.display = 'block';
+        // The server names the field: show the message there too.
+        { const where = { checkInTime: 'listCheckInTime', checkOutTime: 'listCheckOutTime', freeCancelFee: 'listFreeCancelFee' }[data.field]; if(where && data.error) listFieldProblem(where, data.error); }
         activeBtn.disabled = false;
         otherBtn.disabled = false;
         activeBtn.textContent = isDraft ? 'Save as Draft' : 'Send listing for review';
@@ -3240,7 +3276,9 @@
       document.getElementById('listSecurityDeposit').value = draft.security_deposit || '';
       { const hhmm = (v) => { const m = String(v || '').trim().match(/^(\d{1,2}):(\d{2})/); return m ? m[1].padStart(2, '0') + ':' + m[2] : ''; };
         const ci = document.getElementById('listCheckInTime'), co = document.getElementById('listCheckOutTime');
-        if(ci) ci.value = hhmm(draft.check_in_time); if(co) co.value = hhmm(draft.check_out_time); }
+        // The lists offer every half hour; a time saved in between is added so it shows.
+        const setTime = (sel, v) => { if(!sel) return; if(v && !Array.from(sel.options).some(o => o.value === v)){ const [h, m] = v.split(':').map(Number); const o = document.createElement('option'); o.value = v; o.textContent = `${h % 12 || 12}:${String(m).padStart(2, '0')} ${h < 12 ? 'AM' : 'PM'}`; sel.appendChild(o); } sel.value = v || ''; };
+        setTime(ci, hhmm(draft.check_in_time)); setTime(co, hhmm(draft.check_out_time)); }
       setListFreeCancel(draft);
       if(draft.pet_friendly){
         petFriendlyYes.checked = true;
