@@ -56,8 +56,8 @@ window.AERVA_POLICIES = {
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
-    version: '2026-11-11c',       // booking agreement (guests)
-    hostVersion: '2026-11-11c',    // host agreement — accepted for every listing
+    version: '2026-11-11d',       // booking agreement (guests)
+    hostVersion: '2026-11-11d',    // host agreement — accepted for every listing
     // How hosts already on an earlier version move to this one (_host-agreement.js):
     //   'minor'  — rewording / corrections, same meaning: nothing to do;
     //   'notice' — a material change: told at least 30 days ahead (email +
@@ -240,7 +240,7 @@ window.AERVA_POLICIES = {
         ] },
         { title: '21. Co-hosts', points: [
           'If you invite co-hosts, you remain responsible for your listing and for everything your co-hosts do on it. Aerva pays each co-host their own share, based on the percentage share you set and they agreed to; any other arrangement between you and a co-host is for you to settle.',
-          'A co-host who cancels a booking within 48 hours of check-in pays for the guest’s coupon themselves, and may ask you to cover it within 30 days of the cancellation. You answer within 7 days. If you accept, the coupon amount is deducted from your next payout and paid to the co-host, less TDS at the co-host’s own rate. If you decline, or do not answer, nothing moves through Aerva.'
+          'A co-host who cancels a booking within 48 hours of check-in pays for the guest’s coupon themselves. Any money between you and a co-host for it is settled between the two of you, outside Aerva.'
         ] },
         { title: '22. Contacting Aerva', points: [
           'For any matter about a booking, a guest, a payout or your listing, raise a request in the Resolution Center. Every request receives a reference number.',
@@ -483,8 +483,7 @@ window.AERVA_POLICIES = {
         'When bank details change, payouts wait 48 hours, and the account owner is emailed about the change.',
         'Aerva may hold, adjust or withhold a payout for disputes, refunds, damage claims, suspected fraud or legal reasons.',
         'Check-in promise: for stays arriving from 10 December 2026, the first payout for each listing is sent after its first guest’s check-out time (if no report is open), instead of the day after check-in. Every later booking of that listing is paid as usual. While a guest’s report on arrival is open, that booking’s payout is held; while a report that a listing does not exist is open, or the listing is blocked, all of that listing’s unsent payouts are held. If Aerva upholds a report, the host is not paid for that booking, and anything already paid out for it is deducted from the host’s later payouts (shown in My Earnings → Payout details).',
-        'Aerva pays hosts and co-hosts their own shares only. Each co-host’s share is the percentage the host set and the co-host agreed to, worked out on the final booking amount: while a guest’s request is open, a co-host’s share is held just like the host’s payout, so both match the booking once it is settled. Any other money between a host and a co-host is for them to settle between themselves.',
-        'One exception, only when the host agrees: a guest’s cancellation coupon paid by a co-host, which the host accepts to cover (see the Cancellation Policy, Co-hosts). The amount is deducted from the host’s next payout — if there is none yet, from the next one it fits in — and paid to the co-host once it has been taken from the host, never before. It shows in the payout summary, the payout email and the monthly statement as “Coupon for booking <code>, cancelled by co-host <name>” for the host and “reimbursed by host” for the co-host. Aerva takes no commission and no fee on it. The amount is the coupon amount the co-host actually paid, fixed when the booking was cancelled; it is never recalculated. The host is charged that amount in full, after the host’s own TDS, which does not change. TDS is deducted from the co-host’s reimbursement at the co-host’s own rate, exactly as on their share (see the Taxes Policy), and the rest is paid to them. Example: a ₹1,100 coupon — ₹1,100 is deducted from the host; the co-host, with a PAN on file, receives ₹1,098.90 after TDS of ₹1.10 (0.1%).'
+        'Aerva pays hosts and co-hosts their own shares only. Each co-host’s share is the percentage the host set and the co-host agreed to, worked out on the final booking amount: while a guest’s request is open, a co-host’s share is held just like the host’s payout, so both match the booking once it is settled. Any other money between a host and a co-host is for them to settle between themselves.'
       ]}
     ]},
     { id: 'service-fees', title: 'Service Fees Policy', summary: 'How Aerva’s service fees are charged to hosts and guests.', sections: [
@@ -527,7 +526,6 @@ window.AERVA_POLICIES = {
       { title: 'Hosts and co-hosts', points: [
         'Tax deducted at source (TDS) is deducted from every payment Aerva makes to a host or co-host, including security deposit compensation: 0.1% when a valid PAN is provided, 5% when it is not or the PAN is inoperative (not linked to Aadhaar).',
         'TDS is worked out on the amount due to you: for a host, the booking amount after Aerva’s commission and any co-host share; for a co-host, their share. GST and Aerva’s guest service fee are never part of it. A cancellation coupon is paid by the host (or the co-host who cancels) before the booking is cancelled and is never deducted from a payout by Aerva on its own; any amount you owe Aerva is deducted after TDS and does not reduce it.',
-        'When a host agrees to cover a coupon their co-host paid, the coupon amount moves from the host’s payout to the co-host. Host: it is taken in full after TDS, so the host’s TDS, and the amount it is worked out on, are unchanged. Co-host: TDS is deducted from the reimbursement at the co-host’s own rate, exactly as on their share — 0.1% with a valid PAN, 5% without one or with an inoperative PAN. It counts toward the co-host’s earnings through Aerva for the financial year, is deposited against their PAN, is included in Aerva’s TDS return and shows in their Form 26AS and monthly statement. Example: a ₹1,100 coupon with a PAN on file: TDS ₹1.10, ₹1,098.90 paid; without a PAN: TDS ₹55, ₹1,045 paid. Ask your own tax adviser how to treat it in your accounts.',
         'As Aerva’s policy, TDS is deducted on every payment from the first rupee, including for individuals and HUFs earning under ₹5,00,000 a year through Aerva. Any TDS deducted counts towards your income tax and can be claimed in your return.',
         'GST on a booking is collected and paid by Aerva and is not part of a payout. Aerva charges no GST on its commission.',
         'You are responsible for your own income tax, GST registration and any other taxes on your earnings.'
@@ -590,9 +588,7 @@ window.AERVA_POLICIES = {
       ]},
       { title: 'Co-hosts', points: [
         'The same rules apply when a co-host acts for the host. Within 48 hours of check-in, a co-host pays for the coupon from their own account before cancelling.',
-        'A co-host who paid the coupon may ask the host to cover it: by ticking “Ask the host to cover this coupon” on the cancel screen, or later from My Earnings, within 30 days of the cancellation. It can be asked once per cancelled booking, with a short note to the host if they wish.',
-        'Only the host can answer, from their own account, within 7 days. If the host accepts, the coupon amount the co-host paid — fixed at the cancellation, never recalculated — is deducted in full from the host’s next payout (after the host’s own TDS, which does not change) and paid to the co-host once that payout has been sent. Aerva takes no commission or fee on it; TDS is deducted from the co-host’s reimbursement at the co-host’s own rate, as on their share (0.1% with a PAN, 5% without one or with an inoperative PAN), so a ₹1,100 coupon pays the co-host ₹1,098.90 with a PAN on file. If the host declines, or does not answer within 7 days, nothing moves through Aerva and the request cannot be sent again.',
-        'Any other money between a host and a co-host is for them to settle between themselves.'
+        'Any money between a host and a co-host — this coupon included — is for them to settle between themselves, outside Aerva.'
       ]}
     ]},
     { id: 'free-cancellation', title: 'Free Cancellation Add-on', summary: 'The optional add-on that gives a full refund until 48 hours before check-in.', sections: [
@@ -1293,8 +1289,7 @@ window.AERVA_POLICIES = {
           { title: 'Basics', points: [
             'Invite a co-host from Co-hosting. They accept with their own Aerva account.',
             'Aerva pays each co-host their own share, based on the percentage share the host sets and the co-host agrees to. Anything else between a host and a co-host is for them to settle.',
-            'A co-host who cancels within 48 hours of check-in pays the guest\u2019s 10% coupon themselves. They can ask the host to cover it: tick \u201cAsk the host to cover this coupon\u201d when cancelling, or ask from My Earnings within 30 days. The host accepts or declines in My Collection within 7 days.',
-            'If the host accepts, the full coupon amount comes off the host\u2019s next payout (after the host\u2019s TDS, which does not change) and is paid to the co-host once that payout is sent, with no commission or fee. TDS is deducted from the co-host\u2019s reimbursement at their own rate, as on their share: 0.1% with a PAN, 5% without one. Example: a \u20b91,100 coupon, PAN on file: TDS \u20b91.10, \u20b91,098.90 paid. If the host declines or does not answer, nothing moves through Aerva.',
+            'A co-host who cancels within 48 hours of check-in pays the guest\u2019s 10% coupon themselves. Any money between the host and the co-host for it is settled between them, outside Aerva.',
             'Every co-host sees what the listings they co-host earn: each booking\u2019s total and the host\u2019s payout, next to their own share. They never see other listings, or the host\u2019s bank details, PAN or tax.',
             'A host can remove a co-host, and a co-host can leave, at any time. Shares already earned are still paid.'
           ]}
