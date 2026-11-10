@@ -12,6 +12,8 @@
 //     in the subject and the address it would have gone to — never to a
 //     real guest or host. Without UAT_EMAIL_TO, emails are not sent at all.
 //   • Links in those emails point at the UAT site (UAT_SITE_URL).
+//   • WhatsApp messages (sign-in codes) go only to the numbers listed in
+//     UAT_WHATSAPP_TO; all others are dropped.
 //   • The database, sign-in secret and Razorpay keys come from UAT_ twins
 //     (UAT_DATABASE_URL, …), never from production's values.
 //   • Stored files are never deleted, renamed or overwritten.
@@ -85,6 +87,21 @@ if (IS_UAT && typeof globalThis.fetch === 'function' && !globalThis.__aervaUatFe
         body.html = `<div style="font:12px sans-serif; background:#fbefec; color:#7a2e25; padding:8px 12px; margin-bottom:12px;">UAT test email — on live this would go to <strong>${original.replace(/[<>&]/g, '')}</strong></div>` + html;
       }
       return realFetch(input, { ...init, body: JSON.stringify(body) });
+    }
+    // WhatsApp (sign-in codes, api/_phone-otp.js): UAT's database holds real
+    // guests' numbers, so a message goes only to a number listed in
+    // UAT_WHATSAPP_TO (comma-separated, e.g. +919876543210). Any other one is
+    // dropped and reported as sent, so the flow can still be followed.
+    if (/^https:\/\/graph\.facebook\.com\/[^/]+\/[^/]+\/messages/.test(url) && init && typeof init.body === 'string') {
+      const digitsOf = (p) => String(p || '').replace(/[^\d]/g, '');
+      const allowed = String(process.env.UAT_WHATSAPP_TO || '').split(',').map(digitsOf).filter(Boolean);
+      let body; try { body = JSON.parse(init.body); } catch (e) { body = null; }
+      const to = digitsOf(body && body.to);
+      if (!to || !allowed.includes(to)) {
+        console.log(`[UAT] WhatsApp message not sent (number not in UAT_WHATSAPP_TO): …${to.slice(-4)}`);
+        return new Response(JSON.stringify({ messaging_product: 'whatsapp', messages: [{ id: 'uat-suppressed' }] }), { status: 200, headers: { 'Content-Type': 'application/json' } });
+      }
+      return realFetch(input, init);
     }
     return realFetch(input, init);
   };

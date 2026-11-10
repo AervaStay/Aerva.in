@@ -35,7 +35,7 @@ const { markIdDeadlineIfMissing } = require('./_guest-id');
 // Fallback only for orders placed before the split commission existed.
 const crypto = require('crypto');
 const FALLBACK_COMMISSION_RATE = 5;
-const DEPOSIT_HOLD_DAYS = 7;   // a deposit is held for 7 days after departure
+const DEPOSIT_HOLD_DAYS = 1;   // deposit_release_at = the day after departure (the host has 24 hours from check-out to report damage — _deposits.js)
 
 // ---- The booking's confirmation code ----
 // RANDOM only: eight digits, carrying nothing about the booking, the

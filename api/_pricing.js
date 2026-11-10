@@ -563,7 +563,7 @@ async function priceStay(sql, s, i, { excludeOrderId = null, at = null } = {}) {
       // charged in full on top of everything else. Never discounted,
       // never commissioned, never counted as Aerva revenue: it's held,
       // not earned, and normally goes straight back to the guest (see
-      // verify-payment.js for how the 7-day hold and release works).
+      // verify-payment.js for how the deposit is held and released: 24 hours after check-out).
       const depositAmount = listing.security_deposit ? Number(listing.security_deposit) : 0;
 
       // GST for this stay: rate from the per-night value of the room

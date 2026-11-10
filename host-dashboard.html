@@ -741,7 +741,7 @@
 <script src="aerva-cohost.js?v=2026-11-11b"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
 <script src="aerva-id-verify.js?v=2026-11-05a"></script>
-<script src="aerva-policies.js?v=2026-11-11b"></script>
+<script src="aerva-policies.js?v=2026-11-11c"></script>
 </head>
 <body>
 
@@ -1202,7 +1202,7 @@
             </div>
           </div>
           <div class="settings-edit-actions">
-            <button type="button" class="settings-save-btn" id="phoneVerifySendBtn">Send code</button>
+            <button type="button" class="settings-save-btn" id="phoneVerifySendBtn">Send code on WhatsApp</button>
             <button type="button" class="settings-cancel-btn" data-cancel-target="profilePhoneVerifyForm">Cancel</button>
           </div>
           <div class="field" id="phoneVerifyOtpRow" style="display:none; margin-top:12px;">
@@ -2827,8 +2827,8 @@
       if(!res.ok){ phoneVerifyMsg(data.error || 'Could not send a code. Please try again.', true); }
       else {
         document.getElementById('phoneVerifyOtpRow').style.display = 'block';
-        // otpForTesting exists only while no SMS provider is connected (see host-listings.js).
-        phoneVerifyMsg(data.otpForTesting ? `No SMS provider connected yet — your test code is ${data.otpForTesting}` : 'A code has been sent to this number.');
+        // The code goes on WhatsApp (api/_phone-otp.js); it is never shown here.
+        phoneVerifyMsg(`We sent a code on WhatsApp to ${data.sentTo || 'this number'}. It is good for ${data.expiresInMinutes || 10} minutes.`);
         document.getElementById('phoneVerifyOtp').focus();
       }
     }catch(e){ phoneVerifyMsg('Could not reach the server. Please try again.', true); }
@@ -2841,12 +2841,12 @@
     try{
       const post = (body) => fetch(API_BASE + '/api/host-listings', { method: 'POST',
         headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + sessionToken }, body: JSON.stringify(body) });
-      const res = await post({ verifyHostPhoneOtp: { otp } });
+      // The code is checked against the number it went to; the server then
+      // saves that number as the host's phone, verified (host-listings.js).
+      const res = await post({ verifyHostPhoneOtp: { otp, countryCode: document.getElementById('phoneVerifyCountry').value,
+        localNumber: document.getElementById('phoneVerifyNumber').value.trim() } });
       const data = await res.json().catch(() => ({}));
       if(!res.ok){ phoneVerifyMsg(data.error || 'Could not verify this code.', true); this.disabled = false; return; }
-      const c = PHONE_COUNTRIES.find(x => x[0] === document.getElementById('phoneVerifyCountry').value) || PHONE_COUNTRIES[0];
-      const digits = document.getElementById('phoneVerifyNumber').value.replace(/[\s\-().]/g, '').replace(/^0+/, '');
-      await post({ hostPhone: c[1] + digits }).catch(() => {});
       document.getElementById('phoneVerifyOtpRow').style.display = 'none';
       document.getElementById('phoneVerifyOtp').value = '';
       phoneVerifyMsg('');

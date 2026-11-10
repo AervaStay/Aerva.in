@@ -621,27 +621,32 @@
       // Deposit section — only shown at all if this booking actually had
       // one (deposit_status defaults to 'none' for bookings on listings
       // with no security deposit set). "Raise a Concern" only appears
-      // while it's still 'held' and the 7-day window hasn't closed yet —
+      // while it's still 'held' and the host's 24 hours after check-out
+      // haven't passed —
       // the same two checks the backend enforces, so a host never sees a
       // button that would just fail when clicked.
       let depositHtml = '';
       if(b.deposit_status && b.deposit_status !== 'none'){
         const releaseDate = b.deposit_release_at ? new Date(b.deposit_release_at) : null;
-        // The server says whether the window is open (the listing's own
-        // calendar, release day included); the date check is a fallback.
+        // The server says whether the 24 hours after check-out are still
+        // running (deposit_window_open, deposit_claim_until).
         // A co-host raises a claim only when their host allowed it.
         const coActing = IS_COHOST ? (window.AervaCohost.get() || {}) : null;
         const coMayClaim = !coActing || coActing.access === 'full' || (coActing.permissions || []).includes('deposits');
         const canDispute = coMayClaim && b.deposit_status === 'held' && releaseDate
-          && (typeof b.deposit_window_open === 'boolean' ? b.deposit_window_open : new Date() < new Date(releaseDate.getTime() + 86400000));
+          && (typeof b.deposit_window_open === 'boolean' ? b.deposit_window_open : !!(b.deposit_claim_until && new Date() <= new Date(b.deposit_claim_until)));
+        const claimUntil = b.deposit_claim_until ? new Date(b.deposit_claim_until) : null;
+        const claimLabel = claimUntil ? claimUntil.toLocaleString('en-IN', { day: 'numeric', month: 'short', hour: 'numeric', minute: '2-digit', timeZone: b.listing_timezone || 'Asia/Kolkata' }) : '';
         const releaseLabel = releaseDate
           ? releaseDate.toLocaleDateString('en-IN', { month: 'short', day: 'numeric', year: 'numeric' })
           : '';
 
         let statusNote = '';
-        if(b.deposit_status === 'held') statusNote = `Held until ${releaseLabel} unless you raise a concern.`;
+        if(b.deposit_status === 'held') statusNote = canDispute && claimLabel
+          ? `You can report damage until ${claimLabel} (24 hours after check-out). After that it is refunded to the guest.`
+          : (b.deposit_window_open === false ? 'The 24 hours after check-out have passed — being refunded to the guest.' : `Held until 24 hours after check-out${releaseLabel ? ' (' + releaseLabel + ')' : ''}.`);
         else if(b.deposit_status === 'disputed') statusNote = 'Under review by Aerva — you\'ll hear back once it\'s resolved.';
-        else if(b.deposit_status === 'refunded') statusNote = 'The 7-day window passed with no concern raised — refunded to the guest in full.';
+        else if(b.deposit_status === 'refunded') statusNote = 'No damage was reported within 24 hours of check-out — refunded to the guest in full.';
         else if(b.deposit_status === 'resolved') statusNote = IS_COHOST
           ? 'Resolved by Aerva between the host and the guest.'
           : `Resolved — ${fmt(b.deposit_resolution_amount || 0)} credited toward your payout, remainder refunded to the guest.`;

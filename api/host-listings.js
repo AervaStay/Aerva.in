@@ -39,7 +39,7 @@
 //          way PAN/Aadhaar/bank are, so no re-verification triggered.
 //   POST { raiseDispute: { orderId, reason } } — flags a concern on one
 //          of this host's bookings' held security deposits, before it
-//          would otherwise auto-refund to the guest 7 days after
+//          would otherwise auto-refund to the guest 24 hours after
 //          checkout. Only works while deposit_status is still 'held' and
 //          the release date hasn't passed. See get-pending-listings.js's
 //          resolveDispute mode for how an admin follows up.
@@ -90,7 +90,8 @@ const { respondChange } = require('./_booking-changes');
 const { respondDispute } = require('./_stay-disputes');
 const { hoursUntilCheckIn, hoursUntilCheckInTime, paidByOrderRow, dateStr } = require('./_booking-rules');
 const { executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, HOST_CANCELLATIONS_PER_YEAR, claimForCancellation, releaseClaim, claimRequest, unclaimRequest, hostOption, postThreadMessage, REASON_LABELS, depositStillHeld, guestGetsBackFor, clearUnsentPayouts } = require('./_cancellations');
-const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
+const { validatePhoneNumber, normalizeToE164, toE164 } = require('./_phone-validation');
+const phoneOtp = require('./_phone-otp');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
 const { sanitizeBody } = require('./_plain-text');
@@ -1635,124 +1636,78 @@ module.exports = async (req, res) => {
     cohostActor = { cohostId: gate.ctx.cohostId, guestId: accountId, ctx: gate.ctx };
   }
 
-  // ---- Send an OTP to verify a host's phone number ----
-  // Country-aware format validation (length + digits-only) happens
-  // here, server-side, before anything is "sent" — never trusts
-  // whatever the frontend already checked, since a direct API call
-  // could skip that entirely. Actual SMS delivery is intentionally NOT
-  // wired to a real provider yet — see the comment on otpForTesting
-  // below for why, and what changes once a provider is chosen.
+  // ---- Verify a host's phone number: a code on WhatsApp ----
+  // (owner, 10 Nov 2026: Meta's WhatsApp Cloud API, fallback email only.)
+  // The code is made, sent and checked in _phone-otp.js and belongs to the
+  // exact number it was sent to, so a correct code proves THAT number: it
+  // is then saved as the host's phone, verified, in the same step. Until
+  // WhatsApp codes are set up, sending answers 503 (nothing is shown on
+  // screen any more — the old test code in the reply is gone).
   if (req.method === 'POST' && req.body && req.body.sendHostPhoneOtp) {
     try {
       const { countryCode, localNumber } = req.body.sendHostPhoneOtp;
-      const validation = validatePhoneNumber(countryCode, localNumber);
+      const validation = toE164(countryCode, localNumber);
       if (!validation.valid) {
         return res.status(400).json({ error: validation.error });
       }
 
-      const guestRows = await sql`SELECT host_id, email FROM guests WHERE id = ${guestId}`;
-      const guest = guestRows[0];
+      const guest = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
       if (!guest || !guest.host_id) {
         return res.status(403).json({ error: 'You do not have permission to do this.' });
       }
-
-      // Rate-limited per host (not just per IP) — a host retrying OTP
-      // requests for their own number shouldn't be able to spam
-      // themselves (or, if their session were somehow compromised,
-      // spam an SMS provider's bill) unlimited times.
-      const recentSends = await countRecentAttempts(sql, {
-        action: 'host_phone_otp_sent', windowMinutes: 10, byEmail: String(guest.host_id)
-      });
-      if (recentSends >= 5) {
-        return res.status(429).json({ error: 'Too many OTP requests — please wait a few minutes and try again.' });
-      }
-
-      const otp = String(crypto.randomInt(100000, 1000000)); // 6 digits, never starts with 0 so it always displays as 6 characters
-      const otpHash = crypto.createHash('sha256').update(otp).digest('hex');
-      const OTP_LIFETIME_MINUTES = 10;
-
-      await sql`
-        UPDATE hosts SET
-          phone_country_code = ${countryCode}, phone_otp_hash = ${otpHash},
-          phone_otp_expires_at = now() + (${OTP_LIFETIME_MINUTES} || ' minutes')::interval,
-          phone_otp_attempts = 0, phone_verified = FALSE
-        WHERE id = ${guest.host_id}
-      `;
-
+      const out = await phoneOtp.sendCode(sql, { phone: validation.e164, purpose: 'host', ip: getClientIp(req), actor: 'host:' + guest.host_id });
       await logAudit(sql, {
         action: 'host_phone_otp_sent', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-        targetType: 'host', targetId: guest.host_id, metadata: { ip: getClientIp(req), countryCode }
+        targetType: 'host', targetId: guest.host_id, metadata: { ip: getClientIp(req), countryCode, channel: 'whatsapp' }
       });
-
-      // No real SMS provider is connected yet ("we'll take services
-      // based on country the host belongs to, later on" — per the
-      // request this was built for) — the OTP mechanism itself (
-      // generation, hashing, expiry, attempt-limiting, verification) is
-      // fully real and working; only the delivery step is a placeholder.
-      // Returned directly in the response for now so the flow is
-      // actually testable end to end without a provider connected —
-      // this MUST be removed the moment a real SMS integration is
-      // wired in, since shipping this to production as-is would defeat
-      // the entire point of an OTP.
-      return res.status(200).json({ success: true, otpForTesting: otp, note: 'No SMS provider connected yet — this code is returned directly for testing. Remove this field once a real provider is wired in.' });
+      return res.status(200).json({ success: true, channel: out.channel, sentTo: validation.e164,
+        expiresInMinutes: out.expiresInMinutes, resendAfterSeconds: out.resendAfterSeconds });
     } catch (err) {
+      if (err.isUserFacing) {
+        return res.status(err.status || 400).json({ error: err.message, emailFallback: !!err.emailFallback,
+          notOnWhatsApp: !!err.notOnWhatsApp, waitSeconds: err.waitSeconds || undefined });
+      }
       console.error('host-listings (sendHostPhoneOtp) error:', err);
       return res.status(500).json({ error: 'Could not send a verification code right now. Please try again.' });
     }
   }
 
-  // ---- Verify the OTP just sent ----
+  // ---- Check the code just sent ----
+  // { verifyHostPhoneOtp: { otp, countryCode, localNumber } } — the number
+  // is sent again so the code is checked against the number it went to.
   if (req.method === 'POST' && req.body && req.body.verifyHostPhoneOtp) {
     try {
-      const { otp } = req.body.verifyHostPhoneOtp;
+      const { otp, countryCode, localNumber } = req.body.verifyHostPhoneOtp;
       if (!otp || typeof otp !== 'string' || !/^[0-9]{6}$/.test(otp.trim())) {
         return res.status(400).json({ error: 'Please enter the 6-digit code.' });
       }
+      const validation = toE164(countryCode, localNumber);
+      if (!validation.valid) return res.status(400).json({ error: validation.error });
 
-      const guestRows = await sql`SELECT host_id FROM guests WHERE id = ${guestId}`;
-      const guest = guestRows[0];
+      const guest = (await sql`SELECT host_id FROM guests WHERE id = ${guestId}`)[0];
       if (!guest || !guest.host_id) {
         return res.status(403).json({ error: 'You do not have permission to do this.' });
       }
-
-      const hostRows = await sql`
-        SELECT phone_otp_hash, phone_otp_expires_at, phone_otp_attempts
-        FROM hosts WHERE id = ${guest.host_id}
-      `;
-      const host = hostRows[0];
-      if (!host || !host.phone_otp_hash) {
-        return res.status(400).json({ error: 'No verification code was requested — please request a new one.' });
-      }
-      if (new Date(host.phone_otp_expires_at) < new Date()) {
-        return res.status(400).json({ error: 'This code has expired — please request a new one.' });
-      }
-      // Five wrong guesses invalidates the code entirely, rather than
-      // leaving it guessable indefinitely within its 10-minute window —
-      // a fresh OTP request is required after this, same recovery path
-      // as an expired code.
-      if (host.phone_otp_attempts >= 5) {
-        return res.status(400).json({ error: 'Too many incorrect attempts — please request a new code.' });
-      }
-
-      const submittedHash = crypto.createHash('sha256').update(otp.trim()).digest('hex');
-      if (submittedHash !== host.phone_otp_hash) {
-        await sql`UPDATE hosts SET phone_otp_attempts = phone_otp_attempts + 1 WHERE id = ${guest.host_id}`;
+      const check = await phoneOtp.checkCode(sql, { phone: validation.e164, purpose: 'host', code: otp });
+      if (!check.ok) {
         await logAudit(sql, {
           action: 'host_phone_otp_verified', success: false, actorType: 'host', actorIdentifier: String(guest.host_id),
           targetType: 'host', targetId: guest.host_id, metadata: { ip: getClientIp(req) }
         });
-        return res.status(400).json({ error: 'Incorrect code — please try again.' });
+        return res.status(check.status || 400).json({ error: check.error });
       }
 
+      // The proved number becomes the host's phone, verified.
       await sql`
-        UPDATE hosts SET phone_verified = TRUE, phone_otp_hash = NULL, phone_otp_expires_at = NULL, phone_otp_attempts = 0
+        UPDATE hosts SET phone = ${check.phone}, phone_country_code = ${countryCode}, phone_verified = TRUE,
+          phone_otp_hash = NULL, phone_otp_expires_at = NULL, phone_otp_attempts = 0
         WHERE id = ${guest.host_id}
       `;
       await logAudit(sql, {
         action: 'host_phone_otp_verified', success: true, actorType: 'host', actorIdentifier: String(guest.host_id),
-        targetType: 'host', targetId: guest.host_id, metadata: {}
+        targetType: 'host', targetId: guest.host_id, metadata: { channel: 'whatsapp' }
       });
-      return res.status(200).json({ success: true });
+      return res.status(200).json({ success: true, phone: check.phone });
     } catch (err) {
       console.error('host-listings (verifyHostPhoneOtp) error:', err);
       return res.status(500).json({ error: 'Could not verify this code right now. Please try again.' });
@@ -1867,7 +1822,7 @@ module.exports = async (req, res) => {
         RETURNING id
       `;
       // No damage: the host releases the deposit with the review — refunded
-      // two bank working days later instead of after 7 days (_deposits.js).
+      // at once instead of when their 24 hours end (_deposits.js).
       let deposit = null;
       if (b.releaseDeposit === true) {
         deposit = await require('./_deposits').releaseEarly(sql, order.id, { hostId: me.host_id });
@@ -2829,9 +2784,8 @@ module.exports = async (req, res) => {
       // never trust orderId alone, since it's just a number a guest's
       // browser could also send.
       const rows = await sql`
-        SELECT o.id, o.deposit_status, o.deposit_release_at, o.deposit_amount,
-               (o.deposit_release_at IS NOT NULL
-                AND (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date > o.deposit_release_at) AS window_closed
+        SELECT o.id, o.deposit_status, o.deposit_release_at, o.deposit_amount, o.departure,
+               COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}) AS tz, to_jsonb(l)->>'check_out_time' AS check_out_time
         FROM orders o
         JOIN listings l ON o.listing_id = l.id
         WHERE o.id = ${orderId} AND l.host_id = ${guest.host_id}
@@ -2848,11 +2802,11 @@ module.exports = async (req, res) => {
         const rel = (await sql`SELECT to_jsonb(orders)->>'deposit_released_by_host_at' AS t FROM orders WHERE id = ${orderId}`)[0];
         if (rel && rel.t) return res.status(400).json({ error: 'You confirmed there was no damage when you reviewed this guest, so the deposit is being refunded.' });
       } catch (e) { /* column not added yet */ }
-      // "Within 7 days of check-out" (aerva-policies.js): deposit_release_at
-      // is check-out + 7 days, and that whole day still counts — on the
-      // listing's own calendar, not the server's UTC clock.
-      if (order.window_closed === true || order.window_closed === 't') {
-        return res.status(400).json({ error: 'The 7-day window to raise a concern on this deposit has passed.' });
+      // "Within 24 hours of check-out" (owner, 10 Nov 2026; was 7 days):
+      // counted from the listing's check-out time on the property's own
+      // clock (_deposits.js claimWindowOpen).
+      if (!require('./_deposits').claimWindowOpen(order.departure, order.tz, order.check_out_time)) {
+        return res.status(400).json({ error: 'The 24 hours after check-out to report damage on this deposit have passed.' });
       }
 
       // Guarded on 'held' in the UPDATE itself, not just the check above:
@@ -4249,9 +4203,9 @@ module.exports = async (req, res) => {
              COALESCE((to_jsonb(o)->>'free_cancel_fee')::int, 0) AS free_cancel_fee,
              COALESCE((to_jsonb(o)->>'free_cancel_commission')::int, 0) AS free_cancel_commission,
              o.deposit_amount, o.deposit_status, o.deposit_release_at,
-             -- the host may still raise a concern (same rule as raiseDispute)
-             (o.deposit_release_at IS NOT NULL
-              AND (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date <= o.deposit_release_at) AS deposit_window_open,
+             -- deposit_window_open / deposit_claim_until are added below
+             -- (same rule as raiseDispute: 24 hours from check-out time)
+             to_jsonb(l)->>'check_out_time' AS listing_check_out_time,
              o.dispute_reason, o.dispute_raised_at, o.deposit_resolution_amount,
              o.cancellation_reason, o.cancelled_at,
              o.status, o.created_at, o.pet_types, o.service_animal_types, o.young_litter_count,
@@ -4272,6 +4226,16 @@ module.exports = async (req, res) => {
       ORDER BY o.created_at DESC
       LIMIT ${bookingsLimit}
     `;
+    // Until when the host may report damage on a held deposit: 24 hours
+    // from the check-out time, on the property's clock (_deposits.js).
+    {
+      const dep = require('./_deposits');
+      for (const b of bookings) {
+        const until = dep.claimDeadlineMs(b.departure, b.listing_timezone || DEFAULT_TIMEZONE, b.listing_check_out_time);
+        b.deposit_claim_until = Number.isFinite(until) ? new Date(until).toISOString() : null;
+        b.deposit_window_open = Number.isFinite(until) && Date.now() <= until;
+      }
+    }
     // A gift: the guest staying, marked "Gift — booked by …" (_gifts.js).
     await require('./_gifts').decorateHostRows(sql, bookings, { phoneKey: '__none' });
     // Each booking's co-host shares, so the host sees what is theirs after

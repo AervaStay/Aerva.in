@@ -1,5 +1,15 @@
 // /api/_deposits.js — refund security deposits whose hold has ended. Not an endpoint.
 //
+// The rule (owner, 10 Nov 2026; was 7 days): the host has 24 HOURS from the
+// listing's check-out time (property's own clock) to report damage through
+// Aerva. As soon as those 24 hours pass with nothing reported, the deposit
+// is refunded to the guest's original payment method — the guest is told
+// to expect it within about 3 days of check-out. If the host confirms "no
+// damage" with their review of the guest, it is refunded at once.
+// orders.deposit_release_at holds the day the refund goes out (check-out +
+// 1 day), for showing; the 24-hour moment itself is worked out from the
+// departure date, the listing's check-out time and its time zone.
+//
 // Runs on the scheduler (every 15 minutes) and from Admin's "Process
 // Eligible Refunds". Each deposit is claimed ('held' → 'refunding') so two
 // runs never both refund it; the refund itself goes through safeRefund
@@ -10,19 +20,42 @@
 const { helpLine } = require('./_help-link');
 const { safeRefund } = require('./_refunds');
 const { refundSubunitForInr } = require('./_currency');
+const { localMidnightMs, checkInMinutes, dateStr } = require('./_booking-rules');
 
-// Two bank working days (Monday to Friday) after `day` (YYYY-MM-DD).
+const DEPOSIT_CLAIM_HOURS = 24;          // the host's time to report damage, from check-out
+const DEFAULT_CHECK_OUT = '11:00';
+// The moment the host's time to report damage ends (ms), or NaN.
+function claimDeadlineMs(departure, zone, checkOutTime) {
+  const d = dateStr(departure);
+  if (!d) return NaN;
+  return localMidnightMs(d, zone) + checkInMinutes(checkOutTime || DEFAULT_CHECK_OUT) * 60000 + DEPOSIT_CLAIM_HOURS * 3600e3;
+}
+function claimWindowOpen(departure, zone, checkOutTime, nowMs = Date.now()) {
+  const end = claimDeadlineMs(departure, zone, checkOutTime);
+  return Number.isFinite(end) && nowMs <= end;
+}
+// orders.deposit_release_at for a stay ending on `departure`: the day after
+// check-out, when the refund goes out. null without a date.
+function releaseDateFor(departure) {
+  const d = dateStr(departure);
+  if (!d) return null;
+  const x = new Date(d + 'T00:00:00Z'); x.setUTCDate(x.getUTCDate() + 1);
+  return x.toISOString().slice(0, 10);
+}
+
+// Bank working days (Monday to Friday) after `day` (YYYY-MM-DD).
 function addWorkingDays(day, n) {
   const d = new Date(String(day).slice(0, 10) + 'T00:00:00Z');
   let left = n;
   while (left > 0) { d.setUTCDate(d.getUTCDate() + 1); const w = d.getUTCDay(); if (w !== 0 && w !== 6) left--; }
   return d.toISOString().slice(0, 10);
 }
+
 // The host confirms, with their review of the guest, that there is no
-// damage: the deposit is refunded two bank working days later instead of
-// at the end of the 7-day window (never later than it would have been).
-// The host can no longer raise a concern about it. Returns { refundOn } or
-// { error }. Never throws.
+// damage: the deposit is refunded at once (the next run of the deposit job,
+// within 15 minutes) instead of when the 24 hours end. The host can no
+// longer raise a concern about it. Returns { refundOn } or { error }.
+// Never throws.
 async function releaseEarly(sql, orderId, { hostId } = {}) {
   try {
     const o = (await sql`SELECT o.id, o.guest_email, o.suite_name, o.deposit_amount, o.deposit_status, o.deposit_release_at, l.host_id,
@@ -33,31 +66,27 @@ async function releaseEarly(sql, orderId, { hostId } = {}) {
     const iso = (v) => v instanceof Date ? v.toISOString().slice(0, 10) : String(v || '').slice(0, 10);
     const today = iso(o.today);
     if (iso(o.departure) > today) return { error: 'The deposit can be released once the guest has checked out.' };
-    const refundOn = addWorkingDays(today, 2);
-    // The job refunds once the release date has passed: the day before refundOn.
-    const d = new Date(refundOn + 'T00:00:00Z'); d.setUTCDate(d.getUTCDate() - 1);
-    const releaseAt = d.toISOString().slice(0, 10);
     let upd;
     try {
-      upd = await sql`UPDATE orders SET deposit_release_at = LEAST(deposit_release_at, ${releaseAt}::date), deposit_released_by_host_at = now()
-                      WHERE id = ${o.id} AND deposit_status = 'held' RETURNING deposit_release_at::text AS deposit_release_at`;
+      upd = await sql`UPDATE orders SET deposit_release_at = LEAST(deposit_release_at, ${today}::date), deposit_released_by_host_at = now()
+                      WHERE id = ${o.id} AND deposit_status = 'held' RETURNING id`;
     } catch (e) {
-      upd = await sql`UPDATE orders SET deposit_release_at = LEAST(deposit_release_at, ${releaseAt}::date) WHERE id = ${o.id} AND deposit_status = 'held' RETURNING deposit_release_at::text AS deposit_release_at`;
+      // Before 2026-10-28-02 there is no deposit_released_by_host_at: the
+      // release date alone (today) lets the job refund it.
+      upd = await sql`UPDATE orders SET deposit_release_at = LEAST(deposit_release_at, ${today}::date - 1) WHERE id = ${o.id} AND deposit_status = 'held' RETURNING id`;
     }
     if (!upd.length) return { error: 'The deposit is no longer held.' };
-    const on = new Date(new Date(iso(upd[0].deposit_release_at) + 'T00:00:00Z').getTime() + 86400e3).toISOString().slice(0, 10);
     if (process.env.RESEND_API_KEY && o.guest_email) {
-      const nice = new Date(on + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'UTC' });
       const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
       try {
         await fetch('https://api.resend.com/emails', { method: 'POST', headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-          body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: o.guest_email, subject: `Your security deposit for ${o.suite_name} is being released`,
+          body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: o.guest_email, subject: `Your security deposit for ${o.suite_name} is being refunded`,
             html: `<div style="font-family:sans-serif; max-width:480px; line-height:1.6;"><p>Your host has confirmed there is no damage from your stay at <strong>${esc(o.suite_name)}</strong>.</p>
-              <p>Your security deposit of <strong>₹${Math.round(Number(o.deposit_amount)).toLocaleString('en-IN')}</strong> will be refunded to your original payment method on <strong>${esc(nice)}</strong>, instead of at the end of the 7-day period. Your bank may take a few working days to show it.</p>
+              <p>Your security deposit of <strong>₹${Math.round(Number(o.deposit_amount)).toLocaleString('en-IN')}</strong> is being refunded to your original payment method now. Your bank may take a few working days to show it.</p>
               <p style="font-size:12px; opacity:0.6;">${helpLine({ order: o.id }, 'Questions?')}</p></div>` }) });
       } catch (e) { /* the refund goes ahead either way */ }
     }
-    return { refundOn: on };
+    return { refundOn: today };
   } catch (err) {
     console.error('deposit not released early:', orderId, err.message);
     return { error: 'Could not release the deposit right now.' };
@@ -68,22 +97,41 @@ async function releaseDueDeposits(sql, razorpay, { deadlineMs = 6000 } = {}) {
   const started = Date.now();
   const results = [];
   let eligible = [];
+  // Candidates: held deposits of stays that have reached their check-out
+  // day (property's calendar). Each is refunded once the host's 24 hours
+  // after the check-out time have passed, or at once if the host confirmed
+  // no damage. A deposit whose refund FAILED waits in Admin → Refunds.
+  let candidates;
   try {
-    eligible = await sql`
-      SELECT o.id, o.razorpay_payment_id, o.razorpay_order_id, o.deposit_amount, o.charge_currency
+    candidates = await sql`
+      SELECT o.id, o.razorpay_payment_id, o.razorpay_order_id, o.deposit_amount, o.charge_currency,
+             o.departure::text AS departure, o.deposit_release_at::text AS deposit_release_at,
+             COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata') AS tz, to_jsonb(l)->>'check_out_time' AS check_out_time,
+             to_jsonb(o)->>'deposit_released_by_host_at' AS released_by_host_at
       FROM orders o LEFT JOIN listings l ON l.id = o.listing_id
-      -- Refunded only once the host's last day to report damage (the release
-      -- date itself, on the property's own calendar) has fully passed.
       WHERE o.deposit_status = 'held' AND o.deposit_amount > 0
-        AND o.deposit_release_at < (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date
+        AND o.departure <= (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date
         AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.order_id = o.id AND r.kind = 'deposit' AND r.status = 'failed')
-      ORDER BY o.deposit_release_at LIMIT 50
+      ORDER BY o.departure LIMIT 200
     `;
   } catch (err) {
-    // refunds table not there yet (before migration_refunds.sql): old rule.
-    eligible = await sql`SELECT id, razorpay_payment_id, razorpay_order_id, deposit_amount, charge_currency FROM orders
-                         WHERE deposit_status = 'held' AND deposit_release_at < (now() AT TIME ZONE 'Asia/Kolkata')::date AND deposit_amount > 0 LIMIT 50`;
+    // refunds table not there yet (before migration_refunds.sql).
+    candidates = await sql`
+      SELECT o.id, o.razorpay_payment_id, o.razorpay_order_id, o.deposit_amount, o.charge_currency,
+             o.departure::text AS departure, o.deposit_release_at::text AS deposit_release_at,
+             COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata') AS tz, to_jsonb(l)->>'check_out_time' AS check_out_time,
+             to_jsonb(o)->>'deposit_released_by_host_at' AS released_by_host_at
+      FROM orders o LEFT JOIN listings l ON l.id = o.listing_id
+      WHERE o.deposit_status = 'held' AND o.deposit_amount > 0
+        AND o.departure <= (now() AT TIME ZONE 'Asia/Kolkata')::date
+      ORDER BY o.departure LIMIT 200`;
   }
+  const nowMs = Date.now();
+  eligible = candidates.filter(o => o.released_by_host_at
+    // Released early before 2026-10-28-02 (no flag): its release date was
+    // moved before the usual day after check-out.
+    || (o.deposit_release_at && String(o.deposit_release_at).slice(0, 10) < String(releaseDateFor(o.departure)))
+    || !claimWindowOpen(o.departure, o.tz, o.check_out_time, nowMs)).slice(0, 50);
   for (const order of eligible) {
     if (Date.now() - started > deadlineMs) break;
     const claimed = await sql`UPDATE orders SET deposit_status = 'refunding' WHERE id = ${order.id} AND deposit_status = 'held' RETURNING id`;
@@ -178,4 +226,4 @@ async function notifyDepositDispute(sql, orderId, event, { compensation = 0, ref
   } catch (err) { console.error('notifyDepositDispute failed:', err.message); }
 }
 
-module.exports = { releaseDueDeposits, notifyDepositDispute, releaseEarly, addWorkingDays };
+module.exports = { DEPOSIT_CLAIM_HOURS, claimDeadlineMs, claimWindowOpen, releaseDateFor, releaseDueDeposits, notifyDepositDispute, releaseEarly, addWorkingDays };
