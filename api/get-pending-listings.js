@@ -342,7 +342,7 @@ module.exports = async (req, res) => {
         return res.status(429).json({ error: 'Too many sign-in attempts. Please wait 15 minutes and try again.' });
       }
 
-      const rows = await sql`SELECT id, email, password_hash, name FROM admins WHERE email = ${cleanEmail}`;
+      const rows = await sql`SELECT id, email, password_hash, name, to_jsonb(a)->>'removed_at' AS removed_at FROM admins a WHERE email = ${cleanEmail}`;
       const admin = rows[0];
       // Same timing-safe pattern as guest-auth.js: always run bcrypt.compare,
       // even against a dummy hash for a non-existent account, so a wrong
@@ -355,6 +355,14 @@ module.exports = async (req, res) => {
           metadata: { reason: !admin ? 'no_such_account' : 'wrong_password', ip: clientIp }
         });
         return res.status(401).json({ error: 'Incorrect email or password.' });
+      }
+      // Taken off the team (2026-11-12-05): the account stays for the record,
+      // but it is no longer a way in. Said plainly rather than as a wrong
+      // password — they know their password is right.
+      if (admin.removed_at) {
+        await logAudit(sql, { action: 'admin_login', success: false, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
+          targetType: 'admin', targetId: admin.id, metadata: { reason: 'removed_from_team', ip: clientIp } });
+        return res.status(403).json({ error: 'This account is no longer on the Aerva team.' });
       }
       const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS, await sessionExtra(sql, admin.id));
       await logAudit(sql, {
@@ -443,8 +451,8 @@ module.exports = async (req, res) => {
       });
       if (recentFromIp >= 5) return res.status(200).json({ success: true });
 
-      const rows = await sql`SELECT id, email FROM admins WHERE email = ${cleanEmail}`;
-      const admin = rows[0];
+      const rows = await sql`SELECT id, email, to_jsonb(a)->>'removed_at' AS removed_at FROM admins a WHERE email = ${cleanEmail}`;
+      const admin = rows[0] && !rows[0].removed_at ? rows[0] : null;
       if (admin) {
         const resetTok = createToken(admin.id, 'admin-password-reset', ADMIN_RESET_LINK_LIFETIME_MS, await sessionExtra(sql, admin.id));
         await sendAdminPasswordResetEmail(admin, resetTok);
@@ -538,7 +546,7 @@ module.exports = async (req, res) => {
   if (!actions.allowed(ADMIN_ROLE, req)) {
     return res.status(403).json({ error: `Your role (${actions.ROLES[ADMIN_ROLE] || 'none'}) cannot do this. Ask an admin.`, role: ADMIN_ROLE });
   }
-  const ADMIN_ME = { id: sessionPayload ? Number(sessionPayload.listingId) : 0, email: ADMIN_ACTOR };
+  const ADMIN_ME = { id: sessionPayload ? Number(sessionPayload.listingId) : 0, email: ADMIN_ACTOR, role: ADMIN_ROLE };
 
   // GET ?adminMe=1 — who is signed in, and their role (the page shows only what it allows)
   if (req.method === 'GET' && req.query.adminMe === '1') {
@@ -729,11 +737,17 @@ module.exports = async (req, res) => {
       return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
     }
   }
-  if (req.method === 'POST' && req.body && (req.body.setAdminRole || req.body.proposeAction || req.body.withdrawAction || req.body.reviewAction
+  if (req.method === 'POST' && req.body && (req.body.setAdminRole || req.body.removeTeamMember || req.body.restoreTeamMember || req.body.setSuperAdmin
+      || req.body.proposeAction || req.body.withdrawAction || req.body.reviewAction
       || req.body.blockGuestListing || req.body.unblockGuestListing || req.body.resolveReport)) {
     try {
       const b = req.body;
       if (b.setAdminRole) return res.status(200).json(await actions.setRole(sql, { adminId: b.setAdminRole.adminId, role: b.setAdminRole.role, byId: ADMIN_ME.id, audit: ADMIN_AUDIT }));
+      // Only a super admin takes someone off the team, lets them back in, or
+      // names another super admin (owner, 12 Nov 2026).
+      if (b.removeTeamMember) return res.status(200).json(await actions.removeMember(sql, { adminId: b.removeTeamMember.adminId, byId: ADMIN_ME.id, audit: ADMIN_AUDIT }));
+      if (b.restoreTeamMember) return res.status(200).json(await actions.restoreMember(sql, { adminId: b.restoreTeamMember.adminId, byId: ADMIN_ME.id, audit: ADMIN_AUDIT }));
+      if (b.setSuperAdmin) return res.status(200).json(await actions.setSuper(sql, { adminId: b.setSuperAdmin.adminId, isSuper: b.setSuperAdmin.isSuper === true, byId: ADMIN_ME.id, audit: ADMIN_AUDIT }));
       if (b.proposeAction) {
         const x = b.proposeAction;
         const row = await actions.propose(sql, { kind: x.kind, params: x.params || {}, reason: x.reason, ticketId: x.ticketId, admin: ADMIN_ME, audit: ADMIN_AUDIT });

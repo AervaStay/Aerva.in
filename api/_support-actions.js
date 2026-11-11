@@ -46,6 +46,16 @@ const KINDS = {
 // filled in for them, then edited to the case (owner, 12 Nov 2026: "it can
 // be no changes can be done per the policy etc"). 'other' is free wording.
 // What the person reads is always p.message — never the label below.
+// Money actions: a second person must approve them, always. Everything
+// else (reports, blocking a guest from a listing, turning a request down)
+// pays nothing and changes no booking, so an ADMIN may simply do it —
+// owner, 12 Nov 2026: "reviewer is required only when there is a refund or
+// reducing the Aerva fees question comes. For general request, it should be
+// enough." A customer representative or a reviewer still proposes it and a
+// second person decides.
+const MONEY_KINDS = ['cancel_refund', 'partial_refund', 'deposit_refund'];
+const needsReview = (kind, role) => MONEY_KINDS.includes(kind) || (role || 'admin') !== 'admin';
+
 const GROUNDS = {
   policy: 'The booking’s policy does not allow it',
   too_late: 'Asked for after the time allowed',
@@ -88,18 +98,105 @@ function allowed(role, req) {
 
 async function me(sql, sessionPayload, role) {
   const a = sessionPayload ? (await soft(sql`SELECT id, email, name FROM admins WHERE id = ${Number(sessionPayload.listingId) || 0}`))[0] : null;
-  return { id: a ? a.id : null, email: a ? a.email : 'master secret', name: a ? a.name : null, role, roleLabel: ROLES[role] || role, kinds: KINDS };
+  return { id: a ? a.id : null, email: a ? a.email : 'master secret', name: a ? a.name : null, role, roleLabel: ROLES[role] || role, kinds: KINDS,
+           canManageTeam: await isSuper(sql, a ? a.id : null) };
 }
 
+// Who is on the team, and who has been taken off it. A removed member's row
+// is kept for ever so every approval and case record still names who did it
+// (owner, 12 Nov 2026).
 async function team(sql) {
-  return { roles: ROLES, team: await sql`SELECT id, email, name, created_at, COALESCE(to_jsonb(a)->>'role', 'admin') AS role FROM admins a ORDER BY id` };
+  const all = await sql`SELECT id, email, name, created_at, COALESCE(to_jsonb(a)->>'role', 'admin') AS role,
+                               COALESCE((to_jsonb(a)->>'super_admin')::boolean, false) AS super_admin,
+                               to_jsonb(a)->>'removed_at' AS removed_at
+                          FROM admins a ORDER BY id`;
+  return { roles: ROLES, team: all.filter(a => !a.removed_at), removed: all.filter(a => a.removed_at) };
+}
+
+// A super admin adds and removes team members and names other super admins.
+// Two ways to be one, and they are the same thing to this file:
+//   • admins.super_admin, set here by another super admin (2026-11-12-05);
+//   • an email in SUPER_ADMIN_EMAILS, which also opens Admin → Data safety
+//     and is deliberately set outside the app (_data-safety.js).
+// The master secret (no admin row) counts as one: it is the owner's own way in.
+const superEmails = () => String(process.env.SUPER_ADMIN_EMAILS || 'hello@aerva.in').split(',').map(x => x.trim().toLowerCase()).filter(Boolean);
+async function isSuper(sql, adminId) {
+  if (adminId == null) return true;
+  const a = (await soft(sql`SELECT email, COALESCE((to_jsonb(a)->>'super_admin')::boolean, false) AS s, to_jsonb(a)->>'removed_at' AS removed_at
+                            FROM admins a WHERE a.id = ${Number(adminId) || 0}`))[0];
+  if (!a || a.removed_at) return false;
+  return !!a.s || superEmails().includes(String(a.email || '').toLowerCase());
+}
+const superOnly = () => userError('Only a super admin can do this.', 403);
+
+// Taking someone off the team: they are signed out at once and cannot sign
+// in again. Nothing they did is removed, and they can be let back in.
+async function removeMember(sql, { adminId, byId, audit }) {
+  if (!(await isSuper(sql, byId))) throw superOnly();
+  const t = (await sql`SELECT id, email, name, COALESCE(to_jsonb(a)->>'role', 'admin') AS role,
+                              COALESCE((to_jsonb(a)->>'super_admin')::boolean, false) AS super_admin,
+                              to_jsonb(a)->>'removed_at' AS removed_at
+                         FROM admins a WHERE a.id = ${Number(adminId) || 0}`)[0];
+  if (!t) throw userError('Team member not found.', 404);
+  if (t.removed_at) throw userError('They are already off the team.', 409);
+  if (byId != null && Number(t.id) === Number(byId)) throw userError('You cannot take yourself off the team. Ask another super admin.', 409);
+  if (t.super_admin) {
+    const supers = (await sql`SELECT count(*)::int AS n FROM admins a
+                               WHERE COALESCE((to_jsonb(a)->>'super_admin')::boolean, false) = true AND to_jsonb(a)->>'removed_at' IS NULL`)[0].n;
+    if (supers <= 1) throw userError('There must always be one super admin. Make someone else a super admin first.', 409);
+  }
+  if (t.role === 'admin') {
+    const admins = (await sql`SELECT count(*)::int AS n FROM admins a
+                               WHERE COALESCE(to_jsonb(a)->>'role', 'admin') = 'admin' AND to_jsonb(a)->>'removed_at' IS NULL AND a.id <> ${t.id}`)[0].n;
+    if (admins < 1) throw userError('There must always be at least one admin.', 409);
+  }
+  try { await sql`UPDATE admins SET removed_at = now(), session_version = COALESCE(session_version, 0) + 1 WHERE id = ${t.id}`; }
+  catch (err) { throw userError('Run the database update for the team first (Admin → Database updates).', 503); }
+  await logAudit(sql, { action: 'admin_removed', success: true, actorType: 'admin', ...audit, targetType: 'admin', targetId: t.id,
+    metadata: { email: t.email, name: t.name, role: t.role, superAdmin: t.super_admin } });
+  return team(sql);
+}
+
+// Letting someone back in, with the role they had.
+async function restoreMember(sql, { adminId, byId, audit }) {
+  if (!(await isSuper(sql, byId))) throw superOnly();
+  const t = (await sql`SELECT id, email, to_jsonb(a)->>'removed_at' AS removed_at FROM admins a WHERE a.id = ${Number(adminId) || 0}`)[0];
+  if (!t) throw userError('Team member not found.', 404);
+  if (!t.removed_at) throw userError('They are already on the team.', 409);
+  await sql`UPDATE admins SET removed_at = NULL, session_version = COALESCE(session_version, 0) + 1 WHERE id = ${t.id}`;
+  await logAudit(sql, { action: 'admin_restored', success: true, actorType: 'admin', ...audit, targetType: 'admin', targetId: t.id, metadata: { email: t.email } });
+  return team(sql);
+}
+
+// Naming (or unnaming) another super admin. Only a super admin may, and the
+// last one cannot be unnamed.
+async function setSuper(sql, { adminId, isSuper: want, byId, audit }) {
+  if (!(await isSuper(sql, byId))) throw superOnly();
+  const t = (await sql`SELECT id, email, COALESCE(to_jsonb(a)->>'role', 'admin') AS role,
+                              COALESCE((to_jsonb(a)->>'super_admin')::boolean, false) AS super_admin,
+                              to_jsonb(a)->>'removed_at' AS removed_at
+                         FROM admins a WHERE a.id = ${Number(adminId) || 0}`)[0];
+  if (!t) throw userError('Team member not found.', 404);
+  if (t.removed_at) throw userError('They are off the team.', 409);
+  const on = want === true;
+  if (on && t.role !== 'admin') throw userError('Only an admin can be a super admin. Change their role first.', 409);
+  if (!on && t.super_admin) {
+    const supers = (await sql`SELECT count(*)::int AS n FROM admins a
+                               WHERE COALESCE((to_jsonb(a)->>'super_admin')::boolean, false) = true AND to_jsonb(a)->>'removed_at' IS NULL`)[0].n;
+    if (supers <= 1) throw userError('There must always be one super admin.', 409);
+  }
+  try { await sql`UPDATE admins SET super_admin = ${on} WHERE id = ${t.id}`; }
+  catch (err) { throw userError('Run the database update for the team first (Admin → Database updates).', 503); }
+  await logAudit(sql, { action: on ? 'admin_made_super' : 'admin_unmade_super', success: true, actorType: 'admin', ...audit, targetType: 'admin', targetId: t.id, metadata: { email: t.email } });
+  return team(sql);
 }
 async function setRole(sql, { adminId, role, byId, audit }) {
   if (!ROLES[role]) throw userError('Choose a role.');
   const target = (await sql`SELECT id, email, COALESCE(to_jsonb(a)->>'role', 'admin') AS role FROM admins a WHERE id = ${Number(adminId) || 0}`)[0];
   if (!target) throw userError('Team member not found.', 404);
   if (target.role === 'admin' && role !== 'admin') {
-    const admins = (await sql`SELECT count(*)::int AS n FROM admins a WHERE COALESCE(to_jsonb(a)->>'role', 'admin') = 'admin'`)[0].n;
+    const admins = (await sql`SELECT count(*)::int AS n FROM admins a
+                               WHERE COALESCE(to_jsonb(a)->>'role', 'admin') = 'admin' AND to_jsonb(a)->>'removed_at' IS NULL`)[0].n;
     if (admins <= 1) throw userError('There must always be at least one admin.', 409);
   }
   try { await sql`UPDATE admins SET role = ${role} WHERE id = ${target.id}`; }
@@ -221,6 +318,14 @@ async function propose(sql, { kind, params = {}, reason, ticketId = null, admin,
                       ${`Proposed for approval (#${row.id}): ${KINDS[kind]}. ${describe(kind, c.params, c.preview)} Reason: ${why}`})`;
   await logAudit(sql, { action: 'support_action_proposed', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: row.id,
     metadata: { kind, orderId: row.order_id, ticketId: tid, params: c.params } });
+  // An admin doing something that pays nothing: done as they send it, with
+  // the same record as an approved one (who, why, what, on the request).
+  if (!needsReview(kind, admin.role)) {
+    const done = await review(sql, admin.razorpay || null, { id: row.id, approve: true, note: 'Done by the admin who proposed it (no money involved, so no second approval is needed).',
+      admin: Object.assign({}, admin, { selfApproveAllowed: true }), audit });
+    const after = (await sql`SELECT * FROM support_actions WHERE id = ${row.id}`)[0];
+    return Object.assign({}, after || row, { applied: true, outcome: done });
+  }
   await notifyReviewers(sql, row);
   return row;
 }
@@ -329,7 +434,11 @@ async function unblockGuest(sql, { listingId, guestId, audit }) {
 async function review(sql, razorpay, { id, approve, note, admin, audit }) {
   const a = (await sql`SELECT * FROM support_actions WHERE id = ${Number(id) || 0}`)[0];
   if (!a) throw userError('Proposal not found.', 404);
-  if (Number(a.proposed_by) === Number(admin.id)) throw userError('Someone else has to approve your own proposal.', 403);
+  // An admin's own non-money action is carried out as they send it (below,
+  // in propose): that is the one case where the proposer is the approver.
+  if (Number(a.proposed_by) === Number(admin.id) && !admin.selfApproveAllowed) {
+    throw userError('Someone else has to approve your own proposal.', 403);
+  }
   const why = String(note || '').trim().slice(0, 1000);
   if (!approve) {
     if (why.length < 5) throw userError('Say why it is rejected — the representative sees it.');
@@ -413,4 +522,4 @@ async function isBlocked(sql, guestId, listingId) {
   return (await soft(sql`SELECT 1 FROM listing_guest_blocks WHERE guest_id = ${guestId} AND listing_id = ${listingId}`)).length > 0;
 }
 
-module.exports = { GROUNDS, ROLES, KINDS, roleOf, allowed, me, team, setRole, propose, withdraw, list, review, recordsFor, blockGuest, unblockGuest, blockedListingIds, isBlocked, addReport };
+module.exports = { GROUNDS, ROLES, KINDS, roleOf, allowed, me, team, setRole, isSuper, removeMember, restoreMember, setSuper, propose, withdraw, list, review, recordsFor, blockGuest, unblockGuest, blockedListingIds, isBlocked, addReport };

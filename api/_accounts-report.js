@@ -911,6 +911,19 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
   const creditsHeld = close.credits;
   const liab = r2(close.advance + close.host + close.cohost + close.deposits + cumGst + c.tds + creditsHeld);
   const bsDiff = r2(assets - liab - earnings);
+  // Decided but not yet made: refunds against a booking, and group payments
+  // refunded before there was a booking.
+  let refundsOwed = 0;
+  try {
+    const q = await sql`SELECT COALESCE(sum(amount), 0) / 100.0 AS v FROM refunds
+                         WHERE status IN ('new', 'creating', 'pending') AND (created_at AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp`;
+    refundsOwed = r2(Number(q[0].v) || 0);
+  } catch (e) { refundsOwed = 0; }
+  try {
+    const q = await sql`SELECT COALESCE(sum(refund_amount), 0) / 100.0 AS v FROM group_claims
+                         WHERE refund_status IN ('creating', 'pending') AND (COALESCE(refunded_at, refund_claimed_at) AT TIME ZONE 'Asia/Kolkata') < ${end}::timestamp`;
+    refundsOwed = r2(refundsOwed + (Number(q[0].v) || 0));
+  } catch (e) { /* no group claims yet */ }
   sections.unshift({ title: 'Balance sheet at ' + endLabel(end) + (monthOpen ? ' (today — the month is not over)' : ''), note: (monthOpen ? 'The month is not over: this is the position at the end of today, and only stays checked in by today are counted. ' : '') + 'Booking money only, since Aerva’s first booking. GST and TDS are shown in full: subtract what has already been deposited with the government from both “GST/TDS payable” and “Bank”. Aerva’s capital, other income and other expenses are not on the site — your CA adds them.', balanceSheet: true, lines: [
     L('EQUITY AND LIABILITIES', null, '', '', { head: true }),
     L('Owner’s funds', null, '', '', { head: true, sub: true }),
@@ -930,7 +943,14 @@ async function buildStatement(sql, { start, end, label, bookings, cash, payouts,
     L('Bank (booking money)', bank, 'Current assets: Bank', 'Settled by Razorpay into the bank, less payouts sent to hosts and co-hosts and RazorpayX’s charges'),
     L('Input GST (ITC) on Razorpay charges', c.feesGst, 'Current assets: Duties & taxes — Input GST', 'Claimable against GST payable, if Aerva is GST-registered and Razorpay’s invoice shows Aerva’s GSTIN'),
     L('Total assets', assets, '', 'Equals total equity and liabilities', { strong: true }),
-    ...(Math.abs(bsDiff) >= 1 ? [L('Not matched (for the CA to look at)', bsDiff, '', 'Assets differ from equity and liabilities by this amount — see “Difference to check” in the Bookings CSV and any “Not matched” lines below.')] : [])
+    ...(Math.abs(bsDiff) >= 1 ? [L('Not matched (for the CA to look at)', bsDiff, '', 'Assets differ from equity and liabilities by this amount — see “Difference to check” in the Bookings CSV and any “Not matched” lines below.')] : []),
+    // The usual reason for a difference, so it does not have to be hunted
+    // for (owner, 12 Nov 2026: "why not matching"). A refund Aerva has
+    // decided on is owed to the guest, but the money only leaves when
+    // Razorpay makes it — until then it is in the bank and in no liability.
+    ...(Math.abs(bsDiff) >= 1 && refundsOwed > 0
+      ? [L('— of which: refunds decided, not yet made', refundsOwed, '', 'Refunds that have been decided and are with Razorpay (or about to be): the money is still in the bank and is not in any liability above. If this equals the difference, that is the whole of it — it clears itself as each refund goes through.')]
+      : [])
   ] });
   // Owed BY hosts to Aerva: paid out, then no longer owed (a guest moved or
   // refunded under the check-in promise, a booking reduced after its
