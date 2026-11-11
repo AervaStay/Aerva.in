@@ -260,7 +260,12 @@ async function partialRefund(sql, razorpay, { orderId, amount, reason, hostPays,
   if (hostPays) await require('./_payouts').settleAfterPayout(sql, o.id, { reason: 'Refund to the guest taken from the host’s share after the payout was sent' });
   await logAudit(sql, { action: 'admin_partial_refund', success: true, actorType: 'admin', actorIdentifier: adminLabel || 'admin',
     targetType: 'order', targetId: o.id, metadata: { amount: amt, reason, hostPays: !!hostPays, refundId, kind: kindBase } });
-  await postThreadMessage(sql, o.id, 'system', `Aerva refunded ${inr(amt)} to the guest. Reason: ${String(reason).trim()}`);
+  // Each side reads its own side of it (owner, 12 Nov 2026): the guest what
+  // came back to them, the host only whether it touches their payout.
+  await postThreadMessage(sql, o.id, 'system', `Aerva refunded ${inr(amt)} to you. Reason: ${String(reason).trim()}`, { audience: 'guest' });
+  await postThreadMessage(sql, o.id, 'system', hostPays
+    ? `Aerva made a refund on this booking, and your share of it (${inr(amt)}) comes off your next payout. Reason: ${String(reason).trim()}`
+    : `Aerva made a refund on this booking. Your payout is not affected. Reason: ${String(reason).trim()}`, { audience: 'host' });
   if (process.env.RESEND_API_KEY && o.guest_email) {
     try {
       await fetch('https://api.resend.com/emails', { method: 'POST',

@@ -13227,7 +13227,11 @@
       deposit ? [`Refundable security deposit${depositWord ? ` <em>(${esc(depositWord)})</em>` : ''}`, inr(deposit)] : null,
       coupon ? ['Aerva coupon', '−' + inr(coupon)] : null
     ].filter(Boolean);
-    const refund = b.refunded && b.refunded.amount > 0 ? b.refunded : null;
+    // A group booking: a refund is split over everyone's payments, so show
+    // what came back to THIS payer, not the whole group's total.
+    const refund = b.group && b.group.myPaid
+      ? (b.group.myRefunded > 0 ? { amount: b.group.myRefunded, pending: !!b.group.myRefundPending } : null)
+      : (b.refunded && b.refunded.amount > 0 ? b.refunded : null);
 
     // ---- Booking details ----
     const guestName = [b.guest_first_name, b.guest_last_name].filter(Boolean).join(' ');
@@ -13270,7 +13274,7 @@
       <p class="bk-eyebrow">Booking summary</p>
       <h2 class="bk-title">${esc(b.suite_name || 'Your booking')}</h2>
       <p class="bk-sub"><span class="bk-status is-${esc(isCompleted ? 'completed' : b.status)}">${esc(statusWordGuest(isCompleted ? 'completed' : b.status))}</span>${place ? `<span class="bk-place">${esc(place)}</span>` : ''}</p>
-      ${b.status === 'cancelled' || b.status === 'refunded' ? `<div class="bk-cancelled">This booking was cancelled${b.cancelled_at ? ` on ${esc(new Date(b.cancelled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}.${b.cancellation_reason ? ` Reason: ${esc(b.cancellation_reason)}.` : ''}${refund ? ` ${inr(refund.amount)} ${refund.pending ? 'is being refunded' : 'was refunded'} ${b.group ? 'to the people who paid, each to their own payment method' : 'to your original payment method'}.` : ''}</div>` : ''}
+      ${b.status === 'cancelled' || b.status === 'refunded' ? `<div class="bk-cancelled">This booking was cancelled${b.cancelled_at ? ` on ${esc(new Date(b.cancelled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}.${b.cancellation_reason ? ` Reason: ${esc(b.cancellation_reason)}.` : ''}${refund ? ` ${inr(refund.amount)} ${refund.pending ? 'is being refunded' : 'was refunded'} ${b.group ? 'to the people who paid, each to their own payment method' : 'to your original payment method'}.` : ''}${Number(b.credit_back) > 0 ? ` ${inr(Number(b.credit_back))} is held for you as Aerva credit — use it on another booking, or have it refunded to your payment method any time from My Bookings.` : ''}${Number(b.coupon_back) > 0 ? ` ${inr(Number(b.coupon_back))} came back to you as an Aerva coupon.` : ''}</div>` : ''}
       ${b.confirmation_code && b.status === 'paid' ? `<div class="confirm-code bk-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${esc(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" id="bkCopyCode">Copy</button><span class="bk-code-hint">Show this to your host at ${isExp ? 'the start' : 'check-in'}</span></div>` : ''}
       <div class="bk-facts">${facts.filter(Boolean).map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`).join('')}</div>
       ${isExp && (b.meeting_point_address || b.meeting_point_details) ? `<p class="bk-note bk-meet"><strong>Meeting point:</strong> ${esc(b.meeting_point_address || '')}${b.meeting_point_details ? ` — ${esc(b.meeting_point_details)}` : ''}</p>` : ''}
@@ -13282,7 +13286,11 @@
           ${priceRows.map(([k, v]) => `<div class="bk-row"><span>${k}</span><span>${v}</span></div>`).join('')}
           <div class="bk-row bk-total"><span>${b.group ? 'Total paid by the group' : 'Total paid'}${b.charge_currency && b.charge_currency !== 'INR' ? ` <em>(charged in ${esc(b.charge_currency)})</em>` : ''}</span><span>${inr(paid)}</span></div>
           ${b.group && b.group.myPaid ? `<div class="bk-row"><span>Your own share (${Number(b.group.myPlaces) || 0} of ${Number(b.group.places) || 0} places)</span><span>${inr(b.group.myPaid)}</span></div>` : ''}
-          ${refund ? `<div class="bk-row bk-refund"><span>${refund.pending ? 'Refund in progress' : 'Refunded'}${b.group ? ' (to each payer)' : ''}</span><span>−${inr(refund.amount)}</span></div>` : ''}
+          ${refund ? `<div class="bk-row bk-refund"><span>${refund.pending ? 'Refund in progress' : 'Refunded'}${b.group ? ' (your share, to your own payment)' : ''}</span><span>−${inr(refund.amount)}</span></div>` : ''}
+          ${Number(b.credit_back) > 0 ? `<div class="bk-row bk-refund"><span>Back as Aerva credit</span><span>−${inr(Number(b.credit_back))}</span></div>` : ''}
+          ${Number(b.coupon_back) > 0 ? `<div class="bk-row bk-refund"><span>Back as an Aerva coupon</span><span>−${inr(Number(b.coupon_back))}</span></div>` : ''}
+          ${b.group && b.group.myPaid && refund ? `<div class="bk-row bk-you-keep"><span>What is left of your share</span><span>${inr(Math.max(0, Number(b.group.myPaid) - Number(refund.amount)))}</span></div>` : ''}
+          ${b.group && b.group.payers && b.group.payers.length ? `<div class="bk-row bk-payers"><span>Who paid</span><span>${b.group.payers.map(p => `${esc(p.firstName || 'A friend')}${p.organiser ? ' (organiser)' : ''}${p.you ? ' — you' : ''} · ${p.places} place${p.places === 1 ? '' : 's'}`).join('<br>')}${Number(b.group.coveredByOrganiser) > 0 ? `<br>${esc((b.group.payers.find(p => p.organiser) || {}).firstName || 'The organiser')} covered ${b.group.coveredByOrganiser} more` : ''}</span></div>` : ''}
           ${currentCurrency !== 'INR' && fmtGuest(paid) !== inrExact(paid) ? `<p class="bk-fx-note" style="font-size:12px; opacity:0.65; margin:10px 0 0;">Charged in Indian Rupees: ${inrExact(paid)}${refund ? `; ${refund.pending ? 'being refunded' : 'refunded'}: ${inrExact(refund.amount)}` : ''}. Amounts above are shown in ${esc(currentCurrency)} at today's rate.</p>` : ''}
         </div>
         <div class="bk-card">
@@ -16808,13 +16816,17 @@ function aervaCheckinPromiseHtml(b){
     const paying = ch && ch.status === 'awaiting_payment' && Number(ch.difference) > 0;
     html += `<div class="cp-box" style="${box}" onclick="event.stopPropagation()">
       <strong>Aerva’s check-in promise</strong><br><span>${esc(c.statusText || '')}</span>${c.note ? `<br><span style="opacity:0.8;">${esc(c.note)}</span>` : ''}`;
+    // The guest staying on a gift: news only. The person who paid chooses
+    // the new place and receives any refund.
+    if(c.readOnly) html += `<p style="margin:8px 0 0; font-size:13px; opacity:0.8;">${esc(c.byBuyer || 'The person who booked it')} booked this stay, so Aerva settles any new place or refund with them. Aerva emails you as soon as there is news.</p>`;
     if(c.offers && c.offers.length){
       html += `<p style="margin:8px 0 6px;">Choose a place for ${esc(new Date(c.offers[0].from + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }))} – ${esc(new Date(c.offers[0].to + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }))}. You pay only the difference:</p>`;
       html += c.offers.map(o => `<div class="cp-offer" style="display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap; justify-content:space-between; padding:10px 0; border-top:1px solid #eadfcf;">
           <div style="flex:1 1 220px; min-width:0;"><strong>${esc(o.name)}</strong>${o.distanceKm != null ? ` <span style="opacity:0.7;">· ${esc(String(o.distanceKm))} km away</span>` : ''}<br>
             <span style="font-size:13px; opacity:0.85;">${o.nights} night${o.nights === 1 ? '' : 's'}: stay ${money(o.subtotal)} · GST ${money(o.gst)} · service fee ${money(o.fee)}${o.deposit ? ` · refundable deposit ${money(o.deposit)}` : ''} = <strong>${money(o.total)}</strong></span><br>
             <span style="font-size:13px;">You paid ${money(o.oldTotal)} · ${o.difference > 0 ? `<strong>you pay ${money(o.difference)} more</strong>` : o.difference < 0 ? `<strong>${money(-o.difference)} back to you as Aerva credit</strong>` : '<strong>nothing more to pay</strong>'}</span></div>
-          ${paying ? '' : `<button type="button" class="btn solid" data-cp-accept="${b.id}" data-cp-option="${Number(o.n)}" style="min-height:44px; padding:10px 18px;">Choose this place</button>`}
+          ${paying ? '' : `<button type="button" class="btn solid" data-cp-accept="${b.id}" data-cp-option="${Number(o.n)}" data-cp-sum="${encodeURIComponent(JSON.stringify({ name: o.name, from: o.from, to: o.to, nights: o.nights, subtotal: o.subtotal, gst: o.gst, fee: o.fee, deposit: o.deposit, total: o.total, oldTotal: o.oldTotal, difference: o.difference }))}" style="min-height:44px; padding:10px 18px;">Choose this place</button>`}
+          <div class="cp-sum" style="flex:1 1 100%;"></div>
         </div>`).join('');
       if(paying) html += `<p style="margin:8px 0;"><button type="button" class="btn solid" data-pay-change="${ch.id}" style="min-height:44px; padding:10px 18px;">Pay ${money(ch.difference)} to confirm your new place</button></p>`;
     }
@@ -16842,15 +16854,55 @@ function aervaBindCheckinPromise(container, bookings){
     return d;
   };
   const say = (btn, t) => { const m = btn.closest('.cp-box') && btn.closest('.cp-box').querySelector('.cp-msg'); if(m) m.textContent = t; };
-  container.querySelectorAll('[data-cp-accept]').forEach(btn => btn.addEventListener('click', async (e) => {
-    e.stopPropagation();
-    if(!confirm('Choose this place? Your booking moves there; the price difference is shown above.')) return;
-    btn.disabled = true;
+  // Choosing a place shows what it costs and what is left to pay, and only
+  // then moves the booking (owner, 12 Nov 2026: the browser's own box said
+  // nothing, and a guest should see the price before paying).
+  const money = (n) => moneyBoth(n);
+  const esc = escapeMessageHtml;
+  const accept = async (btn, panel) => {
+    const go = panel.querySelector('[data-cp-go]');
+    const msg = panel.querySelector('.cp-sum-msg');
+    go.disabled = true; go.textContent = 'Just a moment…';
     try{
       const d = await post({ mode: 'acceptRebook', orderId: Number(btn.dataset.cpAccept), option: Number(btn.dataset.cpOption) });
-      if(d.pay > 0 && d.changeId){ aervaPayChange(Number(d.changeId), btn); return; }
+      if(d.pay > 0 && d.changeId){ aervaPayChange(Number(d.changeId), go); return; }
       loadMyBookings();
-    }catch(err){ say(btn, err.message); btn.disabled = false; }
+    }catch(err){ msg.textContent = err.message; go.disabled = false; go.textContent = go.dataset.label; }
+  };
+  container.querySelectorAll('[data-cp-accept]').forEach(btn => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const offer = btn.closest('.cp-offer');
+    const panel = offer && offer.querySelector('.cp-sum');
+    let o = null;
+    try{ o = JSON.parse(decodeURIComponent(btn.dataset.cpSum || '')); }catch(err){ o = null; }
+    if(!panel || !o) return;
+    if(panel.dataset.open === '1'){ panel.dataset.open = ''; panel.innerHTML = ''; btn.textContent = 'Choose this place'; return; }
+    // Only one summary open at a time.
+    container.querySelectorAll('.cp-sum[data-open="1"]').forEach(x => { x.dataset.open = ''; x.innerHTML = ''; });
+    container.querySelectorAll('[data-cp-accept]').forEach(x => { x.textContent = 'Choose this place'; });
+    panel.dataset.open = '1';
+    btn.textContent = 'Not this one';
+    const row = (k, v, strong) => `<div style="display:flex; justify-content:space-between; gap:12px; padding:3px 0;${strong ? ' font-weight:600; border-top:1px solid #eadfcf; margin-top:4px; padding-top:6px;' : ''}"><span>${k}</span><span>${v}</span></div>`;
+    const dates = `${esc(new Date(o.from + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }))} – ${esc(new Date(o.to + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }))}`;
+    const pay = Number(o.difference) > 0;
+    const label = pay ? `Pay ${money(o.difference)} and move my booking` : 'Move my booking here';
+    panel.innerHTML = `<div style="margin:10px 0 2px; padding:12px 14px; border:1px solid #e3d9cb; border-radius:10px; background:#fff;">
+      <strong>${esc(o.name)}</strong> <span style="opacity:0.75;">· ${dates} · ${o.nights} night${o.nights === 1 ? '' : 's'}</span>
+      <div style="margin:8px 0 0; font-size:13.5px;">
+        ${row('Stay', money(o.subtotal))}
+        ${row('GST', money(o.gst))}
+        ${row('Aerva service fee', money(o.fee))}
+        ${o.deposit ? row('Refundable deposit', money(o.deposit)) : ''}
+        ${row('This place', money(o.total), true)}
+        ${row('You already paid', '− ' + money(o.oldTotal))}
+        ${row(pay ? 'Left to pay now' : Number(o.difference) < 0 ? 'Back to you as Aerva credit' : 'Nothing more to pay', pay ? money(o.difference) : Number(o.difference) < 0 ? money(-o.difference) : money(0), true)}
+      </div>
+      <p style="margin:8px 0 0; font-size:13px; opacity:0.8;">Your booking moves to this place for the same dates.${pay ? ' Nothing moves until the payment goes through.' : Number(o.difference) < 0 ? ' The difference is held as Aerva credit — use it on another booking, or have it refunded to your payment any time.' : ''}</p>
+      <p style="margin:10px 0 0;"><button type="button" class="btn solid" data-cp-go="1" data-label="${esc(label)}" style="min-height:44px; padding:10px 18px;">${esc(label)}</button>
+        <button type="button" class="filter-clear" data-cp-close="1" style="margin-left:8px;">Keep looking</button></p>
+      <p class="cp-sum-msg" style="color:#a3402f; margin:6px 0 0; font-size:13px;"></p></div>`;
+    panel.querySelector('[data-cp-go]').addEventListener('click', (ev) => { ev.stopPropagation(); accept(btn, panel); });
+    panel.querySelector('[data-cp-close]').addEventListener('click', (ev) => { ev.stopPropagation(); panel.dataset.open = ''; panel.innerHTML = ''; btn.textContent = 'Choose this place'; });
   }));
   container.querySelectorAll('[data-cp-decline]').forEach(btn => btn.addEventListener('click', async (e) => {
     e.stopPropagation();
@@ -16906,7 +16958,7 @@ function aervaBookingGlance(b){
     }
     if(b.can_cancel_request !== false && b.group){
       // A confirmed group booking is non-refundable (_cancellations.js groupNoRefund), whatever the listing's policy.
-      items.push('Cancel: this is a non-refundable group booking. If plans change, nothing is refunded for the stay, its GST or the service fee, whatever the listing’s policy; any deposit goes back to each payer.');
+      items.push('Cancel: this is a non-refundable group booking. If plans change, nothing is refunded for the stay, its GST or the service fee, whatever the listing’s policy; any deposit goes back to the organiser, who paid it.');
       items.push('Natural disaster or government order (with proof), any time before check-in: Aerva decides. If approved, each payer gets their own share as Aerva credit (use it for new dates, or have it refunded to their own payment any time). If not, the booking stands.');
     } else if(b.can_cancel_request !== false){
       items.push(policy === 'firm'
@@ -17210,12 +17262,12 @@ async function openPolicyCancel(orderId, listingName){
       // A natural disaster or government order: Aerva decides (owner, 10 Nov 2026).
       const nd = q.naturalDisaster || {};
       return '<p class="payout-muted" style="margin:8px 0;">Aerva checks your proof and decides \u2014 your host can\u2019t decline it. If Aerva approves, what you paid (booking price, GST and Aerva\u2019s service fee' + (q.freeCancel ? ', and the free cancellation add-on' : '') + ') becomes <strong>Aerva credit</strong>, and any security deposit is refunded to your original payment: use it for new dates, or have it refunded to your original payment any time from My Bookings. If not, nothing changes and your booking stands. Aerva\u2019s decision is final.</p>'
-        + (nd.credit ? line('Aerva credit if approved', '<strong>' + inr(nd.credit) + '</strong>') : '') + (nd.coupon ? line('Back as a coupon (the part paid by coupon)', inr(nd.coupon)) : '') + (nd.cash ? line(q.groupNoRefund ? 'Security deposit, refunded to each payer' : 'Security deposit, refunded to your original payment', inr(nd.cash)) : '');
+        + (nd.credit ? line('Aerva credit if approved', '<strong>' + inr(nd.credit) + '</strong>') : '') + (nd.coupon ? line('Back as a coupon (the part paid by coupon)', inr(nd.coupon)) : '') + (nd.cash ? line(q.groupNoRefund ? 'Security deposit, refunded to the organiser' : 'Security deposit, refunded to your original payment', inr(nd.cash)) : '');
     }
     if(!q.allowed) return `<p class="payout-muted" style="margin:8px 0;">${esc(q.error || '')}</p>`;
     if(q.hostDecides) return `<p class="payout-muted" style="margin:8px 0;">Your host decides the refund.</p>${line('Deposit refunded', inr(q.ifNoRefund.deposit))}${line('Aerva service fee (non-refundable)', inr(q.ifNoRefund.feeKept))}${q.ifNoRefund.addOnKept ? line('Free cancellation add-on (not refunded; its window has passed)', inr(q.ifNoRefund.addOnKept)) : ''}`;
     // A confirmed group booking is non-refundable: cancelled at once, only the deposit comes back (_cancellations.js groupNoRefund).
-    if(q.groupNoRefund) return `<p class="payout-muted" style="margin:8px 0;"><strong>This is a non-refundable group booking.</strong> If you cancel, the booking is cancelled at once for everyone, with no wait for your host, and nothing is refunded for the stay, its GST or Aerva’s service fee, whatever the listing’s policy.</p>${line('Refunded for the stay', '<strong>' + inr(q.refundBooking || 0) + '</strong>')}${q.deposit ? line('Security deposit, refunded to each payer', inr(q.deposit)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}`;
+    if(q.groupNoRefund) return `<p class="payout-muted" style="margin:8px 0;"><strong>This is a non-refundable group booking.</strong> If you cancel, the booking is cancelled at once for everyone, with no wait for your host, and nothing is refunded for the stay, its GST or Aerva’s service fee, whatever the listing’s policy.</p>${line('Refunded for the stay', '<strong>' + inr(q.refundBooking || 0) + '</strong>')}${q.deposit ? line('Security deposit, refunded back to the organiser', inr(q.deposit)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}`;
     // Free cancellation add-on, still in its window: cancelled at once, no host answer.
     if(q.instant) return `<p class="payout-muted" style="margin:8px 0;">${(q.freeCancel || {}).included ? 'This booking includes free cancellation' : 'You added free cancellation'}, and it is still before ${esc((q.freeCancel || {}).untilLabel || '')} (the property’s time): your booking is cancelled at once, with no wait for your host.</p>${line('You get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}${q.addOnKept ? line('Free cancellation add-on (non-refundable)', inr(q.addOnKept)) : ''}`;
     return `${line('If your host accepts, you get back', '<strong>' + inr(q.refundCash) + '</strong>')}${q.couponBack ? line('Plus, as a coupon', inr(q.couponBack)) : ''}${q.couponLost ? line('Paid by coupon (not returned)', inr(q.couponLost)) : ''}${line('Aerva service fee (non-refundable)', inr(q.feeKept))}${q.addOnKept ? line('Free cancellation add-on (not refunded; its window has passed)', inr(q.addOnKept)) : ''}`;
@@ -17261,7 +17313,7 @@ async function openPolicyCancel(orderId, listingName){
       const d = await r.json().catch(() => ({}));
       if(!r.ok){ msg.textContent = d.error || 'Could not send the request.'; btn.disabled = false; return; }
       body.innerHTML = d.cancelled && q.groupNoRefund
-        ? `<p>The group booking is cancelled. Nothing is refunded for the stay${d.refundCash ? `; the security deposit (${inr(d.refundCash)}) goes back to each payer’s own payment, usually in 5–7 working days` : ''}. Everyone in the group has been told.</p>`
+        ? `<p>The group booking is cancelled. Nothing is refunded for the stay${d.refundCash ? `; the security deposit (${inr(d.refundCash)}) goes back to the organiser’s own payment, usually in 5–7 working days` : ''}. Everyone in the group has been told.</p>`
         : d.cancelled
         ? `<p>Your booking is cancelled. ${inr(d.refundCash || 0)} is refunded to your original payment method${d.creditBack ? `, and ${inr(d.creditBack)} goes back on your Aerva credit` : ''}. Refunds usually arrive in 5–7 working days.</p>`
         : reasonCode !== 'change_of_plans' ? '<p>Your request and proof have been sent to Aerva. Aerva checks the proof and decides; we will email you. Your host has been told.</p>'
@@ -17492,7 +17544,7 @@ async function aervaShowGroupPage(token){
     const p = r.data;
     box.innerHTML = `${agStayHead(p.stay)}
       <div class="ag-card"><p class="ag-lead"><strong>${AG_ESC(p.organiserFirstName || 'Your friend')}</strong> is booking this stay for ${p.places} people and splitting the payment.</p>
-      <p>Each place is <strong>${AG_INR(p.perPlace)}</strong>${p.lastPlace !== p.perPlace ? ` (last place ${AG_INR(p.lastPlace)})` : ''}.</p>
+      <p>Each place is <strong>${AG_INR(p.perPlace)}</strong>${p.lastPlace !== p.perPlace ? ` (last place ${AG_INR(p.lastPlace)})` : ''}.${Number(p.deposit) > 0 ? ` The refundable security deposit of ${AG_INR(p.deposit)} is paid by ${AG_ESC(p.organiserFirstName || 'the organiser')} alone, and goes back to them after the stay.` : ''}</p>
       ${p.secondsLeft != null ? `<p class="ag-count-big" data-ag-countdown="${p.secondsLeft}">${agClock(p.secondsLeft)} left</p>` : `<p>${p.status === 'open' ? '' : 'This group is no longer taking payments.'}</p>`}
       <p>To see who has paid and pay for your place, log in or create an Aerva account.</p>
       ${agLoginLinks(back, '', 'group')}</div>`;
@@ -17632,14 +17684,15 @@ function agGroupHtml(g, note){
   return `${noteHtml}${agStayHead(g.stay, `<p class="ag-status">${statusLine}</p>`)}
     <div class="ag-card"><div class="ag-progress"><span style="width:${pct}%"></span></div>
       <p class="ag-lead"><strong>${g.paidPlaces} of ${g.places}</strong> places paid${g.status === 'open' ? ` · <strong>${g.placesLeft}</strong> left${g.beingPaid ? ` · ${g.beingPaid} being paid now` : ''}` : ''}</p>
-      <p>${g.status === 'open' && g.placesLeft > 0 ? 'Each place still to pay' : 'Each place'}: <strong>${AG_INR(g.perPlace)}</strong>${g.lastPlace !== g.perPlace ? ` (last place ${AG_INR(g.lastPlace)})` : ''} · whole stay ${AG_INR(g.total)}, including GST, service fee and any deposit.</p>
+      <p>${g.status === 'open' && g.placesLeft > 0 ? 'Each place still to pay' : 'Each place'}: <strong>${AG_INR(g.perPlace)}</strong>${g.lastPlace !== g.perPlace ? ` (last place ${AG_INR(g.lastPlace)})` : ''} · whole stay ${AG_INR(g.total)}, including GST and the service fee.</p>
+      ${Number(g.deposit) > 0 ? `<p class="ag-help">The refundable security deposit of ${AG_INR(g.deposit)} is not split: ${AG_ESC(g.organiserFirstName || 'the organiser')} pays it with their own place, and it goes back to them after the stay.</p>` : ''}
       ${g.extraWindow ? `<p class="ag-help">Guests were added at the 2-hour mark: this is the 30-minute extra window. Anything still unpaid then is for ${AG_ESC(g.organiserFirstName || 'the organiser')} to pay.</p>` : ''}
       ${notHeld}
       ${payers ? `<ul class="ag-list">${payers}</ul>` : ''}${failed ? `<ul class="ag-list ag-failed">${failed}</ul>` : ''}
       ${g.myPaid ? `<p class="ag-help">Your share: you paid ${AG_INR(g.myPaid)}${g.myPlaces ? ` for ${g.myPlaces} place${g.myPlaces === 1 ? '' : 's'}` : ''}.</p>` : ''}
     </div>
     ${outcome}${decide}${topup}${pay}${addCard}${share}${notices}
-    <p class="ag-help"><strong>Non-refundable group booking.</strong> Once confirmed, nothing is refunded if plans change, whatever the listing’s policy (any deposit is refunded). A natural disaster or government order approved by Aerva, or a cancellation by the host, gives each person their own share as Aerva credit; if Aerva’s check-in promise is not kept, each person is refunded in full. ${AG_ESC(g.organiserFirstName || 'The organiser')} manages the booking.</p>`;
+    <p class="ag-help"><strong>Non-refundable group booking.</strong> Once confirmed, nothing is refunded if plans change, whatever the listing’s policy (any deposit goes back to the organiser, who paid it). A natural disaster or government order approved by Aerva, or a cancellation by the host, gives each person their own share as Aerva credit; if Aerva’s check-in promise is not kept, each person is refunded in full. ${AG_ESC(g.organiserFirstName || 'The organiser')} manages the booking.</p>`;
 }
 // The tick every payer gives before paying (owner, 10 Nov 2026).
 function agNonRefTick(g){

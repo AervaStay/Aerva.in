@@ -38,6 +38,8 @@
   body{font-family:sans-serif; background:#ffffff; color:#1c1a17; margin:0; padding:100px 20px 40px;}
   .wrap{max-width:720px; margin:0 auto;}
   #mainView{max-width:1060px;}
+  /* The transactions list is a wide table: it gets the whole window. */
+  #mainView.wide{max-width:1500px;}
   h1,h2,h3,h4{font-family:'Bodoni Moda',serif; font-weight:500;}
   h1{font-size:26px; margin-bottom:24px;}
   #gate{max-width:360px; margin:80px auto; text-align:center;}
@@ -69,11 +71,87 @@
   .tds-table th{font-weight:600; font-size:12px; color:#8a6c39; text-transform:uppercase; letter-spacing:0.04em;}
   .tds-sub{font-size:11.5px; opacity:0.65;}
   .tds-late{color:#a3402f; font-weight:600;}
+  /* Transactions: money in and out in one list, matched against Razorpay. */
+  .mn-lead{max-width:860px; font-size:14px; opacity:0.78; line-height:1.55;}
+  .mn-bar{display:flex; flex-wrap:wrap; gap:10px 14px; align-items:flex-end; margin:14px 0 10px; font-size:14px;}
+  .mn-bar label{display:flex; flex-direction:column; gap:4px; font-size:12.5px; color:#5a5349;}
+  .mn-bar input{padding:7px 10px; border:1px solid #e0d7c9; border-radius:8px; font:inherit; font-size:14px;}
+  .approve-btn.mn-quiet{background:#fff; color:#5a5349; border:1px solid #e0d7c9;}
+  .mn-chips{display:flex; gap:6px; align-self:flex-end;}
+  .mn-chip{font:inherit; font-size:13px; padding:7px 13px; border-radius:999px; border:1px solid #e6dcc9; background:#fff; color:#5a5349; cursor:pointer;}
+  .mn-chip.on{background:#3f3a33; border-color:#3f3a33; color:#fff;}
+  .mn-figs{display:flex; flex-wrap:wrap; gap:10px; margin:6px 0 16px;}
+  .mn-fig{flex:1 1 150px; min-width:140px; border:1px solid #e9e1d5; border-radius:12px; padding:12px 14px; background:#fdfbf7;}
+  .mn-fig-n{font-size:19px; font-weight:700; letter-spacing:-0.01em;}
+  .mn-fig-l{font-size:12.5px; color:#5a5349; margin-top:2px;}
+  .mn-fig-h{font-size:11.5px; opacity:0.6; margin-top:2px;}
+  .mn-skip{flex:1 1 100%; font-size:12.5px; color:#a3402f; margin:4px 0 0;}
+  .mn-scroll{overflow-x:auto; -webkit-overflow-scrolling:touch;}
+  .mn-table{display:table; width:100%; min-width:1000px; table-layout:fixed;}
+  .mn-table td{white-space:normal; overflow-wrap:anywhere;}
+  .mn-table th:nth-child(1), .mn-table td:nth-child(1){width:112px;}
+  .mn-table th:nth-child(2), .mn-table td:nth-child(2){width:180px;}
+  .mn-table th:nth-child(3), .mn-table td:nth-child(3){width:160px;}
+  .mn-table th:nth-child(4), .mn-table td:nth-child(4){width:104px;}
+  .mn-table th:nth-child(5), .mn-table td:nth-child(5),
+  .mn-table th:nth-child(6), .mn-table td:nth-child(6){width:92px;}
+  .mn-table th:nth-child(7), .mn-table td:nth-child(7){width:196px;}
+  .mn-table th:nth-child(8), .mn-table td:nth-child(8){width:112px;}
+  .mn-table .mn-nowrap{white-space:nowrap;}
+  .mn-table .mn-r{text-align:right;}
+  .mn-amt{font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap;}
+  .mn-in .mn-amt{color:#2f6b45;}
+  .mn-out .mn-amt{color:#a3402f;}
+  .mn-note{font-size:11.5px; opacity:0.65; margin-top:2px;}
+  .mn-id code{font-size:11.5px; background:#f6f1e8; border-radius:6px; padding:2px 6px; white-space:nowrap; cursor:copy;}
+  .mn-idline{display:flex; gap:6px; align-items:baseline; margin-bottom:3px;}
+  .mn-idline span{font-size:10.5px; text-transform:uppercase; letter-spacing:0.04em; opacity:0.55; min-width:48px;}
+  @media (max-width: 760px){ .mn-bar input{min-width:0; width:100%;} .mn-bar{gap:8px;} }
   .sup-flag{display:inline-block; font-size:11.5px; padding:2px 7px; border-radius:999px; margin:2px 4px 2px 0; background:#f1ebe2; color:#5a5349; white-space:nowrap;}
   .sup-late{background:#fbe9e6; color:#a3402f; font-weight:600;}
   .sup-us{background:#f4ecdc; color:#7c6030;}
   .sup-safety{background:#a3402f; color:#fff;}
   .sup-row{cursor:pointer;} .sup-row:hover td{background:#faf6f0;}
+  /* Support tab, made readable (owner, 12 Nov 2026) */
+  .sup-lead{font-size:14px; opacity:0.8; max-width:760px; margin:0 0 10px;}
+  .sup-help{max-width:760px; margin:0 0 16px; font-size:13.5px; border:1px solid #e6ded3; border-radius:10px; background:#fbf8f3;}
+  .sup-help summary{cursor:pointer; padding:10px 14px; font-weight:600; color:#8a6c39; list-style:none;}
+  .sup-help summary::-webkit-details-marker{display:none;}
+  .sup-help summary::before{content:'+ '; font-weight:700;}
+  .sup-help[open] summary::before{content:'\2212 ';}
+  .sup-help ul{margin:0; padding:0 18px 14px 32px; line-height:1.65;}
+  .sup-chips{display:flex; flex-wrap:wrap; gap:8px; margin:0 0 12px;}
+  .sup-chip{display:inline-flex; align-items:center; gap:7px; padding:7px 13px; min-height:36px; border:1px solid #e0d6c8; border-radius:999px;
+    background:#fff; font:inherit; font-size:13px; color:#5a5349; cursor:pointer;}
+  .sup-chip span{font-weight:600; background:#f1ebe2; border-radius:999px; padding:1px 8px; font-size:12px;}
+  .sup-chip:hover{border-color:#c9b48c;}
+  .sup-chip.is-on{background:#1c1a17; color:#fff; border-color:#1c1a17;}
+  .sup-chip.is-on span{background:rgba(255,255,255,0.18); color:#fff;}
+  .sup-chip.is-due:not(.is-on) span{background:#f6e2dc; color:#a3402f;}
+  .sup-bar{margin-bottom:10px;}
+  .sup-bar input[type=text]{min-width:320px;}
+  .sup-sr{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap;}
+  .sup-table{table-layout:fixed; display:table;}
+  .sup-table th, .sup-table td{white-space:normal; vertical-align:top;}
+  .sup-table td{padding:11px 10px;}
+  .sup-main{width:46%;}
+  .sup-subject{font-size:14.5px; line-height:1.4; margin-bottom:2px;}
+  .sup-flags{margin-top:4px;}
+  .sup-num{width:92px; text-align:right; white-space:nowrap;}
+  .sup-row.is-hot td{box-shadow:inset 3px 0 0 #b4532a;}
+  .sup-state{display:inline-block; font-size:12.5px; padding:3px 9px; border-radius:999px; background:#f1ebe2; color:#5a5349; white-space:nowrap;}
+  .sup-state-open{background:#f6e2dc; color:#a3402f;}
+  .sup-state-in_progress{background:#fdf0d8; color:#8a6c39;}
+  .sup-state-resolved, .sup-state-closed{background:#e3f4e8; color:#1f7a3d;}
+  .sup-flag.sup-safety{background:#b4532a; color:#fff;}
+  .sup-flag.sup-due{background:#fdf0d8; color:#8a6c39;}
+  @media (max-width: 900px){
+    .sup-table, .sup-table thead, .sup-table tbody, .sup-table tr, .sup-table td{display:block; width:auto;}
+    .sup-table thead{display:none;}
+    .sup-table tr{border-bottom:1px solid #e6ded3; padding:4px 0;}
+    .sup-table td{border:0; padding:3px 10px;}
+    .sup-num{text-align:left; width:auto;}
+  }
   .sup-flag.sup-wa{background:#e3f4e8; color:#1f7a3d;}
   .sup-msg.sup-transcript{background:#fbf8f2; border:1px dashed #d8c8a8;}
   .sup-suggest{border:1px solid #e6ded3; border-radius:10px; padding:10px 12px; margin:0 0 10px; background:#fcfaf6;}
@@ -277,6 +355,11 @@
   .pol-sec ul{ margin:0; padding-left:20px; }
   .pol-sec li{ font-size:15px; line-height:1.65; margin:4px 0; }
   .pol-open{ border-left:3px solid #a3402f; }
+  .job-who{font:inherit; font-size:13px; color:#8a6c39; background:#fbf6ee; border:1px solid #e6dcc9; border-radius:8px;
+    padding:5px 11px; min-height:32px; cursor:pointer; margin:2px 6px 2px 0;}
+  .job-who:hover{border-color:#c9b48c; background:#f6eeE0;}
+  .job-who-quiet{background:#fff; border-color:#e6ded3; color:#5a5349;}
+  .job-who-box:not(:empty){margin-top:8px;}
   /* Batch jobs: a run that affected people stands out. */
   .job-hit{ margin:10px 0; padding:12px 14px; border:1px solid #e6d3a8; border-left:4px solid #a9884f; border-radius:10px; background:#fbf6ea; }
   .job-hit-failed{ border-color:#efcfc6; border-left-color:#a3402f; background:#fbf1ee; }
@@ -394,7 +477,7 @@
      roughly where a submitted address actually pins before approving. -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" integrity="sha256-p4NxAoJBhIIN+hmNHrzRCf9tD/miZyoHS5obTRR9BMY=" crossorigin="" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js" integrity="sha256-20nQCchB9co0qIjJZRGuk2/Z9VM+kNiyxNV1lvTlZBo=" crossorigin=""></script>
-<script src="aerva-policies.js?v=2026-11-11y"></script>
+<script src="aerva-policies.js?v=2026-11-12c"></script>
 </head>
 <body>
 
@@ -484,6 +567,7 @@
         <div class="nav-group-label">Hosts and money</div>
         <div class="tab-row"><button class="tab-btn" id="tabVerificationsBtn" onclick="switchTab('verifications')">ID Verifications<span class="tab-count" data-count="verifications" hidden></span></button><button type="button" class="tab-info" data-info="verifications" aria-label="What ID Verifications is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabPayoutsBtn" onclick="switchTab('payouts')">Payouts<span class="tab-count" data-count="payouts" hidden></span></button><button type="button" class="tab-info" data-info="payouts" aria-label="What Payouts is for">i</button></div>
+        <div class="tab-row"><button class="tab-btn" id="tabMoneyBtn" onclick="switchTab('money')">Transactions</button><button type="button" class="tab-info" data-info="money" aria-label="What Transactions is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabAccountsBtn" onclick="switchTab('accounts')">Accounts</button><button type="button" class="tab-info" data-info="accounts" aria-label="What Accounts is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabDepositsBtn" onclick="switchTab('deposits')">Security Deposits<span class="tab-count" data-count="deposits" hidden></span></button><button type="button" class="tab-info" data-info="deposits" aria-label="What Security Deposits is for">i</button></div>
       </div>
@@ -776,6 +860,21 @@
     <p style="opacity:0.7; font-size:14px;">The 200 most recent paid bookings: the host payout (after Aerva’s commission), each co-host’s share, and what the host keeps, with where each is paid. “Hold” means that person’s bank details are not approved yet.</p>
     <div id="payoutsList"><p style="opacity:0.6;">Loading…</p></div>
   </div>
+  <div id="moneyView" style="display:none;">
+    <h2>Transactions</h2>
+    <p class="mn-lead">Every rupee in and out, newest first, each row with the Razorpay id it is found under there — a guest's payment id for money in, the refund id or the RazorpayX payout id for money out. Nothing on this page changes anything; it only reads. Refunds and payouts are also managed on the Payouts tab.</p>
+    <div class="mn-bar">
+      <label>From <input type="date" id="mnFrom"></label>
+      <label>To <input type="date" id="mnTo"></label>
+      <span class="mn-chips" id="mnWay"></span>
+      <input type="text" id="mnQ" placeholder="Name, email, booking, listing, or any Razorpay id" style="min-width:300px;">
+      <button type="button" class="approve-btn" onclick="loadTransactions()">Show</button>
+      <button type="button" class="approve-btn mn-quiet" onclick="mnDownload()">Download CSV</button>
+    </div>
+    <div class="mn-figs" id="mnFigs"></div>
+    <div id="mnList"><p style="opacity:0.6;">Loading…</p></div>
+    <div id="mnMore" style="margin-top:14px;"></div>
+  </div>
   <div id="trustView" style="display:none;">
       <h3>Feedback from hosts</h3>
       <p style="font-size:13.5px; opacity:0.75; max-width:760px;">Everything sent through “Tell us what needs looking at”. Saved as it arrives, so it is here even if the email did not reach the inbox. Set FEEDBACK_EMAIL in Vercel to have it emailed somewhere you read.</p>
@@ -789,9 +888,20 @@
     <!-- Support: requests raised in the Resolution Center (index.html?view=help). -->
     <div id="supportView" style="display:none;">
       <h2>Support requests</h2>
-      <p style="font-size:13.5px; opacity:0.75; max-width:800px;">Requests guests and hosts raised in the Resolution Center. The person was emailed a reference number at once. Reply to every new request within 48 hours (rows marked <span class="sup-flag sup-late">Overdue</span> have had no reply yet); resolve within one month. Safety requests are listed first. A reply is emailed to the person; an internal note is never shown to them. Decide under Aerva’s Policies, and do not tell the person how the decision was weighed. Fill in the <strong>case record</strong> on each request (the issue as understood, the outcome, how each side behaved) — it is needed before a request can be resolved, and every version is kept. Once resolved, the person is asked to confirm and rate it; with no answer it closes by itself after 48 hours.</p>
-      <div class="tds-bar">
-        <label>Show
+      <p class="sup-lead">Everything guests and hosts raised in the Resolution Center. Reply within 48 hours; resolve within a month.</p>
+      <details class="sup-help"><summary>How a request works</summary>
+        <ul>
+          <li>The person was emailed a reference number the moment they raised it.</li>
+          <li><strong>Overdue</strong> means no reply has gone out yet and 48 hours have passed. Safety requests come first, whatever their age.</li>
+          <li>A reply is emailed to the person. An <strong>internal note</strong> is never shown to them.</li>
+          <li>Decide under Aerva&rsquo;s Policies. Do not tell the person how the decision was weighed.</li>
+          <li>The <strong>case record</strong> (the issue, the outcome, how each side behaved) must be filled in before a request can be resolved. Every version is kept.</li>
+          <li>Once resolved, the person is asked to confirm and rate it. With no answer it closes by itself after 48 hours.</li>
+        </ul>
+      </details>
+      <div id="supChips" class="sup-chips"></div>
+      <div class="tds-bar sup-bar">
+        <label class="sup-sr">Show
           <select id="supStatus" onchange="loadSupport()">
             <option value="active">Needs work (received, being looked at, waiting)</option>
             <option value="open">Received</option>
@@ -805,7 +915,6 @@
         <label>Search <input type="text" id="supQ" placeholder="Reference, subject, name or email" onkeydown="if(event.key==='Enter') loadSupport()"></label>
         <button type="button" class="approve-btn" style="padding:9px 18px;" onclick="loadSupport()">Search</button>
       </div>
-      <p id="supCounts" class="tds-sub" style="font-size:13px;"></p>
       <div id="supList"><p style="opacity:0.6;">Loading…</p></div>
       <div id="supDetail" style="display:none;"></div>
     </div>
@@ -1876,6 +1985,125 @@
     }catch(err){ alert('Could not revert that review.'); }
   }
 
+  // ---- Transactions (get-listings ?transactions=1) ----
+  // One list of every rupee in and out, for matching against Razorpay.
+  // Read-only: refunds and payouts are acted on from the Payouts tab.
+  const mnState = { way: '', rows: [], nextBefore: null, loading: false };
+  const mnInr = (n) => (Number(n) < 0 ? '\u2212' : '') + '₹' + Math.abs(Math.round(Number(n) || 0)).toLocaleString('en-IN');
+  function mnWhen(v){
+    if(!v) return '';
+    const d = new Date(v);
+    return d.toLocaleString('en-IN', { day: 'numeric', month: 'short', year: '2-digit', hour: '2-digit', minute: '2-digit' });
+  }
+  // The id this row is found under in Razorpay. Click one to copy it.
+  function mnIds(r){
+    const line = (label, id) => `<div class="mn-idline"><span>${label}</span><code onclick="mnCopy(this)" title="Copy">${escAdmin(id)}</code></div>`;
+    const out = [];
+    if(r.paymentId) out.push(line('Payment', r.paymentId));
+    if(r.refundId) out.push(line('Refund', r.refundId));
+    if(r.payoutId) out.push(line('Payout', r.payoutId));
+    return out.length ? out.join('') : '<span style="opacity:0.5;">—</span>';
+  }
+  window.mnCopy = function(el){
+    const t = el.textContent;
+    try{ navigator.clipboard.writeText(t); }catch(e){}
+    const was = el.style.background; el.style.background = '#e6f0e6';
+    setTimeout(() => { el.style.background = was; }, 600);
+  };
+  function mnDrawWays(){
+    const box = document.getElementById('mnWay');
+    if(!box) return;
+    box.innerHTML = [['', 'In and out'], ['in', 'Money in'], ['out', 'Money out']]
+      .map(([k, label]) => `<button type="button" class="mn-chip${mnState.way === k ? ' on' : ''}" onclick="mnSetWay('${k}')">${label}</button>`).join('');
+  }
+  window.mnSetWay = function(k){ mnState.way = k; mnDrawWays(); loadTransactions(); };
+
+  function mnQuery(before){
+    const p = new URLSearchParams({ transactions: '1', limit: '200' });
+    const f = (id) => (document.getElementById(id) || {}).value || '';
+    if(f('mnFrom')) p.set('from', f('mnFrom'));
+    if(f('mnTo')) p.set('to', f('mnTo'));
+    if(f('mnQ').trim()) p.set('q', f('mnQ').trim());
+    if(mnState.way) p.set('direction', mnState.way);
+    if(before) p.set('before', before);
+    return p.toString();
+  }
+  async function loadTransactions(before){
+    const box = document.getElementById('mnList');
+    if(!box || mnState.loading) return;
+    mnState.loading = true;
+    mnDrawWays();
+    if(!before) box.innerHTML = '<p style="opacity:0.6;">Loading…</p>';
+    try{
+      const res = await fetch(API_BASE + '/api/get-listings?' + mnQuery(before), { headers: authHeaders() });
+      const d = await res.json();
+      if(!res.ok) throw new Error(d.error || 'Could not load transactions.');
+      mnState.rows = before ? mnState.rows.concat(d.rows || []) : (d.rows || []);
+      mnState.nextBefore = d.more ? d.nextBefore : null;
+      mnFigures(d.totals || {}, d.skipped || []);
+      mnDraw();
+    }catch(e){ box.innerHTML = '<p>' + escAdmin(e.message) + '</p>'; }
+    mnState.loading = false;
+  }
+  window.loadTransactions = loadTransactions;
+
+  function mnFigures(t, skipped){
+    const box = document.getElementById('mnFigs');
+    if(!box) return;
+    const fig = (label, value, hint) => `<div class="mn-fig"><div class="mn-fig-n">${value}</div><div class="mn-fig-l">${label}</div>${hint ? `<div class="mn-fig-h">${hint}</div>` : ''}</div>`;
+    box.innerHTML = fig('Money in', mnInr(t.in), 'guests’ payments')
+      + fig('Refunded to guests', mnInr(t.refunded), '')
+      + fig('Paid out', mnInr(t.paidOut), 'hosts and co-hosts, sent')
+      + fig('Left with Aerva', mnInr(t.net), 'in less out, over this range')
+      + (Number(t.dueOut) ? fig('Still to send', mnInr(t.dueOut), 'payouts decided, not sent yet') : '')
+      + (skipped.length ? `<p class="mn-skip">Not included: ${escAdmin(skipped.join(', '))} — that part of the database could not be read.</p>` : '');
+  }
+
+  function mnDraw(){
+    const box = document.getElementById('mnList');
+    const more = document.getElementById('mnMore');
+    if(!mnState.rows.length){
+      box.innerHTML = '<p style="opacity:0.7;">Nothing in this range.</p>';
+      if(more) more.innerHTML = '';
+      return;
+    }
+    box.innerHTML = `<div class="mn-scroll"><table class="tds-table mn-table">
+      <thead><tr><th>When</th><th>What</th><th>Who</th><th>Booking</th><th class="mn-r">In</th><th class="mn-r">Out</th><th>Razorpay id</th><th>Status</th></tr></thead>
+      <tbody>${mnState.rows.map(r => `
+        <tr class="${r.direction === 'in' ? 'mn-in' : 'mn-out'}">
+          <td class="mn-nowrap">${escAdmin(mnWhen(r.at))}</td>
+          <td><div>${escAdmin(r.what || '')}</div>${r.note ? `<div class="mn-note">${escAdmin(r.note)}</div>` : ''}${r.listing ? `<div class="mn-note">${escAdmin(r.listing)}</div>` : ''}</td>
+          <td><div>${escAdmin(r.who || '—')}</div><div class="mn-note">${escAdmin(r.whoIs || '')}${r.whoEmail ? ' · ' + escAdmin(r.whoEmail) : ''}</div></td>
+          <td>${r.bookingId ? `<button type="button" class="lk-link" onclick="switchTab('lookup'); lkOpen('booking', ${Number(r.bookingId)})">${escAdmin(r.booking || '#' + r.bookingId)}</button>` : '<span style="opacity:0.5;">—</span>'}</td>
+          <td class="mn-r mn-amt">${r.direction === 'in' ? mnInr(r.amount) : ''}</td>
+          <td class="mn-r mn-amt">${r.direction === 'out' ? mnInr(r.amount) : ''}</td>
+          <td class="mn-id">${mnIds(r)}</td>
+          <td class="mn-nowrap">${escAdmin(r.status || '')}</td>
+        </tr>`).join('')}</tbody></table></div>`;
+    if(more) more.innerHTML = mnState.nextBefore
+      ? `<button type="button" class="approve-btn mn-quiet" onclick="loadTransactions('${escAdmin(mnState.nextBefore)}')">Show older</button>
+         <span style="font-size:13px; opacity:0.7; margin-left:8px;">${mnState.rows.length} shown</span>`
+      : `<span style="font-size:13px; opacity:0.7;">${mnState.rows.length} shown — that is everything in this range.</span>`;
+  }
+
+  // What is on screen, as a CSV, for a spreadsheet or the CA.
+  window.mnDownload = function(){
+    if(!mnState.rows.length) return;
+    const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
+    const head = ['When', 'In or out', 'What', 'Who', 'Who they are', 'Email', 'Booking', 'Listing', 'Amount in (INR)', 'Amount out (INR)', 'Razorpay payment id', 'Razorpay refund id', 'RazorpayX payout id', 'Status', 'Note'];
+    const lines = [head.map(cell).join(',')].concat(mnState.rows.map(r => [
+      r.at ? new Date(r.at).toISOString() : '', r.direction === 'in' ? 'In' : 'Out', r.what, r.who, r.whoIs, r.whoEmail,
+      r.booking, r.listing, r.direction === 'in' ? Math.round(r.amount) : '', r.direction === 'out' ? Math.round(r.amount) : '',
+      r.paymentId, r.refundId, r.payoutId, r.status, r.note
+    ].map(cell).join(',')));
+    const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
+    const a = document.createElement('a');
+    a.href = URL.createObjectURL(blob);
+    a.download = 'aerva-transactions-' + new Date().toISOString().slice(0, 10) + '.csv';
+    document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
+  };
+
   // ---- Batch jobs ----
   // Jobs normally run from the 5-minute pinger and the daily cron,
   // authenticated by CRON_SECRET, which can never be put in this page: anyone opening the
@@ -1913,8 +2141,11 @@
             ${j.failures ? ' · ' + Number(j.failures) + ' failure' + (j.failures === 1 ? '' : 's') + ' in ' + Number(j.runs) + ' runs' : ''}
           </div>
           <div style="font-size:13px; margin-top:4px;">
-            ${j.lastImpactCount ? `Last affected <strong>${Number(j.lastImpactCount)} ${Number(j.lastImpactCount) === 1 ? 'person' : 'people'}</strong> (${escAdmin(jobWhen(j.lastImpactAt))})` : '<span style="opacity:0.6;">No one affected recently</span>'}
-            · <a href="#" style="color:#8a6c39;" onclick="toggleJobRuns('${escAdmin(j.name)}', this); return false;">Recent runs</a>
+            ${j.lastImpactCount
+              ? `<button type="button" class="job-who" onclick="showJobHitWho('${escAdmin(j.name)}', this)">Last affected <strong>${Number(j.lastImpactCount)} ${Number(j.lastImpactCount) === 1 ? 'person' : 'people'}</strong> (${escAdmin(jobWhen(j.lastImpactAt))}) \u2014 see who</button>`
+              : '<span style="opacity:0.6;">No one affected recently</span>'}
+            <div id="jobHitWho-${escAdmin(j.name)}" class="job-who-box"></div>
+            <button type="button" class="job-who job-who-quiet" onclick="toggleJobRuns('${escAdmin(j.name)}', this)">Recent runs</button>
           </div>
           <div id="jobRuns-${escAdmin(j.name)}" style="display:none; margin-top:10px;"></div>
         </div>`).join('');
@@ -1957,10 +2188,13 @@
   async function showJobHitWho(job, link){
     const box = document.getElementById('jobHitWho-' + job);
     if(!box) return;
-    if(box.dataset.open === '1'){ box.dataset.open = ''; box.innerHTML = ''; link.textContent = 'See who →'; return; }
-    box.dataset.open = '1'; link.textContent = 'Hide'; box.innerHTML = '<p style="opacity:0.6; font-size:13px;">Loading…</p>';
+    if(box.dataset.open === '1'){ box.dataset.open = ''; box.innerHTML = ''; if(link.dataset.label) link.innerHTML = link.dataset.label; return; }
+    box.dataset.open = '1';
+    if(!link.dataset.label) link.dataset.label = link.innerHTML;
+    link.textContent = 'Hide';
+    box.innerHTML = '<p style="opacity:0.6; font-size:13px;">Loading…</p>';
     try{
-      const res = await fetch(API_BASE + '/api/get-listings?jobRuns=1&job=' + encodeURIComponent(job) + '&limit=1', { headers: authHeaders() });
+      const res = await fetch(API_BASE + '/api/get-listings?jobRuns=1&withPeople=1&job=' + encodeURIComponent(job) + '&limit=1', { headers: authHeaders() });
       const d = await res.json();
       const run = (d.runs || [])[0];
       if(!res.ok || !run || !(run.affected || []).length){ box.innerHTML = '<p style="font-size:13px; opacity:0.7;">No names recorded for this run.</p>'; return; }
@@ -2534,6 +2768,7 @@
     rates: ['Commission Settings', 'Set Aerva’s commission for hosts and service fee for guests, for all property types or one type. Host changes take effect at least 33 days later (31 days’ notice + 2 days for time zones), with an email and dashboard notice to each host (information only); guest changes take effect at once. See every rate, the days to go for a scheduled one, and how long each has been in force. A scheduled change can be withdrawn before it starts.'],
     insights: ['Business Insights', 'What happened under each rate — bookings, booking value, Aerva’s fees, new guests and listings, cancellations, ratings and hosts who declined — per day and compared with the rate before; the last 12 months; ratings by part of the stay; support satisfaction; and the latest reviews and feedback. Real bookings only.'],
     accounts: ['Accounts', 'Each month in the shape your CA books it: Aerva’s income (commission and guest service fee only), money received, refunded and paid out, GST on stays and TDS payable, and what Aerva still holds for hosts and guests at month end. Three CSVs for Tally or Zoho Books. Razorpay’s charges come from Razorpay’s own settlement report.'],
+    money: ['Transactions', 'Every rupee in and out — guest payments (one row per payment, even when it paid for several bookings), group payments, extra payments when a booking grew, refunds, and payouts to hosts and co-hosts. Each row carries the Razorpay id it is found under, so this list can be matched against the Razorpay dashboard line by line. Filter by date, by in or out, or search any name, email, booking code or Razorpay id, and download what you see as a CSV.'],
     payouts: ['Payouts', 'What each host and co-host is owed per booking, and Mark paid for payouts sent by hand. Also: refunds that need a retry, deposit compensation, cancellation coupons owed by hosts, co-host payout details to review, and the TDS report.'],
     deposits: ['Security Deposits', 'Deposits are refunded automatically every 15 minutes once the 24 hours to report damage (after check-out) have ended; the button runs that now. Below: damage claims hosts raised. Set the host’s share; the rest goes back to the guest, and both are emailed.'],
     support: ['Support', 'Requests from the Resolution Center. Reply within 48 hours; safety requests are listed first. Keep the case record (issue as understood, outcome, how each side behaved) — a request cannot be resolved without it, and every version is kept. Once resolved, the person confirms and rates it, or it reopens; with no answer it closes by itself after 48 hours.'],
@@ -2670,6 +2905,10 @@
     document.getElementById('trafficView').style.display = tab === 'traffic' ? 'block' : 'none';
     document.getElementById('payoutsView').style.display = tab === 'payouts' ? 'block' : 'none';
     if(tab === 'payouts') loadPayouts();
+    document.getElementById('tabMoneyBtn').classList.toggle('active', tab === 'money');
+    { const mv = document.getElementById('mainView'); if(mv) mv.classList.toggle('wide', tab === 'money'); }
+    document.getElementById('moneyView').style.display = tab === 'money' ? 'block' : 'none';
+    if(tab === 'money') loadTransactions();
     document.getElementById('auditView').style.display = tab === 'audit' ? 'block' : 'none';
     document.getElementById('policiesAdminView').style.display = tab === 'policies' ? 'block' : 'none';
     if(tab === 'audit' && !auditRows.length) loadAudit(true);
@@ -2952,6 +3191,32 @@
   const supDate = (v) => v ? new Date(v).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '';
   // The server's labels are worded for the person ("Waiting for your reply" = theirs);
   // here that status means the team is waiting for the person.
+  // "2 d", "5 h", "just now" — the exact times are in the row's tooltip.
+  function supAgo(v){
+    if(!v) return '';
+    const ms = Date.now() - new Date(v).getTime();
+    if(!(ms >= 0)) return '';
+    const m = Math.floor(ms / 60000);
+    if(m < 1) return 'just now';
+    if(m < 60) return m + ' min';
+    const h = Math.floor(m / 60);
+    if(h < 48) return h + ' h';
+    return Math.floor(h / 24) + ' d';
+  }
+  // The counts as buttons: one tap to see that pile. The one being shown is marked.
+  function supDrawChips(c, labels, current){
+    const box = document.getElementById('supChips');
+    if(!box) return;
+    const order = [['active', 'Needs work'], ['open', labels.open || 'Received'], ['in_progress', labels.in_progress || 'Being looked at'],
+                   ['waiting_on_you', 'Waiting for the person'], ['resolved', labels.resolved || 'Resolved'], ['closed', labels.closed || 'Closed'], ['all', 'All']];
+    const active = (Number(c.open) || 0) + (Number(c.in_progress) || 0) + (Number(c.waiting_on_you) || 0);
+    const n = (k) => k === 'all' ? Object.keys(c).reduce((t, x) => t + (Number(c[x]) || 0), 0) : k === 'active' ? active : (Number(c[k]) || 0);
+    box.innerHTML = order.map(([k, label]) =>
+      `<button type="button" class="sup-chip${k === current ? ' is-on' : ''}${k === 'active' && n(k) ? ' is-due' : ''}" onclick="supShow('${k}')">`
+      + escAdmin(label) + '<span>' + n(k) + '</span></button>').join('');
+  }
+  function supShow(k){ const sel = document.getElementById('supStatus'); if(sel) sel.value = k; loadSupport(); }
+
   function supStatusLabels(d){ return Object.assign({}, (d && d.statuses) || {}, { waiting_on_you: 'Waiting for the person' }); }
   async function loadSupport(silent){
     const list = document.getElementById('supList');
@@ -2966,20 +3231,34 @@
       const res = await fetch(API_BASE + '/api/get-pending-listings?supportTickets=1&status=' + encodeURIComponent(status) + '&q=' + encodeURIComponent(q), { headers: authHeaders() });
       const d = await res.json();
       if(!res.ok){ list.innerHTML = '<p class="error">' + escAdmin(d.error || 'Could not load.') + '</p>'; return; }
-      if(!d.ready){ list.innerHTML = '<p style="opacity:0.75;">Support requests are not switched on yet. Run <code>migration_support.sql</code> in Neon.</p>'; document.getElementById('supCounts').textContent = ''; return; }
+      if(!d.ready){ list.innerHTML = '<p style="opacity:0.75;">Support requests are not switched on yet. Run <code>migration_support.sql</code> in Neon.</p>'; document.getElementById('supChips').innerHTML = ''; return; }
       const c = d.counts || {}, labels = supStatusLabels(d);
-      document.getElementById('supCounts').textContent = Object.keys(labels).map(k => labels[k] + ': ' + (c[k] || 0)).join(' · ');
+      supDrawChips(c, labels, status);
       if(!d.tickets.length){ list.innerHTML = '<p style="opacity:0.7;">No requests here.</p>'; return; }
-      list.innerHTML = '<table class="tds-table"><thead><tr><th>Reference</th><th>Subject</th><th>From</th><th>Status</th><th>Raised</th><th>Last activity</th></tr></thead><tbody>'
-        + d.tickets.map(t => `<tr class="sup-row" onclick="openSupport(${Number(t.id)})">
-            <td><strong>${escAdmin(t.ref)}</strong><div class="tds-sub">${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}</div></td>
-            <td style="white-space:normal; min-width:220px;">${t.signed_out && t.status !== 'resolved' && t.status !== 'closed' ? '<span class="sup-flag sup-late">Account access</span>' : ''}${t.category === 'safety' ? '<span class="sup-flag sup-safety">Safety</span>' : ''}${escAdmin(t.subject)}
-              <div>${t.urgent && t.status !== 'resolved' && t.status !== 'closed' ? '<span class="sup-flag sup-late">Action needed now</span>' : ''}${t.overdue ? '<span class="sup-flag sup-late">Overdue</span>' : ''}${t.awaiting_us ? '<span class="sup-flag sup-us">Awaiting our reply</span>' : ''}${t.channel === 'chat' ? '<span class="sup-flag sup-wa">Chat</span>' : ''}${t.callback_phone ? '<span class="sup-flag sup-late">Call back: ' + escAdmin(t.callback_phone) + '</span>' : ''}${t.feedback_rating ? '<span class="sup-flag" style="background:#e9f2ea; color:#2f6b3a;">' + '★'.repeat(Number(t.feedback_rating)) + '</span>' : ''}${t.auto_closed ? '<span class="sup-flag">No feedback</span>' : ''}${t.order_id ? '<span class="sup-flag">Booking #' + Number(t.order_id) + '</span>' : ''}${t.listing_id ? '<span class="sup-flag">Listing #' + Number(t.listing_id) + '</span>' : ''}</div></td>
-            <td>${t.signed_out ? 'Can’t sign in<div class="tds-sub">' + escAdmin(t.contact_email || '') + (t.account_email && t.account_email !== t.contact_email ? '<br>account: ' + escAdmin(t.account_email) : '') + '</div>' : escAdmin(t.person_name || '—') + '<div class="tds-sub">' + escAdmin(t.person_email || '') + '</div>'}</td>
-            <td>${escAdmin((labels[t.status]) || t.status)}</td>
-            <td>${escAdmin(supDate(t.created_at))}</td>
-            <td>${escAdmin(supDate(t.updated_at))}</td>
-          </tr>`).join('') + '</tbody></table>';
+      list.innerHTML = '<table class="tds-table sup-table"><thead><tr><th>Request</th><th>From</th><th>Status</th><th class="sup-num">Age</th></tr></thead><tbody>'
+        + d.tickets.map(t => {
+            const live = t.status !== 'resolved' && t.status !== 'closed';
+            const flags = [
+              t.category === 'safety' ? '<span class="sup-flag sup-safety">Safety</span>' : '',
+              live && t.urgent ? '<span class="sup-flag sup-late">Now</span>' : '',
+              live && t.overdue ? '<span class="sup-flag sup-late">Overdue</span>' : '',
+              live && t.signed_out ? '<span class="sup-flag sup-late">Account access</span>' : '',
+              live && t.awaiting_us ? '<span class="sup-flag sup-due">Awaiting our reply</span>' : '',
+              t.channel === 'chat' ? '<span class="sup-flag sup-wa">Chat</span>' : '',
+              t.booking_id ? '<span class="sup-flag">Booking #' + Number(t.booking_id) + '</span>' : ''
+            ].filter(Boolean).join('');
+            return `<tr class="sup-row${live && (t.overdue || t.urgent || t.category === 'safety') ? ' is-hot' : ''}" onclick="openSupport(${Number(t.id)})">
+            <td class="sup-main">
+              <div class="sup-subject">${escAdmin(t.subject || '(no subject)')}</div>
+              <div class="tds-sub"><strong>${escAdmin(t.ref)}</strong> · ${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}</div>
+              ${flags ? '<div class="sup-flags">' + flags + '</div>' : ''}
+            </td>
+            <td>${t.signed_out
+              ? 'Can\u2019t sign in<div class="tds-sub">' + escAdmin(t.contact_email || '') + (t.account_email && t.account_email !== t.contact_email ? '<br>account: ' + escAdmin(t.account_email) : '') + '</div>'
+              : escAdmin(t.person_name || 'Deleted account') + '<div class="tds-sub">' + escAdmin(t.person_email || '') + '</div>'}</td>
+            <td><span class="sup-state sup-state-${escAdmin(t.status)}">${escAdmin((labels[t.status]) || t.status)}</span></td>
+            <td class="sup-num" title="Raised ${escAdmin(supDate(t.created_at))} \u00b7 last activity ${escAdmin(supDate(t.updated_at))}">${escAdmin(supAgo(t.created_at))}<div class="tds-sub">active ${escAdmin(supAgo(t.updated_at))} ago</div></td>
+          </tr>`; }).join('') + '</tbody></table>';
     }catch(e){ list.innerHTML = '<p class="error">Could not load requests.</p>'; }
   }
   async function openSupport(id){
@@ -4713,15 +4992,32 @@ async function saveRole(id){
 // ---- "Propose an action" (Support requests and Lookup pages) ----
 // ctx: { ticketId, orderId, guestId, listingId, booking: { status, deposit, depositStatus, refundable, payout, fee } }
 const KIND_LABEL = { cancel_refund: 'Cancel the booking with a refund', partial_refund: 'Refund without cancelling', deposit_refund: 'Refund the security deposit',
-  report_guest: 'Report the guest', report_host: 'Report the host', block_guest_listing: 'Block the guest from this listing' };
+  report_guest: 'Report the guest', report_host: 'Report the host', block_guest_listing: 'Block the guest from this listing',
+  decline: 'Turn the request down (nothing is paid or changed)' };
+// Turning a request down: the ground goes on the case record, and picking
+// one fills in what the person is told, to be edited to the case
+// (owner, 12 Nov 2026 — "it can be no changes can be done per the policy").
+const DECLINE_GROUNDS = [
+  ['policy', 'The booking’s policy does not allow it', 'We have looked at this carefully. The booking’s refund policy does not allow a change here, so the booking stands as it is. The policy is on the booking page under “Refund policy”.'],
+  ['too_late', 'Asked for after the time allowed', 'We have looked at this carefully. This was asked for after the time allowed for it on this booking, so we are not able to make the change.'],
+  ['host_decided', 'The host’s decision stands', 'We have looked at this carefully. This is the host’s decision to make on their own booking, and their answer stands, so nothing changes here.'],
+  ['nothing_wrong', 'Nothing was found to be wrong', 'We have checked this and found the stay matched the listing, so there is nothing to put right and nothing to refund.'],
+  ['not_aerva', 'Not something Aerva decides', 'We have looked at this carefully. This is not something Aerva decides, so we are not able to change anything here.'],
+  ['already_settled', 'Already settled on an earlier request', 'We have looked at this again. It was settled on your earlier request, and that decision stands, so nothing changes.'],
+  ['no_evidence', 'Not enough to go on', 'We have looked at everything sent to us. There is not enough here for us to make a change, so the booking stands as it is. If you have anything further, send it and we will look again.'],
+  ['other', 'Something else (write it out in full)', '']
+];
 function mountPropose(el, ctx){
   if(!el) return;
   const b = ctx.booking || {};
-  const kinds = ctx.orderId
+  const kinds = (ctx.orderId
     ? ['cancel_refund', 'partial_refund', 'deposit_refund', 'report_guest', 'report_host', 'block_guest_listing']
         .filter(k => k !== 'cancel_refund' || b.status === 'paid').filter(k => k !== 'deposit_refund' || ['held', 'disputed'].includes(b.depositStatus))
         .filter(k => k !== 'partial_refund' || Number(b.refundable) > 0)
-    : ctx.guestId ? ['report_guest', 'block_guest_listing'] : ctx.listingId ? ['report_host', 'block_guest_listing'] : [];
+    : ctx.guestId ? ['report_guest', 'block_guest_listing'] : ctx.listingId ? ['report_host', 'block_guest_listing'] : [])
+    // Turning the request down is an outcome too, and it goes through the
+    // same approval (owner, 12 Nov 2026). Only from a request.
+    .concat(ctx.ticketId ? ['decline'] : []);
   if(!kinds.length){ el.innerHTML = ''; return; }
   const id = 'pp' + Math.random().toString(36).slice(2, 8);
   el.innerHTML = `<div class="lk-actions pp-box"><h3>Propose an action</h3>
@@ -4737,12 +5033,27 @@ function mountPropose(el, ctx){
       <span class="pp-f" data-for="deposit_refund"><label>Back to the guest (₹, of ${lkInr(b.deposit || 0)} deposit; the rest goes to the host)<input type="number" id="${id}dep" min="0" max="${Number(b.deposit) || 0}" value="${Number(b.deposit) || 0}"></label></span>
       ${!ctx.guestId && !ctx.orderId ? `<span class="pp-f" data-for="block_guest_listing"><label>Guest's email<input type="email" id="${id}ge" placeholder="guest@example.com"></label></span>` : ''}
       ${!ctx.listingId && !ctx.orderId ? `<span class="pp-f" data-for="block_guest_listing"><label>Listing ID<input type="number" id="${id}li" min="1"></label></span>` : ''}
+      <span class="pp-f" data-for="decline"><label>Why it is turned down (goes on the case record)<select id="${id}dg">${DECLINE_GROUNDS.map(([k, label]) => `<option value="${k}">${lkEsc(label)}</option>`).join('')}</select></label></span>
+      <label class="lk-wide pp-f" data-for="decline">What the person is told (they see this word for word — edit it to the case)<textarea id="${id}dm" maxlength="1500" placeholder="For example: we checked with the host and the room matched the listing, so there is nothing to refund here."></textarea></label>
+      <span class="pp-f" data-for="decline"><label>How the person behaved (for the case record)<select id="${id}dc"><option value="neutral">Neutral</option><option value="cooperative">Cooperative</option><option value="difficult">Difficult</option><option value="abusive">Abusive or threatening</option><option value="not_involved">Not involved</option></select></label></span>
       <label class="lk-wide">Reason — what you found and why this is right (the reviewer decides on it)<textarea id="${id}r" maxlength="1500"></textarea></label>
       <button type="button" class="lk-btn" id="${id}go">Send for approval</button>
     </div><p class="lk-msg" id="${id}m"></p></div>`;
   const sel = document.getElementById(id + 'k');
   const show = () => el.querySelectorAll('.pp-f').forEach(f => { f.style.display = f.dataset.for === sel.value && !(f.id === id + 'fwWrap' && !document.getElementById(id + 'fee').checked) ? '' : 'none'; });
   sel.addEventListener('change', show); show();
+  // Picking a ground writes a first draft of what the person is told; it is
+  // only ever a draft — the box is edited before it is sent.
+  {
+    const g = document.getElementById(id + 'dg'), dm = document.getElementById(id + 'dm');
+    if(g && dm) g.addEventListener('change', () => {
+      const row = DECLINE_GROUNDS.find(x => x[0] === g.value);
+      const draft = row ? row[2] : '';
+      if(!draft) return;
+      const old = DECLINE_GROUNDS.find(x => x[2] && x[2] === dm.value.trim());
+      if(!dm.value.trim() || old) dm.value = draft;   // never overwrite the agent's own words
+    });
+  }
   document.getElementById(id + 'go').addEventListener('click', async () => {
     const m = document.getElementById(id + 'm'); m.className = 'lk-msg'; m.textContent = '';
     const kind = sel.value, v = (x) => { const e = document.getElementById(id + x); return e ? e.value.trim() : ''; }, c = (x) => { const e = document.getElementById(id + x); return !!(e && e.checked); };
@@ -4751,6 +5062,12 @@ function mountPropose(el, ctx){
     if(kind === 'partial_refund') Object.assign(params, { amount: Number(v('amt')), hostPays: c('hp') });
     if(kind === 'deposit_refund') Object.assign(params, { amount: v('dep') === '' ? null : Number(v('dep')) });
     if(kind === 'block_guest_listing' && v('ge')) params.guestEmail = v('ge');
+    if(kind === 'decline'){
+      if(v('dm').length < 20){ m.className = 'lk-msg is-err'; m.textContent = 'Write what the person will be told, in a sentence or two.'; return; }
+      params.message = v('dm');
+      params.conduct = v('dc') || 'neutral';
+      params.ground = v('dg') || 'other';
+    }
     if(v('r').length < 10){ m.className = 'lk-msg is-err'; m.textContent = 'Explain the reason in a sentence or two.'; return; }
     const btn = document.getElementById(id + 'go'); btn.disabled = true; btn.textContent = 'Sending…';
     try{

@@ -1013,7 +1013,25 @@ module.exports = async (req, res) => {
   if (req.method === 'GET' && req.query.jobRuns === '1') {
     if (!(await isAdminAuthorized(req))) return res.status(401).json({ error: 'Unauthorized' });
     const job = typeof req.query.job === 'string' && JOBS.some(j => j.name === req.query.job) ? req.query.job : null;
-    return res.status(200).json({ runs: await jobRuns(sql, { job, limit: req.query.limit }) });
+    return res.status(200).json({ runs: await jobRuns(sql, { job, limit: req.query.limit, withPeople: req.query.withPeople === '1' }) });
+  }
+  // GET ?transactions=1 (admin): every rupee in and out, newest first, with
+  // the Razorpay id each row would be found under (_money-ledger.js).
+  // &from, &to (dates), &before (page back in time), &direction=in|out,
+  // &q (email, name, booking code, listing, any Razorpay id), &limit.
+  if (req.method === 'GET' && req.query.transactions === '1') {
+    if (!(await isAdminAuthorized(req))) return res.status(401).json({ error: 'Unauthorized' });
+    const day = (v) => (typeof v === 'string' && /^\d{4}-\d{2}-\d{2}$/.test(v) ? v : null);
+    const to = day(req.query.to);
+    return res.status(200).json(await require('./_money-ledger').ledger(sql, {
+      from: day(req.query.from),
+      // 'to' is the last day the owner wants included, so look at the day after.
+      to: to ? new Date(Date.parse(to + 'T00:00:00Z') + 864e5).toISOString().slice(0, 10) : null,
+      before: typeof req.query.before === 'string' ? req.query.before : null,
+      direction: req.query.direction,
+      q: req.query.q,
+      limit: req.query.limit
+    }));
   }
   // GET ?jobStatus=1 (admin): every job, its schedule and how its last run went.
   // GET ?runJob=<name> (admin): run one job now (for when something went wrong).

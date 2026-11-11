@@ -112,6 +112,33 @@ function mediaTypeOf(declared, bytes) {
   if (b.length > 12 && b.slice(0, 4).toString() === 'RIFF' && b.slice(8, 12).toString() === 'WEBP') return 'image/webp';
   return null;
 }
+// "Concerns" the reader lists that are really all-clears ("No editing seen",
+// "Fonts look standard") are not concerns. A single string counts as a list of one.
+const ALL_CLEAR = /^\s*(no|none|nothing|n\/a)\b[^;,.:]*[.]?\s*$|^[^;,:]*\b(looks?|appears?|seems?|is|are) (standard|genuine|normal|authentic|consistent|fine|ok|okay|original|unaltered|legitimate)\b[^;,:]*(,\s*no (issues?|concerns?|problems?)[^;,:]*)?$/i;
+const SERIOUS = /edit|overlay|font|specimen|sample|template|mock|draw|screen|tamper|fake|forg|more than one|another card|altered|pasted|cut off/i;
+function seriousConcerns(concerns) {
+  const list = Array.isArray(concerns) ? concerns : (typeof concerns === 'string' && concerns.trim() ? [concerns] : []);
+  return list.map(c => String(c || '')).filter(c => SERIOUS.test(c) && !ALL_CLEAR.test(c));
+}
+// "Driving License", "Voter ID" → driving_licence, voter_id.
+function docTypeKey(t) {
+  const k = String(t || '').trim().toLowerCase().replace(/[^a-z]+/g, '_').replace(/^_+|_+$/g, '');
+  return ({ driving_license: 'driving_licence', driver_licence: 'driving_licence', driver_license: 'driving_licence', drivers_license: 'driving_licence', drivers_licence: 'driving_licence',
+    voter: 'voter_id', voter_card: 'voter_id', epic: 'voter_id', aadhar: 'aadhaar', aadhaar_card: 'aadhaar', adhaar: 'aadhaar', pan_card: 'pan' })[k] || k;
+}
+// The last 4 of an ID number must show at least one digit ("XXXX" is a mask, not a number).
+const realLast4 = (l4) => /^[A-Z0-9]{4}$/.test(String(l4 || '')) && /\d/.test(String(l4));
+// A printed date of birth that can be a real person's: a real calendar day, not in the future, not over 120 years ago.
+function plausibleBirth(dob, todayStr) {
+  const t = String(dob || '').trim(); const ty = Number(String(todayStr).slice(0, 4));
+  let m;
+  if ((m = t.match(/^(\d{4})$/))) return +m[1] <= ty && +m[1] >= ty - 120;
+  if (!(m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/))) return false;
+  const d = new Date(Date.UTC(+m[1], +m[2] - 1, +m[3]));
+  if (d.getUTCFullYear() !== +m[1] || d.getUTCMonth() !== +m[2] - 1 || d.getUTCDate() !== +m[3]) return false;
+  return t <= todayStr && +m[1] >= ty - 120;
+}
+
 function decodeFiles(files) {
   const list = (Array.isArray(files) ? files : []).slice(0, MAX_FILES + 1);
   if (!list.length) throw userError('Add a photo of your ID.');
@@ -200,8 +227,9 @@ function judgeDocument(read, input) {
   if (r.readable === false) return reason('unreadable');
   if (r.looks_genuine !== true) return reason('not_genuine');
   if (r.has_holder_photo === false) return reason('no_photo');
+  if (seriousConcerns(r.concerns).length) return reason('concerns');
   const want = input.docType;
-  const got = String(r.document_type || '');
+  const got = docTypeKey(r.document_type);
   if (got !== want) return reason('wrong_type:' + got);
   const country = String(r.issuing_country || '').toUpperCase().slice(0, 2);
   const def = DOC_TYPES.find(d => d.key === want);
@@ -210,8 +238,14 @@ function judgeDocument(read, input) {
   if (r.expiry_date && /^\d{4}-\d{2}-\d{2}$/.test(String(r.expiry_date)) && String(r.expiry_date) < today()) return reason('expired');
   if (!namesMatch(input.name, r.full_name)) return reason('name');
   if (!sameBirthDate(input.dob, r.date_of_birth)) return reason('dob');
+  // 18 or over (Terms): worked out from the date the person typed, which the ID has just confirmed.
+  const born = parseDate(input.dob), now = parseDate(today());
+  if (born && now && born.m) {
+    const age = now.y - born.y - ((now.m < born.m || (now.m === born.m && now.d < born.d)) ? 1 : 0);
+    if (age < 18) return reason('under_18');
+  }
   const l4 = last4Of(r.id_number);
-  if (l4.length !== 4 || l4 !== last4Of(input.last4)) return reason('number');
+  if (!realLast4(l4) || l4 !== last4Of(input.last4)) return reason('number');
   return { ok: true, country: country || null };
 }
 
@@ -431,6 +465,7 @@ async function verifyDocument(sql, logAudit, guestId, body) {
   await logAttempt(sql, logAudit, guestId, verdict.ok, { method: 'document', docType: input.docType, reason: verdict.reason || null });
   if (!verdict.ok) {
     if (verdict.reason === 'expired') throw userError('This ID has expired. Use an ID that is still valid.');
+    if (verdict.reason === 'under_18') throw userError('You must be 18 or over to use Aerva.');
     if (verdict.reason && verdict.reason.startsWith('wrong_type')) {
       const def = DOC_TYPES.find(d => d.key === input.docType);
       throw userError('This does not look like ' + (def ? 'a ' + def.label : 'the ID you chose') + '. Choose the right type of ID, or add a clearer photo.');
@@ -508,5 +543,5 @@ module.exports = {
   // shared with _pan-verify.js and _guest-verify.js
   decodeFiles, fetchWithTimeout, userError, readDocument,
   // for tests
-  namesMatch, sameBirthDate, judgeDocument, aadhaarHash, last4Of
+  namesMatch, sameBirthDate, judgeDocument, aadhaarHash, last4Of, seriousConcerns, docTypeKey, realLast4, plausibleBirth
 };

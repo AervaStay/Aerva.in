@@ -136,6 +136,8 @@ function personBankMatch(payoutName, bankName, pan) {
   let firstFound = false;
   for (const h of [bankName].concat(holderNames(bankName))) {
     const t = nameTokens(h);
+    // Some banks return the name run together ("RAVIKUMAR"): the same letters in the same or the other order.
+    if (t.length === 1 && t[0].length >= 6 && (t[0] === want.join('') || t[0] === want.slice().reverse().join(''))) return { result: 'match', score: 100, holder: h };
     if (t.length < 2) continue;
     const surnameOk = (w) => w.length === 1 ? w === last[0] : w === last;
     let bankLast = null;

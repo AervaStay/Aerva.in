@@ -42,7 +42,7 @@
 
 const { helpLine } = require('./_help-link');
 const crypto = require('crypto');
-const { safeRefund, refundAcrossPayments, hasChangePayments } = require('./_refunds');
+const { safeRefund, refundAcrossPayments, hasChangePayments, groupPaymentsOf } = require('./_refunds');
 const { refundSubunitForInr } = require('./_currency');
 const { logAudit } = require('./_audit-log');
 const { paidByOrderRow, dateStr, daysBeforeCheckIn } = require('./_booking-rules');
@@ -61,7 +61,7 @@ const HOST_DECISION_TIMEOUT_HOURS = 24;
 // deposit on a free cancellation (quote, refund and emails follow).
 const FREE_CANCEL_REFUNDS_SERVICE_FEE = false;
 const HOST_CANCELLATIONS_PER_YEAR = 3;
-const GROUP_NO_REFUND_SUMMARY = 'Non-refundable group booking: if plans change, nothing is refunded, whatever the listing’s policy (any deposit is refunded to each payer). A natural disaster or government order approved by Aerva, or a cancellation by the host, gives each payer their own share as Aerva credit; Aerva’s check-in promise refunds each payer in full.';
+const GROUP_NO_REFUND_SUMMARY = 'Non-refundable group booking: if plans change, nothing is refunded, whatever the listing’s policy (any deposit is refunded to the organiser, who paid it). A natural disaster or government order approved by Aerva, or a cancellation by the host, gives each payer their own share as Aerva credit; Aerva’s check-in promise refunds each payer in full.';
 
 const TRANSFERRED_NO_CANCEL = 'This booking was transferred, so it cannot be cancelled — as agreed when the transfer was confirmed. If something is not working, raise a request in the Resolution Center (Help → Raise a request); Aerva will look at it and decide.';
 function policyKey(p) { return p === 'firm' ? 'firm' : 'flexible'; }
@@ -390,7 +390,7 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   catch (err) { throw Object.assign(new Error('Cancellations are being set up. Please try again later, or raise a request in the Resolution Center (Help → Raise a request).'), { isUserFacing: true, status: 503 }); }
 
   const reason = by === 'group_no_refund'
-    ? 'Cancelled by the organiser — a group booking is non-refundable: no refund of the price, GST or service fee (any deposit is refunded to each payer); the host is paid as for a normal stay'
+    ? 'Cancelled by the organiser — a group booking is non-refundable: no refund of the price, GST or service fee (any deposit is refunded to the organiser, who paid it); the host is paid as for a normal stay'
     : by === 'free_cancel'
     ? `Cancelled by the guest with free cancellation — booking price, GST and any deposit refunded in full; ${FREE_CANCEL_REFUNDS_SERVICE_FEE ? 'the add-on is' : 'the add-on and Aerva’s service fee are'} not refunded`
     : by === 'admin'
@@ -499,7 +499,23 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
         // One refund per booking, ever (_refunds.js: unique per booking and purpose).
         // A booking changed with an extra payment is refunded across all its payments.
         let refund;
-        if (await hasChangePayments(sql, r.id)) {
+        const groupList = s.refundCash > 0 ? await groupPaymentsOf(sql, r.id) : null;
+        if (groupList && groupList.length) {
+          // A group booking. The security deposit is the organiser's alone
+          // (owner, 12 Nov 2026), so it goes back to the payment that
+          // carried it; anything else is split over everyone's payments in
+          // proportion, the way it was collected.
+          const depPart = Math.min(Math.max(0, Number(s.deposit) || 0), s.refundCash);
+          let firstId = null;
+          if (depPart > 0) {
+            firstId = (await refundAcrossPayments(sql, razorpay, { orderId: r.id, amountInr: depPart, kindBase: 'deposit', depositOnly: true })).firstRefundId;
+          }
+          if (s.refundCash - depPart > 0) {
+            const rest = (await refundAcrossPayments(sql, razorpay, { orderId: r.id, amountInr: s.refundCash - depPart, kindBase: 'cancellation' })).firstRefundId;
+            if (!firstId) firstId = rest;
+          }
+          refund = { id: firstId };
+        } else if (await hasChangePayments(sql, r.id)) {
           refund = { id: (await refundAcrossPayments(sql, razorpay, { orderId: r.id, amountInr: s.refundCash, kindBase: 'cancellation' })).firstRefundId };
         } else {
           // Foreign currency: the same share of what was captured, never today's rate.
@@ -615,16 +631,36 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
     `<div style="font-family:sans-serif; max-width:480px;"><h2 style="font-family:Georgia,serif;">A booking was cancelled</h2>
       <p><strong>${escH(main.suite_name)}</strong> (${escH(when)}) — the dates are open again.</p>
       ${hostShare > 0 ? `<p>Your payout for this booking: <strong>${inr(hostShare)}</strong>, on the usual payout day.</p>` : ''}</div>`);
-  if (by === 'group_no_refund') {
-    await postThreadMessage(sql, main.id, 'system', `The organiser cancelled this group booking. It is non-refundable: nothing is refunded for the stay${refundCash > 0 ? ` (the deposit, ${inr(refundCash)}, goes back to the payers)` : ''}. The host is paid as for a normal stay.`);
-  } else if (disaster) {
-    await postThreadMessage(sql, main.id, 'system', `Natural disaster: Aerva approved the cancellation. What the ${groupBooking ? 'payers' : 'guest'} paid (${inr(heldAsCredit)}) is held as Aerva credit${groupBooking ? ', each payer’s own share in their own account' : ' for the guest'} (new dates, or a refund to their original payment at any time)${couponBack > 0 ? `, plus ${inr(couponBack)} back as a coupon` : ''}${refundCash > 0 ? `; the deposit (${inr(refundCash)}) is refunded to their payment` : ''}. There is no payout for this booking. Aerva’s decision is final.`);
-  } else await postThreadMessage(sql, main.id, (by === 'admin' || by === 'aerva_emergency' || by === 'free_cancel' || by === 'group_no_refund' || disaster) ? 'system' : 'host', `${by === 'admin' ? 'Aerva cancelled this booking' : (by === 'aerva_emergency' || disaster) ? 'Cancellation approved by Aerva' : by === 'free_cancel' ? 'Cancelled with free cancellation (no host answer needed)' : 'Cancellation confirmed'}. Refund to the guest: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}${creditBack > 0 ? ` plus ${inr(creditBack)} back on their Aerva credit` : ''}.`);
+  // The thread is read by both sides, so what each side is owed is written
+  // to that side alone (owner, 12 Nov 2026): the host reads what it means
+  // for their payout and never the guest's refund, and the guest reads
+  // their own refund and never the host's payout.
+  {
+    const opened = 'The dates are open again.';
+    const payoutLine = hostShare > 0 ? `Your payout for this booking: ${inr(hostShare)}, on the usual payout day.` : 'There is no payout for this booking.';
+    const headline = by === 'admin' ? 'Aerva cancelled this booking'
+      : (by === 'aerva_emergency' || disaster) ? 'Cancellation approved by Aerva'
+      : by === 'free_cancel' ? 'Cancelled with free cancellation (no host answer needed)'
+      : by === 'group_no_refund' ? 'The organiser cancelled this group booking'
+      : 'Cancellation confirmed';
+    const sender = (by === 'admin' || by === 'aerva_emergency' || by === 'free_cancel' || by === 'group_no_refund' || disaster) ? 'system' : 'host';
+    // What the host is told: the dates and their own money, nothing else.
+    await postThreadMessage(sql, main.id, sender, by === 'group_no_refund'
+      ? `${headline}. It is non-refundable, so you are paid as for a normal stay. ${opened}`
+      : disaster ? `Natural disaster: Aerva approved the cancellation. There is no payout for this booking. Aerva’s decision is final. ${opened}`
+      : `${headline}. ${payoutLine} ${opened}`, { audience: 'host' });
+    // What the guest is told: their own money, and nothing about the payout.
+    await postThreadMessage(sql, main.id, 'system', by === 'group_no_refund'
+      ? `${headline}. It is non-refundable: nothing is refunded for the stay${refundCash > 0 ? `. The deposit (${inr(refundCash)}) goes back to the payments it came from` : ''}.`
+      : disaster
+        ? `Natural disaster: Aerva approved the cancellation. What ${groupBooking ? 'the payers' : 'you'} paid (${inr(heldAsCredit)}) is held as Aerva credit${groupBooking ? ', each payer’s own share in their own account' : ''} — use it for new dates, or have it refunded to the original payment at any time${couponBack > 0 ? `, plus ${inr(couponBack)} back as a coupon` : ''}${refundCash > 0 ? `; the deposit (${inr(refundCash)}) is refunded to the payment it came from` : ''}. Aerva’s decision is final.`
+        : `${headline}. Refund: ${inr(refundCash)}${couponBack > 0 ? ` plus ${inr(couponBack)} as a coupon` : ''}${creditBack > 0 ? ` plus ${inr(creditBack)} back on Aerva credit` : ''}.`, { audience: 'guest' });
+  }
   // Everyone in a group is told what happens to their own share.
   if (groupBooking) {
     const G = require('./_group-bookings');
     await G.tellMembersAfterCancel(sql, main.id, by === 'group_no_refund'
-      ? 'The organiser cancelled the group booking. It is non-refundable, so nothing is refunded for the stay; any deposit goes back to each payer’s own payment.'
+      ? 'The organiser cancelled the group booking. It is non-refundable, so nothing is refunded for the stay; any deposit goes back to the organiser’s own payment.'
       : disaster ? 'Aerva approved the cancellation (natural disaster or government order). Your own share is held as Aerva credit in your account — use it for new dates, or refund it to your own payment any time from My Bookings. Any deposit goes back to your payment.'
       : asCredit ? 'The booking was cancelled for the host. Your own share is held as Aerva credit in your account — use it on another booking, or refund it to your own payment any time from My Bookings.'
       : `The booking was cancelled. ${refundCash > 0 ? 'Each payer is refunded their share to their own payment.' : ''}`.trim());
@@ -748,7 +784,11 @@ const isLegacyEmergency = (rq) => !!rq && !!RETIRED_REASONS[rq.reason_code];
 
 // Posts a line into the booking's thread (creating the thread if needed).
 // Never throws: messages are a courtesy, never a reason to fail.
-async function postThreadMessage(sql, orderId, senderType, text) {
+// opts.audience: 'both' (the default), 'host' or 'guest'. A notice about
+// money is written twice — what it means for the host, and what it means
+// for the guest — so neither side reads the other's amounts
+// (owner, 12 Nov 2026; migrations/2026-11-12-04-message-audience.sql).
+async function postThreadMessage(sql, orderId, senderType, text, opts = {}) {
   try {
     const o = (await sql`SELECT o.id, o.listing_id, o.guest_id, o.guest_email, l.host_id FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${orderId}`)[0];
     if (!o) return;
@@ -756,7 +796,16 @@ async function postThreadMessage(sql, orderId, senderType, text) {
     if (!conv) conv = (await sql`INSERT INTO conversations (order_id, listing_id, guest_id, guest_email, host_id)
                                  VALUES (${o.id}, ${o.listing_id}, ${o.guest_id}, ${o.guest_email}, ${o.host_id}) RETURNING id`)[0];
     const t = String(text).slice(0, 1500);
-    await sql`INSERT INTO messages (conversation_id, sender_type, original_text, display_text) VALUES (${conv.id}, ${senderType}, ${t}, ${t})`;
+    const who = ['host', 'guest'].includes(opts.audience) ? opts.audience : 'both';
+    try {
+      await sql`INSERT INTO messages (conversation_id, sender_type, original_text, display_text, audience) VALUES (${conv.id}, ${senderType}, ${t}, ${t}, ${who})`;
+    } catch (err) {
+      // Before 2026-11-12-04 there is no audience column. Nothing is lost:
+      // the notice still goes in, read by both sides as it was until now.
+      // Once that database update has run, each side reads only its own.
+      if (!err || err.code !== '42703') throw err;
+      await sql`INSERT INTO messages (conversation_id, sender_type, original_text, display_text) VALUES (${conv.id}, ${senderType}, ${t}, ${t})`;
+    }
   } catch (err) { console.error('thread message not posted:', err.message); }
 }
 
@@ -841,7 +890,8 @@ async function createCancellationRequest(sql, { orderId, guestId, reasonCode, de
     await logAudit(sql, { action: 'guest_cancellation_requested', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: orderId,
       metadata: { reasonCode, natural_disaster: true, daysBefore: q.daysBefore, proof: proof.length } });
     await postThreadMessage(sql, orderId, 'guest', `I’d like to cancel this booking: ${EMERGENCY_REASONS[reasonCode]}. I have sent proof to Aerva.${clean ? ' ' + clean : ''}`);
-    await postThreadMessage(sql, orderId, 'system', 'Natural disaster: Aerva checks the guest’s proof and decides. If Aerva approves, everything the guest paid becomes Aerva credit for the guest (for new dates, or refunded to their payment whenever they ask) and there is no payout for this booking; if not, the booking stands. Host: you can add anything Aerva should know here in Messages.');
+    await postThreadMessage(sql, orderId, 'system', 'Natural disaster: Aerva checks the proof and decides. If Aerva approves, there is no payout for this booking; if not, the booking stands. You can add anything Aerva should know here in Messages.', { audience: 'host' });
+    await postThreadMessage(sql, orderId, 'system', 'Natural disaster: Aerva checks your proof and decides. If Aerva approves, everything you paid becomes Aerva credit for you — use it for new dates, or have it refunded to your payment whenever you ask; if not, the booking stands.', { audience: 'guest' });
     const host = (await sql`SELECT email FROM guests WHERE host_id = ${o.host_id} ORDER BY id LIMIT 1`)[0];
     const stay = `<strong>${escH(o.suite_name)}</strong> (${escH(require('./_booking-rules').niceDay(o.arrival))} → ${escH(require('./_booking-rules').niceDay(o.departure))})`;
     await email(host && host.email, `Natural disaster: your guest asked to cancel ${o.suite_name}`,

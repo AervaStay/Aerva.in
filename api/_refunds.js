@@ -152,14 +152,36 @@ async function rowsFor(sql, orderId, kindBase) {
 // Each payment's part of the booking: what it paid, less anything refunded
 // to it before the booking existed (the excess of a smaller booking). A
 // change payment made later counts as the organiser's.
-async function groupPaymentsOf(sql, orderId) {
+// opts.depositOnly: the security deposit is the ORGANISER's alone (owner,
+// 12 Nov 2026), so it goes back to the payment that carried it, not over
+// everyone. A group paid before that rule has no such payment, and is
+// refunded in proportion as it was collected.
+const usedOn = (c, already) => Math.max(
+  c.refund_status && c.refund_status !== 'failed' ? Math.round(Number(c.refund_amount || 0) / 100) : 0,
+  already.get(c.razorpay_payment_id) || 0);
+async function groupPaymentsOf(sql, orderId, opts = {}) {
   let gid = null;
   try { gid = ((await sql`SELECT (to_jsonb(orders)->>'group_booking_id')::int AS g FROM orders WHERE id = ${orderId}`)[0] || {}).g || null; } catch (e) { return null; }
   if (!gid) return null;
-  const claims = await sql`SELECT razorpay_payment_id, amount, refund_amount, refund_status FROM group_claims
-                           WHERE group_id = ${gid} AND status = 'paid' AND razorpay_payment_id IS NOT NULL ORDER BY id`;
-  const list = claims.map(c => ({ pid: c.razorpay_payment_id,
-    net: Number(c.amount) - (c.refund_status && c.refund_status !== 'failed' ? Math.round(Number(c.refund_amount || 0) / 100) : 0) }));
+  let claims = await sql`SELECT razorpay_payment_id, amount, refund_amount, refund_status,
+                                COALESCE((to_jsonb(group_claims)->>'carries_deposit')::boolean, false) AS carries_deposit
+                         FROM group_claims
+                         WHERE group_id = ${gid} AND status = 'paid' AND razorpay_payment_id IS NOT NULL ORDER BY id`;
+  // What each payment has had back already — on the claim, and in the
+  // refunds table (one cancellation can refund the deposit first and the
+  // rest after, so the second part must not ask for more than is left).
+  let already = new Map();
+  try {
+    const rows = await sql`SELECT razorpay_payment_id AS pid, COALESCE(SUM(amount), 0)::bigint AS paise
+                           FROM refunds WHERE order_id = ${orderId} AND status IN ('new', 'creating', 'pending', 'processed')
+                             AND razorpay_payment_id IS NOT NULL GROUP BY razorpay_payment_id`;
+    rows.forEach(r => already.set(r.pid, Math.round(Number(r.paise) / 100)));
+  } catch (e) { /* none */ }
+  if (opts.depositOnly) {
+    const carried = claims.filter(c => c.carries_deposit);
+    if (carried.length) return carried.map(c => ({ pid: c.razorpay_payment_id, net: Number(c.amount) - usedOn(c, already) })).filter(x => x.net > 0);
+  }
+  const list = claims.map(c => ({ pid: c.razorpay_payment_id, net: Number(c.amount) - usedOn(c, already) }));
   try {
     (await sql`SELECT razorpay_payment_id, difference FROM booking_changes WHERE order_id = ${orderId} AND status = 'applied'
                AND razorpay_payment_id IS NOT NULL AND difference > 0 ORDER BY id`).forEach(c => list.push({ pid: c.razorpay_payment_id, net: Number(c.difference) }));
@@ -186,10 +208,10 @@ async function refundGroupShares(sql, razorpay, { orderId, amountInr, kindBase, 
   return { refundedInr, shortfallInr: Math.max(0, Math.round(Number(amountInr) || 0) - refundedInr), firstRefundId, shares: list.map((x, i) => ({ paymentId: x.pid, inr: parts[i] })) };
 }
 
-async function refundAcrossPayments(sql, razorpay, { orderId, amountInr, kindBase }) {
+async function refundAcrossPayments(sql, razorpay, { orderId, amountInr, kindBase, depositOnly = false }) {
   let remaining = Math.max(0, Math.round(Number(amountInr) || 0));
   if (!remaining) return { refundedInr: 0, shortfallInr: 0, firstRefundId: null };
-  const group = await groupPaymentsOf(sql, orderId);
+  const group = await groupPaymentsOf(sql, orderId, { depositOnly });
   if (group && group.length) return refundGroupShares(sql, razorpay, { orderId, amountInr: remaining, kindBase, list: group });
   const { o, payments } = await paymentsOf(sql, orderId);
   // A foreign-currency booking has one payment (changes are INR only): the

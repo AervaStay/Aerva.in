@@ -211,6 +211,7 @@ async function profileStatus(sql, guestId) {
       withAerva: !!review,
       rejectedReason: rejected ? (rejected.reason || 'Aerva could not accept this ID.') : null,
       attemptsLeft: on ? Math.max(0, ATTEMPTS_PER_DAY - await attemptsToday(sql, guestId)) : 0,
+      digilocker: on && !idDone(g) && !review && require('./_digilocker').ready(),
       accepted: ID_TYPES.map(t => t.label)
     }
   };
@@ -264,7 +265,9 @@ async function sendPhoneCode(sql, { guestId, ip = null }) {
   await logAudit(sql, { action: 'guest_phone_verify_requested', success: ok, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId,
     metadata: { ip, ...(ok ? {} : { reason: 'twilio_error', status }) } });
   if (!ok) {
-    if (status >= 400 && status < 500) throw userError('That phone number could not be reached. Please check it in your profile.', 400);
+    // 401 / 403: Aerva's own SMS account. 429: the provider's limit. Neither is the guest's number.
+    if (status === 429) throw userError('Too many codes have been sent to this number. Please try again in a little while.', 429);
+    if (status >= 400 && status < 500 && status !== 401 && status !== 403) throw userError('That phone number could not be reached. Please check it in your profile.', 400);
     throw userError('Could not send the code right now. Please try again shortly.', 503);
   }
   return { sent: true, to: maskPhone(phone) };
@@ -289,6 +292,8 @@ async function confirmPhoneCode(sql, razorpay, { guestId, code, ip = null }) {
       method: 'POST', headers: { 'Authorization': twilioAuth(), 'Content-Type': 'application/x-www-form-urlencoded' },
       body: new URLSearchParams({ To: phone, Code: clean })
     });
+    // The provider itself failing is not a wrong code, and is not counted as one.
+    if (r && (r.status >= 500 || r.status === 429 || r.status === 401 || r.status === 403)) throw new Error('provider HTTP ' + r.status);
     const d = r ? await r.json().catch(() => null) : null;
     approved = !!(r && r.ok && d && d.status === 'approved');
   } catch (err) { console.error('Twilio Verify (check) not reached:', err.message); throw userError('Could not check that code right now. Please try again.', 503); }
@@ -325,6 +330,10 @@ function nameMatch(profileName, printed) {
   if (namesMatch(profileName, printed)) return 'exact';
   const t = words(profileName), c = words(printed);
   if (t.length >= 2 && c.length > t.length && t[0] === c[0] && t[t.length - 1] === c[c.length - 1] && t.every(w => c.includes(w))) return 'middle_names';
+  // Initials printed with the name ("RAVI KUMAR S", "S RAVI KUMAR"), as many
+  // IDs do: the single letters are set aside and the rest must be the profile's name.
+  const noInitials = c.filter(w => w.length > 1);
+  if (t.length >= 2 && noInitials.length >= 2 && noInitials.length < c.length && namesMatch(profileName, noInitials.join(' '))) return 'middle_names';
   return null;
 }
 // Age in whole years on `today` for a date of birth 'YYYY-MM-DD' ('YYYY'
@@ -348,22 +357,22 @@ function ageRange(dob, today) {
 function judgeGuestId(read, { profileName, today = new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) }) {
   const r = read || {};
   const no = (reason, decided = false) => ({ ok: false, reason, decided });
-  const type = String(r.document_type || '');
+  const idv = require('./_id-verify');
+  const type = idv.docTypeKey(r.document_type);
   if (type === 'pan') return no('pan_not_accepted', true);
   if (r.is_identity_document !== true || type === 'none' || !type) return no('not_an_id', true);
   if (!ID_KEYS.includes(type)) return no('wrong_type', true);
   if (r.readable === false) return no('unreadable');
   if (r.looks_genuine !== true) return no('not_genuine');
   if (r.has_holder_photo === false) return no('no_photo');
-  const serious = (Array.isArray(r.concerns) ? r.concerns : []).filter(c => /edit|overlay|font|specimen|sample|template|mock|draw|screen|tamper|fake|forg|more than one|another card|altered|pasted|cut off/i.test(String(c || '')));
-  if (serious.length) return no('concerns');
+  if (idv.seriousConcerns(r.concerns).length) return no('concerns');
   if (r.expiry_date != null && r.expiry_date !== '') {
     if (!/^\d{4}-\d{2}-\d{2}$/.test(String(r.expiry_date))) return no('expiry_unreadable');
     if (String(r.expiry_date) < today) return no('expired', true);
   }
   if (r.date_of_birth != null && r.date_of_birth !== '') {
     const age = ageRange(r.date_of_birth, today);
-    if (!age) return no('dob_unreadable');
+    if (!age || !idv.plausibleBirth(r.date_of_birth, today)) return no('dob_unreadable');   // a misread date is not a refusal
     if (age.max < 18) return no('under_18', true);
     if (age.min < 18) return no('age_unclear');            // only the year is printed, and it is the 18th year
   }
@@ -371,7 +380,7 @@ function judgeGuestId(read, { profileName, today = new Date(Date.now() + 5.5 * 3
   if (!r.full_name) return no('name_unreadable');
   if (!how) return no('name', true);
   const last4 = String(r.id_number || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(-4);
-  if (last4.length !== 4) return no('number_unreadable');
+  if (!idv.realLast4(last4)) return no('number_unreadable');     // fully masked ("XXXX") or too short
   return { ok: true, type, last4, nameMatch: how };
 }
 const REFUSALS = {
@@ -452,6 +461,110 @@ async function adoptFromIdVerify(sql, razorpay, guestId, { docType, dob, verific
     await confirmHoldsFor(sql, razorpay, guestId);
     return true;
   } catch (err) { console.error('ID verification not carried to booking verification:', err.message); return false; }
+}
+
+// ---------------------------------------------------------------- DigiLocker
+// The easiest route for an Indian guest: they log in to their own
+// DigiLocker and approve sharing their Aadhaar. Aerva reads the name, the
+// date of birth and the masked number, checks the same three rules as the
+// photo check (name, 18 or over, a readable last 4), and keeps nothing
+// else. See api/_digilocker.js.
+
+// POST { mode: 'startDigiLocker' } → { url } to send the guest to.
+async function startDigiLocker(sql, { guestId }) {
+  if (!(await ready(sql))) throw userError(NOT_ON, 503);
+  const DL = require('./_digilocker');
+  if (!DL.ready()) throw userError('DigiLocker is not available right now. Use a photo of your ID instead.', 503);
+  const g = await loadAccount(sql, guestId);
+  if (!g || g.deleted_at) throw userError('Please log in again.', 401);
+  if (idDone(g)) return { verified: true, already: true, id: { type: g.guest_id_type, label: idLabel(g.guest_id_type), last4: g.guest_id_last4 }, confirmed: [] };
+  if (!nameDone(g)) throw userError('Add your first and last name first, as on your Aadhaar.', 400, { needs: ['name'] });
+  if (await pendingReview(sql, guestId)) throw userError('Your ID is already with Aerva to check. We will email you as soon as it is done.', 409, { withAerva: true });
+  if (!(await DL.table(sql))) throw userError('DigiLocker is not available right now. Use a photo of your ID instead.', 503);
+  if (await DL.startsToday(sql, guestId) >= DL.STARTS_PER_DAY()) {
+    throw userError('Too many tries today. Use a photo of your ID, send it to Aerva to check instead, or try again tomorrow.', 429, { canSendForReview: true });
+  }
+  const verificationId = DL.newVerificationId(guestId);
+  const back = DL.RETURN_URL() + (DL.RETURN_URL().includes('?') ? '&' : '?') + 'digilocker=' + encodeURIComponent(verificationId);
+  let started;
+  try { started = await DL.provider().start(verificationId, back); }
+  catch (err) {
+    await logAudit(sql, { action: 'digilocker_unavailable', success: false, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId,
+      metadata: { reason: String((err && err.reason) || (err && err.message) || 'unknown').slice(0, 240), provider: DL.PROVIDER() } });
+    if (err && err.isUserFacing) throw userError(err.message, err.status || 503, { canSendForReview: true });
+    throw userError('DigiLocker could not be opened right now. Use a photo of your ID instead.', 503, { canSendForReview: true });
+  }
+  await sql`INSERT INTO digilocker_checks (guest_id, verification_id, reference_id, provider, profile_name)
+            VALUES (${guestId}, ${verificationId}, ${started.referenceId}, ${DL.PROVIDER()}, ${fullName(g)})`;
+  await logAudit(sql, { action: 'digilocker_started', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId,
+    metadata: { provider: DL.PROVIDER() } });
+  return { url: started.url, verificationId, confirmed: [] };
+}
+
+// POST { mode: 'finishDigiLocker', verificationId } — after the guest comes back.
+async function finishDigiLocker(sql, razorpay, { guestId, verificationId }) {
+  if (!(await ready(sql))) throw userError(NOT_ON, 503);
+  const DL = require('./_digilocker');
+  const idv = require('./_id-verify');
+  const g = await loadAccount(sql, guestId);
+  if (!g || g.deleted_at) throw userError('Please log in again.', 401);
+  if (idDone(g)) return { verified: true, already: true, id: { type: g.guest_id_type, label: idLabel(g.guest_id_type), last4: g.guest_id_last4 }, confirmed: [] };
+  const vid = String(verificationId || '').trim();
+  if (!vid || vid.length > 60) throw userError('That DigiLocker check could not be found. Please start again.', 400);
+  const row = (await sql`SELECT id, status, profile_name FROM digilocker_checks WHERE verification_id = ${vid} AND guest_id = ${guestId}`)[0];
+  if (!row) throw userError('That DigiLocker check could not be found. Please start again.', 404);
+  if (row.status !== 'pending') throw userError('That DigiLocker check is already finished. Please start again.', 409);
+
+  const close = async (status, reason) => {
+    await sql`UPDATE digilocker_checks SET status = ${status}, reason = ${reason || null}, finished_at = now() WHERE id = ${row.id}`;
+  };
+  let read;
+  try { read = await DL.provider().read(vid); }
+  catch (err) {
+    await logAudit(sql, { action: 'digilocker_unavailable', success: false, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId,
+      metadata: { reason: String((err && err.reason) || (err && err.message) || 'unknown').slice(0, 240), provider: DL.PROVIDER() } });
+    throw userError((err && err.isUserFacing && err.message) || 'We could not reach DigiLocker just now. Please try again in a minute.', 503, { canSendForReview: true, undecided: true });
+  }
+  if (read.state === 'waiting') return { waiting: true, confirmed: [] };
+  if (read.state !== 'ok') {
+    const text = read.state === 'expired' ? 'That DigiLocker link expired. Please start again.'
+      : read.state === 'denied' ? 'You did not approve sharing your Aadhaar, so nothing was checked. You can try again, or use a photo of your ID.'
+      : 'Your Aadhaar is not linked in DigiLocker, so it could not be shared. Use a photo of your ID instead.';
+    await close(read.state === 'expired' ? 'expired' : 'denied', read.state);
+    await logAudit(sql, { action: 'digilocker_attempt', success: false, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId,
+      metadata: { reason: read.state, provider: DL.PROVIDER() } });
+    throw userError(text, 400, { canSendForReview: true, undecided: read.state !== 'denied' });
+  }
+
+  // Only the three things below are looked at; the rest of the answer is dropped.
+  const profileName = fullName(g);
+  const how = nameMatch(profileName, read.name);
+  const dob = DL.normalizeDob(read.dob);
+  const age = dob ? ageRange(dob, new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10)) : null;
+  const last4 = DL.last4Of(read.uid);
+  let refusal = null;
+  if (!how) refusal = 'name';
+  else if (!age || !idv.plausibleBirth(dob, new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10))) refusal = 'dob_unreadable';
+  else if (age.min < 18) refusal = 'under_18';
+  else if (!idv.realLast4(last4)) refusal = 'number_unreadable';
+  await logAudit(sql, { action: 'digilocker_attempt', success: !refusal, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId,
+    metadata: { reason: refusal, nameMatch: refusal ? null : how, provider: DL.PROVIDER() } });
+  if (refusal) {
+    await close('refused', refusal);
+    const text = REFUSALS[refusal] || 'We could not verify your Aadhaar through DigiLocker. Use a photo of your ID instead.';
+    throw userError(text, 400, { canSendForReview: true, refusal: REFUSALS[refusal] ? refusal : null, undecided: !REFUSALS[refusal] });
+  }
+  // The profile name must still be the one it was checked against.
+  const now = await loadAccount(sql, guestId);
+  if (!now || fullName(now).toLowerCase() !== profileName.toLowerCase()) {
+    await close('refused', 'name_changed');
+    throw userError('Your name changed while DigiLocker was being checked. Please try again.', 409);
+  }
+  await saveVerifiedId(sql, guestId, { type: 'aadhaar', last4, nameMatch: how, method: 'digilocker' });
+  await close('verified', null);
+  await logAudit(sql, { action: 'guest_id_verified', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId,
+    metadata: { method: 'digilocker', docType: 'aadhaar', nameMatch: how } });
+  return { verified: true, id: { type: 'aadhaar', label: idLabel('aadhaar'), last4 }, confirmed: await confirmHoldsFor(sql, razorpay, guestId) };
 }
 
 // ---- "Send it to Aerva to check instead" ----
@@ -557,6 +670,7 @@ async function adminDecide(sql, razorpay, { reviewId, action, docType, last4, re
     if (!ID_KEYS.includes(String(docType))) throw userError('Choose which ID this is: Aadhaar, passport, driving licence or voter ID.');
     clean4 = String(last4 || '').toUpperCase().replace(/[^A-Z0-9]/g, '');
     if (clean4.length !== 4) throw userError('Enter the last 4 characters of the ID number.');
+    if (!/\d/.test(clean4)) throw userError('Enter the last 4 characters of the ID number as printed — they include at least one digit.');
     if (!g || !nameDone(g)) throw userError('This account has no first and last name to check the ID against. Reject it and ask the guest to add their name.');
   } else {
     cleanReason = String(reason || '').replace(/\s+/g, ' ').trim().slice(0, 300);
@@ -1233,7 +1347,7 @@ async function accountsBalances(sql, day) {
 module.exports = {
   required, ready, isVerified, profileStatus, profilePrompt, statusFor,
   sendPhoneCode, confirmPhoneCode, markPhoneProved,
-  checkGuestId, adoptFromIdVerify, sendForReview, adminList, adminDecide,
+  checkGuestId, adoptFromIdVerify, sendForReview, adminList, adminDecide, startDigiLocker, finishDigiLocker,
   holdIfUnverified, confirmHoldsFor, confirmHold, expireHold, refundHold, tick, runJob, byOrder,
   decorateBookings, bellNotifications, hostWaiting, calendarRanges, datesHeld, ownHoldFor,
   assertBeforePayment, assertNameKeepsId, setupSteps, accountsCash, accountsBalances,

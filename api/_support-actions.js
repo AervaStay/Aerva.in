@@ -38,7 +38,23 @@ const KINDS = {
   deposit_refund: 'Refund the security deposit',
   report_guest: 'Report the guest',
   report_host: 'Report the host',
-  block_guest_listing: 'Block the guest from this listing'
+  block_guest_listing: 'Block the guest from this listing',
+  decline: 'Turn the request down (nothing is paid or changed)'
+};
+
+// Why a request is turned down. The agent picks one and the wording is
+// filled in for them, then edited to the case (owner, 12 Nov 2026: "it can
+// be no changes can be done per the policy etc"). 'other' is free wording.
+// What the person reads is always p.message — never the label below.
+const GROUNDS = {
+  policy: 'The booking’s policy does not allow it',
+  too_late: 'Asked for after the time allowed',
+  host_decided: 'The host’s decision stands',
+  nothing_wrong: 'Nothing was found to be wrong',
+  not_aerva: 'Not something Aerva decides',
+  already_settled: 'Already settled on an earlier request',
+  no_evidence: 'Not enough to go on',
+  other: 'Something else (written out in full)'
 };
 
 // ---------------------------------------------------------------- roles
@@ -168,6 +184,23 @@ async function checkAndPreview(sql, kind, p) {
     const l = listingId ? (await sql`SELECT id, property_name FROM listings WHERE id = ${listingId}`)[0] : null;
     return { order, params: { orderId: order ? order.id : null, guestId, listingId }, preview: { person: g ? `${g.name || ''} (${g.email || 'no email'})` : null, listing: l ? l.property_name : null } };
   }
+  // Turning a request down. Nothing is paid and nothing on the booking
+  // changes; the person is told why, and the request is marked resolved.
+  // It still goes to a reviewer, so a refusal is on the record like any
+  // other decision (owner, 12 Nov 2026).
+  if (kind === 'decline') {
+    const tell = String(p.message || '').replace(/\s+/g, ' ').trim().slice(0, 1500);
+    if (tell.length < 20) throw userError('Write what the person will be told, in a sentence or two — they see this word for word.');
+    // A refusal is recorded as fully as a refund: the case record needs how
+    // the person behaved, so it is chosen here rather than guessed later.
+    const CONDUCT = ['cooperative', 'neutral', 'difficult', 'abusive', 'not_involved'];
+    const conduct = String(p.conduct || '').trim();
+    if (!CONDUCT.includes(conduct)) throw userError('Choose how the person behaved — it goes on the case record.');
+    const ground = String(p.ground || '').trim();
+    if (!GROUNDS[ground]) throw userError('Choose the ground for turning it down — it goes on the case record.');
+    return { order, params: { orderId: order ? order.id : null, message: tell, conduct, ground },
+             preview: { message: tell, conduct, ground, groundLabel: GROUNDS[ground] } };
+  }
   throw userError('Unknown action.');
 }
 
@@ -196,6 +229,7 @@ function describe(kind, p, pv = {}) {
   if (kind === 'partial_refund') return `${inr(p.amount)} back to the guest, paid by ${p.hostPays ? 'the host' : 'Aerva'}; the booking stays.`;
   if (kind === 'deposit_refund') return `${inr(pv.toGuest)} of the ${inr(pv.deposit)} deposit back to the guest${pv.toHost ? `, ${inr(pv.toHost)} to the host` : ''}.`;
   if (kind === 'block_guest_listing') return `${pv.person || 'The guest'} would no longer see or book ${pv.listing || 'the listing'}.`;
+  if (kind === 'decline') return `Turned down — ${GROUNDS[pv.ground || p.ground] || 'a ground on the record'}. Nothing is paid and nothing changes. The person is told: “${(pv.message || p.message || '').slice(0, 300)}”`;
   return pv.person ? `About ${pv.person}${pv.listing ? ' at ' + pv.listing : ''}.` : '';
 }
 async function notifyReviewers(sql, row) {
@@ -328,6 +362,18 @@ async function review(sql, razorpay, { id, approve, note, admin, audit }) {
       result = await addReport(sql, { kind: a.kind === 'report_guest' ? 'guest' : 'host', guestId: p.guestId, listingId: p.listingId, orderId: p.orderId, ticketId: a.ticket_id, actionId: a.id, reason: a.reason, by: label });
     } else if (a.kind === 'block_guest_listing') {
       result = await blockGuest(sql, { listingId: p.listingId, guestId: p.guestId, reason: a.reason, by: label });
+    } else if (a.kind === 'decline') {
+      if (!a.ticket_id) throw userError('A request can only be turned down from the request itself.');
+      const S = require('./_support');
+      // The refusal is the case record: what was asked, what was decided,
+      // and the words the person was given. Without it the request cannot
+      // be resolved, and a refusal must be as well documented as a refund.
+      await S.adminSaveCase(sql, { id: a.ticket_id, summary: a.reason,
+        outcome: `Turned down (${GROUNDS[p.ground] || 'ground not recorded'}) — nothing paid, nothing changed. Approved by ${admin.email} (proposal #${a.id}, proposed by ${a.proposed_by_email}). The person was told: ${p.message}`,
+        requesterConduct: p.conduct || 'neutral', adminEmail: label, audit: { actorIdentifier: admin.email } });
+      await S.adminReply(sql, { id: a.ticket_id, text: p.message, status: 'resolved', adminEmail: label,
+        audit: { actorIdentifier: admin.email } });
+      result = { declined: true, ticketId: a.ticket_id };
     }
   } catch (err) {
     const msg = String(err.message || err).slice(0, 500);
@@ -367,4 +413,4 @@ async function isBlocked(sql, guestId, listingId) {
   return (await soft(sql`SELECT 1 FROM listing_guest_blocks WHERE guest_id = ${guestId} AND listing_id = ${listingId}`)).length > 0;
 }
 
-module.exports = { ROLES, KINDS, roleOf, allowed, me, team, setRole, propose, withdraw, list, review, recordsFor, blockGuest, unblockGuest, blockedListingIds, isBlocked, addReport };
+module.exports = { GROUNDS, ROLES, KINDS, roleOf, allowed, me, team, setRole, propose, withdraw, list, review, recordsFor, blockGuest, unblockGuest, blockedListingIds, isBlocked, addReport };
