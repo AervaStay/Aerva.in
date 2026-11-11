@@ -62,6 +62,22 @@ const REFUND_STATE = {
 };
 const PAYOUT_STATE = { due: 'Not sent yet', sent: 'Sent', failed: 'Failed' };
 
+// Why a payout has not gone out yet, in the order that matters
+// (owner, 12 Nov 2026: "provide reason why not sent"). Read only.
+const razorpayxReady = () => !!(process.env.RAZORPAYX_ACCOUNT_NUMBER && process.env.RAZORPAY_KEY_ID && process.env.RAZORPAY_KEY_SECRET);
+function whyNotSent(r) {
+  if (r.status === 'sent') return '';
+  if (r.failure_reason) return 'The bank refused it: ' + String(r.failure_reason).slice(0, 120);
+  if (r.status === 'failed') return 'The last attempt failed — retry it on the Payouts tab';
+  if (Number(r.net) <= 0) return 'Nothing to pay on this one';
+  if (r.bank_not_ready) return 'Their bank details are not approved yet';
+  if (r.arriving_by && String(r.arriving_by).slice(0, 10) > new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10)) {
+    return 'Due on ' + String(r.arriving_by).slice(0, 10);
+  }
+  if (!r.auto_eligible || !razorpayxReady()) return 'Automatic payouts are off — send it by hand, then Mark paid on the Payouts tab';
+  return 'Waiting for the next payout run (every 4 hours)';
+}
+
 function ready(sql) { return !!sql; }
 
 // ---------------------------------------------------------------------
@@ -117,7 +133,7 @@ async function ledger(sql, opts = {}) {
       bookingId: Number(r.order_id) || null, booking: bookingLabel(r.order_id, r.code), listing: r.listing || '',
       // What actually reached Razorpay: the quote less any Aerva credit used.
       amount: inr(Number(r.total) - Number(r.credit || 0)),
-      status: r.any_cancelled ? 'Received (a booking was cancelled)' : 'Received',
+      status: 'Received', why: r.any_cancelled ? 'A booking paid for by this payment was later cancelled' : '',
       paymentId: r.pid || '', refundId: '', payoutId: '', rzOrder: r.rz_order || '',
       note: [
         Number(r.credit) > 0 ? `₹${inr(r.credit)} of it paid with Aerva credit` : '',
@@ -212,8 +228,11 @@ async function ledger(sql, opts = {}) {
       whoEmail: r.payer_email || r.email || '', whoIs: 'Guest',
       bookingId: Number(r.order_id) || null, booking: bookingLabel(r.order_id, r.code), listing: r.listing || '',
       amount: Math.round(paise(r.paise)), status: REFUND_STATE[r.status] || String(r.status || ''),
+      why: r.failure_reason ? 'Razorpay refused it: ' + String(r.failure_reason).slice(0, 120)
+        : r.status === 'new' || r.status === 'creating' ? 'Decided — Razorpay is being asked now (the refunds job runs every 15 minutes)'
+        : r.status === 'pending' ? 'With Razorpay — usually in the guest’s account in 5–7 working days' : '',
       paymentId: r.pid || '', refundId: r.refund_id || '', payoutId: '', rzOrder: '',
-      note: r.failure_reason ? String(r.failure_reason).slice(0, 90) : ''
+      note: ''
     }));
   });
 
@@ -250,6 +269,9 @@ async function ledger(sql, opts = {}) {
     const got = await sql`
       SELECT p.id, p.kind, p.payee_type, p.net::numeric AS net, p.gross::numeric AS gross, p.tds::numeric AS tds,
              p.status, p.razorpayx_payout_id AS payout_id, p.reference, p.failure_reason, p.bank_label,
+             p.auto_eligible, to_jsonb(p)->>'arriving_by' AS arriving_by,
+             -- Not paid until the bank details are approved (api/_payouts.js).
+             (p.payee_type = 'host' AND COALESCE(h.bank_status, '') <> 'verified') AS bank_not_ready,
              COALESCE(p.sent_at, p.created_at) AS at,
              o.id::int AS order_id, o.confirmation_code AS code, o.suite_name AS listing,
              h.name AS host_name, h.email AS host_email,
@@ -275,10 +297,11 @@ async function ledger(sql, opts = {}) {
       whoIs: r.payee_type === 'cohost' ? 'Co-host' : 'Host',
       bookingId: Number(r.order_id) || null, booking: bookingLabel(r.order_id, r.code), listing: r.listing || '',
       amount: inr(r.net), status: PAYOUT_STATE[r.status] || String(r.status || ''),
+      why: whyNotSent(r),
       paymentId: '', refundId: '', payoutId: r.payout_id || r.reference || '', rzOrder: '',
       note: [
         Number(r.tds) > 0 ? `₹${inr(r.tds)} TDS held back from ₹${inr(r.gross)}` : '',
-        r.bank_label || '', r.failure_reason || ''
+        r.bank_label || ''
       ].filter(Boolean).join(' · ')
     }));
   });
