@@ -16,7 +16,7 @@
 // the fallback (the card is then stored until the admin decides, and
 // erased then). Messages never say how the check works.
 
-const { decodeFiles, fetchWithTimeout, userError, namesMatch } = require('./_id-verify');
+const { decodeFiles, fetchWithTimeout, userError, namesMatch, seriousConcerns } = require('./_id-verify');
 const words = (s) => String(s || '').toUpperCase().normalize('NFKD').replace(/[\u0300-\u036f]/g, '').replace(/[^A-Z\s]/g, ' ').split(/\s+/).filter(Boolean);
 
 const MODEL = () => process.env.ID_CHECK_MODEL || 'claude-sonnet-5-5';
@@ -50,7 +50,7 @@ async function readPanCard(files) {
       method: 'POST',
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({ model: MODEL(), max_tokens: 500, system: SYSTEM_PROMPT, messages: [{ role: 'user', content }] })
-    }, 40000);
+    }, 24000);   // under the function's 30-second limit
   } catch (err) {
     console.error('PAN check: Claude not reached:', err.message || err);
     throw userError('The PAN check is taking too long right now. Try again in a minute, or send it to Aerva to check.', 503, { canSendForReview: true });
@@ -91,7 +91,7 @@ function judgePan(read, input) {
   if (r.looks_genuine !== true) return no('not_genuine');
   // Only real signs of a fake count; ordinary photo issues (glare, angle,
   // blur) a model sometimes lists here are ignored.
-  const serious = (Array.isArray(r.concerns) ? r.concerns : []).filter(c => /edit|overlay|font|specimen|sample|template|mock|draw|screen|tamper|fake|forg|more than one|another card|altered|pasted/i.test(String(c || '')));
+  const serious = seriousConcerns(r.concerns);
   if (serious.length) return no('concerns');
   const printed = panShape(r.pan_number);
   if (printed.length !== 10) return no('number_unreadable');

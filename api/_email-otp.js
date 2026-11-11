@@ -83,11 +83,19 @@ async function requestCode(sql, rawEmail, { purpose = 'login' } = {}) {
       sent_count = CASE WHEN email_otps.created_at > now() - interval '1 hour' THEN email_otps.sent_count + 1 ELSE 1 END,
       created_at = CASE WHEN email_otps.created_at > now() - interval '1 hour' THEN email_otps.created_at ELSE now() END,
       last_sent_at = now()`;
-  const res = await fetch('https://api.resend.com/emails', {
-    method: 'POST',
-    headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-    body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: email, subject: `${code} is your Aerva code`, html: emailHtml(code, purpose) })
-  });
+  let res;
+  try {
+    res = await fetch('https://api.resend.com/emails', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+      body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to: email, subject: `${code} is your Aerva code`, html: emailHtml(code, purpose) })
+    });
+  } catch (err) {
+    // Not sent: the address is not left waiting 45 seconds for a code that never went.
+    await sql`DELETE FROM email_otps WHERE email = ${email}`.catch(() => {});
+    console.error('code email not sent:', err.message);
+    throw userError('We could not send the code right now. Please try again.', 503);
+  }
   if (!res.ok) {
     // Nothing arrived, so the stored code is useless: clear it rather than
     // leave someone waiting for an email that is not coming.

@@ -70,6 +70,7 @@ function normalizeToE164(raw, defaultDialCode = DEFAULT_DIAL_CODE) {
 
   if (s.startsWith('00')) s = '+' + s.slice(2); // 00 is the international prefix in much of the world
   if (s.startsWith('+')) {
+    if (s.startsWith('+91') && !/^\+91[6-9]\d{9}$/.test(s)) return null;   // an Indian mobile: 10 digits, starting 6 to 9
     return E164_PATTERN.test(s) ? s : null;
   }
   if (!/^[0-9]+$/.test(s)) return null; // letters or stray symbols — not salvageable

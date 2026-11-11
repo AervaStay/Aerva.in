@@ -85,7 +85,7 @@ const { verifyRazorpaySignature } = require('./_razorpay-verify');
 const { COUPON_RELEASE_DELAY_MINUTES, sendCouponEmail } = require('./_coupons');
 const { loadPayoutSummary } = require('./_payouts');
 const cohostCoupon = require('./_cohost-coupon');
-const { safeRefund, refundAcrossPayments, hasChangePayments } = require('./_refunds');
+const { safeRefund, refundAcrossPayments, hasChangePayments, groupPaymentsOf } = require('./_refunds');
 const { respondChange } = require('./_booking-changes');
 const { respondDispute } = require('./_stay-disputes');
 const { hoursUntilCheckIn, hoursUntilCheckInTime, paidByOrderRow, dateStr } = require('./_booking-rules');
@@ -3235,10 +3235,31 @@ module.exports = async (req, res) => {
 
     // Guarded: once per booking, checked against Razorpay (_refunds.js).
     // A booking changed with an extra payment is refunded across all its payments.
-    const refund = await hasChangePayments(sql, orderId)
-      ? { id: (await refundAcrossPayments(sql, razorpay, { orderId, amountInr: Math.round((await refundSubunit(Number(orderId), 'INR')) / 100), kindBase: 'cancellation' })).firstRefundId }
-      : await safeRefund(sql, razorpay, { orderId, paymentId: order.razorpay_payment_id,
-          amountSubunit: await refundSubunit(Number(orderId), order.charge_currency || 'INR'), kind: 'cancellation' });
+    const refund = await refundOrder(Number(orderId), order);
+
+    // One booking's refund. A group booking's security deposit is the
+    // ORGANISER's alone (owner, 12 Nov 2026), so it goes back to the
+    // payment that carried it; anything else is split over everyone's
+    // payments in proportion, the way it was collected.
+    async function refundOrder(id, row) {
+      const inr = Math.round((await refundSubunit(id, 'INR')) / 100);
+      const group = inr > 0 && (row.charge_currency || 'INR') === 'INR' ? await groupPaymentsOf(sql, id) : null;
+      if (group && group.length) {
+        const dep = depositStillHeld(row) ? Math.round(Number(row.deposit_amount) || 0) : 0;
+        const depPart = Math.min(Math.max(0, dep), inr);
+        let firstId = null;
+        if (depPart > 0) firstId = (await refundAcrossPayments(sql, razorpay, { orderId: id, amountInr: depPart, kindBase: 'deposit', depositOnly: true })).firstRefundId;
+        if (inr - depPart > 0) {
+          const rest = (await refundAcrossPayments(sql, razorpay, { orderId: id, amountInr: inr - depPart, kindBase: 'cancellation' })).firstRefundId;
+          if (!firstId) firstId = rest;
+        }
+        return { id: firstId };
+      }
+      return await hasChangePayments(sql, id)
+        ? { id: (await refundAcrossPayments(sql, razorpay, { orderId: id, amountInr: inr, kindBase: 'cancellation' })).firstRefundId }
+        : await safeRefund(sql, razorpay, { orderId: id, paymentId: row.razorpay_payment_id,
+            amountSubunit: await refundSubunit(id, row.charge_currency || 'INR'), kind: 'cancellation' });
+    }
 
     // Only the request that actually flips 'paid' → 'cancelled' carries on
     // to coupons and emails, so a double click can never send two.
@@ -3273,10 +3294,7 @@ module.exports = async (req, res) => {
       try {
         // Refunded across all the purchase's payments when it was changed
         // (a change to an "Includes a Stay" pair is paid once, for both halves).
-        const sibRefund = await hasChangePayments(sql, sib.id)
-          ? { id: (await refundAcrossPayments(sql, razorpay, { orderId: sib.id, amountInr: Math.round((await refundSubunit(Number(sib.id), 'INR')) / 100), kind: 'cancellation', kindBase: 'cancellation' })).firstRefundId }
-          : await safeRefund(sql, razorpay, { orderId: sib.id, paymentId: sib.razorpay_payment_id,
-              amountSubunit: await refundSubunit(Number(sib.id), sib.charge_currency || 'INR'), kind: 'cancellation' });
+        const sibRefund = await refundOrder(Number(sib.id), sib);
         const done = await sql`
           UPDATE orders SET
             status = 'cancelled',

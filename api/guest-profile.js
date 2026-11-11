@@ -237,6 +237,13 @@ function hideMoneyForShared(text, senderType) {
   if (senderType !== 'system' && !AUTO_NOTICE_RE.test(t)) return t;
   return t.replace(/(₹|Rs\.?|INR)\s?[\d,]+(\.\d+)?/g, 'an amount');
 }
+// A notice written for one side only (messages.audience, 2026-11-12-04) is
+// read by that side alone: the host never reads the guest's refund, and the
+// guest never reads the host's payout (owner, 12 Nov 2026).
+function forViewer(messages, viewerRole) {
+  return messages.filter(m => !m.audience || m.audience === 'both' || m.audience === viewerRole)
+    .map(m => { const { audience, ...rest } = m; return rest; });
+}
 function unsentView(m) {
   if (!Array.isArray(m.photos) || !m.photos.length) delete m.photos;
   if (!m.guest_reaction) delete m.guest_reaction;
@@ -303,8 +310,10 @@ module.exports = async (req, res) => {
   // POST { mode: 'checkPhoneCode', code }          → confirms the number
   // POST { mode: 'checkGuestId', files: [{ type, data }] } → the instant ID check (the image is never stored)
   // POST { mode: 'sendGuestIdForReview', url }     → "Send it to Aerva to check instead"
+  // POST { mode: 'startDigiLocker' }               → { url } to send the guest to DigiLocker
+  // POST { mode: 'finishDigiLocker', verificationId } → reads the Aadhaar they approved
   // Each answer carries `confirmed`: the waiting payments that became bookings.
-  const GV_MODES = ['sendPhoneCode', 'checkPhoneCode', 'checkGuestId', 'sendGuestIdForReview'];
+  const GV_MODES = ['sendPhoneCode', 'checkPhoneCode', 'checkGuestId', 'sendGuestIdForReview', 'startDigiLocker', 'finishDigiLocker'];
   if ((req.method === 'GET' && (req.query || {}).mode === 'verification') || (req.method === 'POST' && req.body && GV_MODES.includes(req.body.mode))) {
     if ((req.query || {}).actingHost !== undefined) return res.status(403).json({ error: 'Open this from your own account.' });
     const GV = require('./_guest-verify');
@@ -315,6 +324,8 @@ module.exports = async (req, res) => {
       if (b.mode === 'sendPhoneCode') out = await GV.sendPhoneCode(sql, { guestId, ip });
       else if (b.mode === 'checkPhoneCode') out = await GV.confirmPhoneCode(sql, razorpayClient(), { guestId, code: b.code, ip });
       else if (b.mode === 'checkGuestId') out = await GV.checkGuestId(sql, razorpayClient(), { guestId, files: b.files });
+      else if (b.mode === 'startDigiLocker') out = await GV.startDigiLocker(sql, { guestId });
+      else if (b.mode === 'finishDigiLocker') out = await GV.finishDigiLocker(sql, razorpayClient(), { guestId, verificationId: b.verificationId });
       else out = await GV.sendForReview(sql, { guestId, url: b.url });
       return res.status(200).json(Object.assign(out, { status: await GV.statusFor(sql, razorpayClient(), guestId) }));
     } catch (err) {
@@ -638,7 +649,8 @@ module.exports = async (req, res) => {
         const messages = (await sql`
           SELECT id, sender_type, display_text, was_redacted, created_at, to_jsonb(messages)->>'unsent_at' AS unsent_at,
                  to_jsonb(messages)->>'guest_reaction' AS guest_reaction, to_jsonb(messages)->>'host_reaction' AS host_reaction,
-                 to_jsonb(messages)->'photo_urls' AS photos
+                 to_jsonb(messages)->'photo_urls' AS photos,
+                 COALESCE(to_jsonb(messages)->>'audience', 'both') AS audience
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
         `).map(unsentView);
         // This endpoint is only ever called from the guest-facing chat
@@ -652,15 +664,16 @@ module.exports = async (req, res) => {
         // and the host's replies, all rendered identically as "mine,"
         // making it look like nothing was ever received.
         const viewerRole = isGuest ? 'guest' : 'host';
+        const mine = forViewer(messages, viewerRole);
         if (shared) {
           // No price for a recipient or a friend: amounts in Aerva's notices are hidden,
           // and the booking's cards (cancel, change, dispute) are the organiser's or buyer's.
           return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messagingClosed: await require('./_message-guard').messagingClosed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, shared,
-            messages: messages.map(m => Object.assign({}, m, { display_text: hideMoneyForShared(m.display_text, m.sender_type) })),
+            messages: mine.map(m => Object.assign({}, m, { display_text: hideMoneyForShared(m.display_text, m.sender_type) })),
             booking: { orderId: order.id, confirmationCode: order.confirmation_code || null, arrival: order.arrival, departure: order.departure, guests: order.guests, nights: order.nights, status: order.status },
             reviewPrompt: null, cancellation: null, change: null, dispute: null });
         }
-        return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messagingClosed: await require('./_message-guard').messagingClosed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, messages,
+        return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messagingClosed: await require('./_message-guard').messagingClosed(sql, conversationId), conversationId, listingName: order.property_name, viewerRole, messages: mine,
           booking: { orderId: order.id, confirmationCode: order.confirmation_code || null,
                      arrival: order.arrival, departure: order.departure, guests: order.guests, nights: order.nights,
                      total: order.total, status: order.status },
@@ -711,9 +724,16 @@ module.exports = async (req, res) => {
                  COALESCE((to_jsonb(o)->>'free_cancel_fee')::int, 0) AS free_cancel_fee, COALESCE((to_jsonb(o)->>'free_cancel_gst')::int, 0) AS free_cancel_gst,
                  (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}))::date AS local_today,
                  COALESCE(NULLIF(btrim(l.timezone), ''), ${DEFAULT_TIMEZONE}) AS listing_tz, to_jsonb(l)->>'check_in_time' AS listing_check_in_time,
+                 -- A notice written for one side only (audience) is not
+                 -- previewed to the other: the host never reads the guest's
+                 -- refund, and the guest never reads the host's payout.
                  (SELECT CASE WHEN to_jsonb(m)->>'unsent_at' IS NOT NULL THEN 'Message unsent' ELSE display_text END
-                    FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message,
-                 (SELECT created_at FROM messages m WHERE m.conversation_id = c.id ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
+                    FROM messages m WHERE m.conversation_id = c.id
+                      AND COALESCE(to_jsonb(m)->>'audience', 'both') IN ('both', CASE WHEN c.host_id = ${myHostId} THEN 'host' ELSE 'guest' END)
+                    ORDER BY m.created_at DESC LIMIT 1) AS last_message,
+                 (SELECT created_at FROM messages m WHERE m.conversation_id = c.id
+                    AND COALESCE(to_jsonb(m)->>'audience', 'both') IN ('both', CASE WHEN c.host_id = ${myHostId} THEN 'host' ELSE 'guest' END)
+                    ORDER BY m.created_at DESC LIMIT 1) AS last_message_at,
                  (SELECT COUNT(*) FROM messages m WHERE m.conversation_id = c.id
                     AND m.sender_type <> (CASE WHEN c.host_id = ${myHostId} THEN 'host' ELSE 'guest' END)
                     AND m.read_at IS NULL AND to_jsonb(m)->>'unsent_at' IS NULL) AS unread_count
@@ -853,7 +873,8 @@ module.exports = async (req, res) => {
         const messages = (await sql`
           SELECT id, sender_type, display_text, was_redacted, created_at, to_jsonb(messages)->>'unsent_at' AS unsent_at,
                  to_jsonb(messages)->>'guest_reaction' AS guest_reaction, to_jsonb(messages)->>'host_reaction' AS host_reaction,
-                 to_jsonb(messages)->'photo_urls' AS photos
+                 to_jsonb(messages)->'photo_urls' AS photos,
+                 COALESCE(to_jsonb(messages)->>'audience', 'both') AS audience
           FROM messages WHERE conversation_id = ${conversationId} ORDER BY created_at ASC
         `).map(unsentView);
         // Opening a conversation marks the OTHER party's messages read.
@@ -878,15 +899,16 @@ module.exports = async (req, res) => {
           `;
         }
         const myRole = isHost ? 'host' : 'guest';
+        const mine = forViewer(messages, myRole);
         // A gift's recipient or a group's friend (the inbox opens threads here): as in
         // mode 'conversation' — no amounts, and the booking's cards (cancel, change,
         // dispute, review) stay with the organiser or buyer.
         if (sharedView && !isHost) {
           return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messagingClosed: await require('./_message-guard').messagingClosed(sql, conversationId), myRole, shared: sharedView,
-            messages: messages.map(m => Object.assign({}, m, { display_text: hideMoneyForShared(m.display_text, m.sender_type) })),
+            messages: mine.map(m => Object.assign({}, m, { display_text: hideMoneyForShared(m.display_text, m.sender_type) })),
             reviewPrompt: null, cancellation: null, change: null, dispute: null });
         }
-        return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messagingClosed: await require('./_message-guard').messagingClosed(sql, conversationId), messages, myRole, reviewPrompt: await threadReviewPrompt(sql, conversationId, myRole),
+        return res.status(200).json({ photosAllowed: await require('./_message-guard').photosAllowed(sql, conversationId), messagingClosed: await require('./_message-guard').messagingClosed(sql, conversationId), messages: mine, myRole, reviewPrompt: await threadReviewPrompt(sql, conversationId, myRole),
                                       cancellation: await cancellationCard(sql, conversationId, myRole),
                                       change: await changeCard(sql, conversationId, myRole),
                                       dispute: await disputeCard(sql, conversationId, myRole) });
@@ -1121,6 +1143,29 @@ module.exports = async (req, res) => {
         }
       } catch (err) { /* refunds table not created yet */ }
 
+      // Money that came back some other way, so a cancelled booking's price
+      // details account for everything, not only the card refund
+      // (owner, 12 Nov 2026 — "what about the coupon in this case?"):
+      //   • Aerva credit (a host cancelled, or Aerva approved a disaster);
+      //   • an Aerva coupon (the host's 10%, or coupon value paid back).
+      try {
+        const ids = bookings.map(b => b.id);
+        if (ids.length) {
+          try {
+            const cr = await sql`SELECT source_order_id, COALESCE(SUM(amount), 0) AS amount FROM fee_credits
+                                 WHERE source_order_id = ANY(${ids}) GROUP BY source_order_id`;
+            const by = {}; cr.forEach(r => { by[r.source_order_id] = Math.round(Number(r.amount) || 0); });
+            bookings.forEach(b => { if (by[b.id] > 0) b.credit_back = by[b.id]; });
+          } catch (err) { /* no fee_credits table yet */ }
+          try {
+            const cp = await sql`SELECT source_order_id, COALESCE(SUM(amount), 0) AS amount FROM coupons
+                                 WHERE source_order_id = ANY(${ids}) AND status <> 'pending_payment' GROUP BY source_order_id`;
+            const by = {}; cp.forEach(r => { by[r.source_order_id] = Math.round(Number(r.amount) || 0); });
+            bookings.forEach(b => { if (by[b.id] > 0) b.coupon_back = by[b.id]; });
+          } catch (err) { /* no coupons table yet */ }
+        }
+      } catch (err) { /* the bookings still load */ }
+
       // Aerva's check-in promise: a booking moved to another place shows once
       // (the new one, with one summary); reports, places offered, and the
       // "This place is real and as listed" button (_checkin-promise.js).
@@ -1162,6 +1207,9 @@ module.exports = async (req, res) => {
       // "Gifted to you" (no money, no actions), and groups still open.
       await require('./_group-bookings').decorateBookings(sql, guestId, bookings);
       await require('./_gifts').decorateBookings(sql, guestId, bookings);
+      // The guest staying on a gift sees where a check-in report stands, read only
+      // (the person who paid keeps every decision and any money).
+      await require('./_checkin-promise').decorateSharedBookings(sql, bookings);
       // Payments waiting for this guest's details to be verified (no booking
       // exists yet), with the deadline; and those that lapsed (_guest-verify.js).
       if (!actingCtx) await require('./_guest-verify').decorateBookings(sql, razorpayClient(), guestId, bookings);

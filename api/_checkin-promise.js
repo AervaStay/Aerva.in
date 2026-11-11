@@ -114,6 +114,33 @@ async function assertReady(sql) { if (!(await ready(sql))) throw userError(NOT_R
 function checkoutMs(departure, zone, checkOutTime) {
   return localMidnightMs(dateStr(departure), zone) + checkInMinutes(checkOutTime || '11:00') * 60000;
 }
+// The guest staying on a gift: they are the one at the door, so they are
+// kept informed (owner, 12 Nov 2026). The person who PAID still makes every
+// decision and receives any money — this is news, not a choice.
+async function giftGuest(sql, orderId) {
+  try {
+    // The account that ACCEPTED it is the one staying and the one with the
+    // booking in My Bookings; the address it was sent to may be another.
+    const g = (await sql`SELECT COALESCE(g.accepted_first_name, g.recipient_first_name) AS first_name,
+                                COALESCE(gu.email, g.recipient_email) AS recipient_email, g.buyer_first_name
+                         FROM booking_gifts g LEFT JOIN guests gu ON gu.id = g.accepted_guest_id
+                         WHERE g.order_id = ${Number(orderId) || 0} AND g.status = 'accepted' ORDER BY g.id DESC LIMIT 1`)[0];
+    return g && g.recipient_email ? { email: g.recipient_email, firstName: g.first_name || 'there', buyer: g.buyer_first_name || 'the person who booked it' } : null;
+  } catch (err) { return null; }
+}
+// One line of news for the guest staying. Never an action, never an amount.
+async function tellGiftGuest(sql, orderId, subject, lead, body) {
+  const who = await giftGuest(sql, orderId);
+  if (!who) return false;
+  await email(who.email, subject,
+    `<h2 style="font-family:Georgia,serif;">${esc(lead)}</h2>
+     <p>Hello ${esc(who.firstName)},</p>
+     ${body}
+     <p style="font-size:13px; color:#6e675d;">${esc(who.buyer)} booked this stay, so Aerva settles any new place or refund with them. You can follow where it stands in My Bookings.</p>
+     <p><a href="https://aerva.in/index.html?view=my-bookings" style="color:#8a6c39;">Open My Bookings</a></p>`);
+  return true;
+}
+
 async function hostAccount(sql, hostId) {
   return (await sql`SELECT id, email, phone FROM guests WHERE host_id = ${hostId} ORDER BY id LIMIT 1`)[0] || null;
 }
@@ -203,15 +230,24 @@ async function openReport(sql, { dispute, order }) {
   const S = require('./_support');
   const host = await hostAccount(sql, o.host_id);
   const what = REASONS[dispute.reason];
+  // A gift: the guest staying reported it, not the person who paid, so say so.
+  const staying = await giftGuest(sql, o.id);
+  const who = staying ? `${staying.firstName}, the guest staying,` : 'You';
   const guestTicket = o.guest_id ? await S.openSystemRequest(sql, { guestId: o.guest_id, role: 'guest', category: 'stay_problem', orderId: o.id, urgent: true,
-    subject: 'Your report on arrival: Aerva is on it',
-    body: `You reported ${stayLine(o)}: ${what}.\n\nAerva is checking it now with your host. If Aerva confirms it, we offer you other places nearby for the rest of your stay — you pay only any difference in price, and if the new place costs less the difference comes back to you as Aerva credit. If none suits you, everything you paid is refunded in full, including Aerva’s service fee.\n\nYou will see the options in My Bookings and by email. Add anything that helps (photos, a message) by replying here.` }) : null;
+    subject: staying ? 'A problem on arrival at your gifted stay: Aerva is on it' : 'Your report on arrival: Aerva is on it',
+    body: `${who} reported ${stayLine(o)}: ${what}.\n\nAerva is on it, and will come back to you within 24 hours — sooner if we can. You will be offered other places nearby for the rest of your stay: you pay only any difference in price, and if a place costs less the difference comes back to you as Aerva credit. If none of them suits you, everything you paid is refunded in full, including Aerva’s service fee.\n\nYou will see the places in My Bookings and by email. Add anything that helps (photos, a message) by replying here.` }) : null;
   const hostTicket = host ? await S.openSystemRequest(sql, { guestId: host.id, role: 'host', category: 'stay_problem', orderId: o.id, urgent: true,
     subject: 'Urgent: your guest reported a problem on arrival',
     body: `Your guest reported ${stayLine(o)}: ${what}.\n\n${reason === 'fake' ? 'The listing is hidden from search while Aerva checks this. ' : ''}Your payout for this booking is on hold until Aerva decides. Please reply in Messages now with your side and photos.\n\nIf Aerva confirms the report, the guest is moved to another place or refunded in full, and you are not paid for this booking (anything already paid out is deducted from your later payouts).${reason === 'fake' ? ' The listing then stays blocked and only Aerva can unblock it.' : ''}` }) : null;
   await sql`UPDATE checkin_reports SET guest_ticket_id = ${guestTicket ? guestTicket.id : null}, host_ticket_id = ${hostTicket ? hostTicket.id : null} WHERE id = ${report.id}`;
+  // The guest staying hears straight away that it is in hand. News only:
+  // the person who paid makes every choice and receives any money.
+  if (staying) await tellGiftGuest(sql, o.id, `Aerva is on it: ${o.property_name}`, 'Aerva is looking into it now',
+    `<p>You reported <strong>${esc(stayLine(o))}</strong>: ${esc(what)}.</p>
+     <p>Aerva is on it and will be in touch within 24 hours, and sooner if we can.</p>`);
   const { postThreadMessage } = require('./_cancellations');
-  await postThreadMessage(sql, o.id, 'system', `Aerva has been alerted (urgent): ${what}. ${reason === 'fake' ? 'The listing is hidden from search while Aerva checks. ' : ''}The host’s payout for this booking is on hold. Host: please reply here with your side and photos. Aerva decides; if the report is confirmed, the guest is offered another place or refunded in full.`);
+  await postThreadMessage(sql, o.id, 'system', `Aerva has been alerted (urgent): ${what}. ${reason === 'fake' ? 'The listing is hidden from search while Aerva checks. ' : ''}Your payout for this booking is on hold. Please reply here with your side and photos. Aerva decides; if the report is confirmed, the guest is offered another place or refunded in full.`, { audience: 'host' });
+  await postThreadMessage(sql, o.id, 'system', `Reported to Aerva: ${what}. Aerva is on it and will come back to you within 24 hours, sooner if we can. Anything that helps — photos, a message — can go here.`, { audience: 'guest' });
   await email(supportTo(), `URGENT — check-in promise: ${what} (${o.code})`,
     `<p><strong>${esc(stayLine(o))}</strong></p><p>${esc(what)}: ${esc(dispute.details || '')}</p>
      <p>Host: ${esc(host && host.email || 'no email')} · ${esc(host && host.phone || 'no phone')}</p>
@@ -221,7 +257,7 @@ async function openReport(sql, { dispute, order }) {
      <p>${reason === 'fake' ? 'The listing is hidden from search while Aerva checks this. ' : ''}Your payout for this booking is on hold until Aerva decides. Please reply in Messages now with your side and photos.</p>
      <p><a href="https://aerva.in/index.html?view=messages" style="color:#8a6c39;">Open Messages</a></p>`);
   await email(o.guest_email, `We are on it: your report about ${o.property_name}`,
-    `<h2 style="font-family:Georgia,serif;">Aerva is on it</h2><p>${esc(what)}.</p><p>Aerva is checking it with your host now. If it is confirmed, you will be offered other places for the rest of your stay (you pay only any difference), or a full refund including Aerva’s service fee.</p>`);
+    `<h2 style="font-family:Georgia,serif;">Aerva is on it</h2><p>${esc(what)}.</p><p>You will hear from Aerva within 24 hours, sooner if we can. You will be offered other places for the rest of your stay — you pay only any difference in price — or everything you paid is refunded in full, including Aerva’s service fee.</p>`);
   await require('./_alerts').alertHost(sql, o.host_id, `Aerva URGENT: your guest at ${o.property_name} reported a problem on arrival. Reply in Messages now.`);
   await logAudit(sql, { action: 'checkin_report_opened', success: true, actorType: 'guest', actorIdentifier: String(o.guest_id || ''), targetType: 'order', targetId: o.id,
     metadata: { reportId: report.id, reason, listingHidden: !!before, guestTicket: guestTicket && guestTicket.ref, hostTicket: hostTicket && hostTicket.ref } });
@@ -263,6 +299,9 @@ async function decideReport(sql, { reportId, upheld, note = '', adminLabel = 'ad
     await postThreadMessage(sql, r.order_id, 'system', 'Aerva has reviewed the report made on arrival and did not uphold it. The booking stays as it is.');
     await email(o.guest_email, `Your report about ${o.property_name}`, `<h2 style="font-family:Georgia,serif;">Aerva has reviewed your report</h2><p>After checking with your host, Aerva did not uphold it: ${esc(text)}</p><p>Your booking stays as it is. Aerva’s decision is final.</p>`);
     await email(host && host.email, `Report not upheld: ${o.property_name}`, `<p>Aerva reviewed your guest’s report on arrival and did not uphold it.${restored ? ' Your listing is live again.' : ''} The hold on this booking’s payout is lifted.</p>`);
+    await tellGiftGuest(sql, r.order_id, `Your report about ${o.property_name}`, 'Aerva has reviewed the report',
+      `<p>After checking with the host, Aerva did not uphold the report about <strong>${esc(stayLine(o))}</strong>. The booking stays as it is.</p>
+       <p style="background:#f6f1ea; border-left:3px solid #a9884f; padding:10px 14px; white-space:pre-wrap;">${esc(text)}</p>`);
     await logAudit(sql, { action: 'checkin_report_cleared', success: true, actorType: 'admin', actorIdentifier: adminLabel, targetType: 'order', targetId: r.order_id, metadata: { reportId: r.id, reason: r.reason, listingRestored: restored, note: text } });
     return { status: 'cleared', listingRestored: restored };
   }
@@ -281,7 +320,8 @@ async function decideReport(sql, { reportId, upheld, note = '', adminLabel = 'ad
   const nightsLeft = rebookRange(o).nights;
   await S.systemUpdate(sql, r.guest_ticket_id, `Aerva has confirmed your report. ${nightsLeft ? 'We are finding you another place nearby for the rest of your stay; the options will appear in My Bookings shortly. You pay only any difference in price.' : 'There are no nights left to move, so'} If none suits you, you can decline them and everything you paid is refunded in full, including Aerva’s service fee.`);
   await S.systemUpdate(sql, r.host_ticket_id, `Aerva has confirmed the guest’s report. You are not paid for this booking; anything already paid out for it is deducted from your later payouts.${r.reason === 'fake' ? ' The listing is blocked: only Aerva can unblock it, and its future bookings are reviewed by Aerva.' : ''}`, { resolve: true });
-  await postThreadMessage(sql, r.order_id, 'system', `Aerva has confirmed the report made on arrival. Aerva will offer the guest another place or a full refund. The host is not paid for this booking.`);
+  await postThreadMessage(sql, r.order_id, 'system', `Aerva has confirmed the report made on arrival. The guest is offered another place or a full refund, and you are not paid for this booking.`, { audience: 'host' });
+  await postThreadMessage(sql, r.order_id, 'system', 'Aerva confirmed your report. You will be offered other places for the rest of your stay — you pay only any difference in price — or everything you paid is refunded in full.', { audience: 'guest' });
   await email(o.guest_email, `Aerva confirmed your report — we are finding you another place`,
     `<h2 style="font-family:Georgia,serif;">Aerva confirmed your report</h2><p><strong>${esc(stayLine(o))}</strong></p>
      <p>We are finding you another place nearby for the rest of your stay. The options will appear in My Bookings shortly: you pay only any difference in price, and if a place costs less the difference comes back to you as Aerva credit. If none suits you, decline them and everything you paid is refunded in full, including Aerva’s service fee.</p>
@@ -289,7 +329,35 @@ async function decideReport(sql, { reportId, upheld, note = '', adminLabel = 'ad
   await email(host && host.email, `Decision on the report at ${o.property_name}`,
     `<h2 style="font-family:Georgia,serif;">Aerva confirmed your guest’s report</h2><p><strong>${esc(stayLine(o))}</strong></p>
      <p>You are not paid for this booking; anything already paid out for it is deducted from your later payouts.${r.reason === 'fake' ? ' The listing is blocked: you cannot reactivate it, and only Aerva can unblock it. Its future bookings are reviewed by Aerva, and those guests are moved or refunded.' : ''}</p>${text ? `<p>${esc(text)}</p>` : ''}`);
-  await email(supportTo(), `Check-in promise confirmed — send the guest options now (${o.code})`, `<p>${esc(stayLine(o))}: choose up to ${MAX_OFFERS} places in Admin → Approvals → Check-in promise and send them, or refund in full.</p>`);
+  await tellGiftGuest(sql, r.order_id, `Aerva confirmed the report about ${o.property_name}`, 'Aerva confirmed the report',
+    `<p><strong>${esc(stayLine(o))}</strong></p>
+     <p>Aerva has confirmed what was reported on arrival.${nightsLeft ? ' Aerva is finding another place nearby for the rest of the stay.' : ''} The host is not paid for this booking.</p>`);
+  // Places go out at once, without waiting for someone at a desk: a guest
+  // is standing outside at midnight (owner, 12 Nov 2026). Aerva picks the
+  // nearest, then the closest in price — the same list the admin sees, and
+  // an admin can replace them at any time with Send places.
+  let autoOffers = 0;
+  if (nightsLeft) {
+    try {
+      const all = await candidates(sql, { reportId: r.id });
+      const pick = (all.candidates || []).slice(0, MAX_OFFERS);
+      if (pick.length) {
+        const sent = await sendOffers(sql, { reportId: r.id, options: pick.map(k => ({ listingId: k.listingId, roomId: k.roomId })), adminLabel: 'Aerva (automatic)' });
+        autoOffers = (sent.offers || []).length;
+      }
+    } catch (err) {
+      // A group booking, nothing free nearby, or the list could not be
+      // priced: the guest keeps "Refund me in full", and the email below
+      // asks an admin to look.
+      console.error('check-in promise: places not offered automatically:', err.message);
+    }
+  }
+  if (!autoOffers) {
+    await S.systemUpdate(sql, r.guest_ticket_id, 'Aerva has not found another place nearby that is free for the rest of your stay. You can ask to be refunded in full at any time, and we will keep looking meanwhile.');
+    await tellGiftGuest(sql, r.order_id, `No other place yet near ${o.property_name}`, 'Aerva has not found another place yet',
+      `<p>Aerva is still looking for somewhere nearby for the rest of the stay. The person who booked it can ask for a full refund instead at any time.</p>`);
+  }
+  await email(supportTo(), autoOffers ? `Check-in promise confirmed — ${autoOffers} place(s) offered automatically (${o.code})` : `Check-in promise confirmed — NO place offered, look now (${o.code})`, `<p>${esc(stayLine(o))}: choose up to ${MAX_OFFERS} places in Admin → Approvals → Check-in promise and send them, or refund in full.</p>`);
   await logAudit(sql, { action: 'checkin_report_confirmed', success: true, actorType: 'admin', actorIdentifier: adminLabel, targetType: 'order', targetId: r.order_id,
     metadata: { reportId: r.id, reason: r.reason, listingBlocked: r.reason === 'fake', note: text } });
   return { status: 'confirmed', nightsLeft };
@@ -321,7 +389,8 @@ async function startListingReview(sql, { orderId, adminLabel = 'admin', note = '
     subject: 'Your booking: Aerva will move you or refund you in full',
     body: `Aerva could not confirm that ${stayLine(o)} exists as listed, so your stay there cannot go ahead.\n\nAerva will offer you other places nearby for the same nights — you pay only any difference in price, and if a place costs less the difference comes back as Aerva credit. If none suits you, everything you paid is refunded in full, including Aerva’s service fee. You will see the options in My Bookings.` }) : null;
   if (t) await sql`UPDATE checkin_reports SET guest_ticket_id = ${t.id} WHERE id = ${r.id}`;
-  await require('./_cancellations').postThreadMessage(sql, o.id, 'system', 'Aerva could not confirm this listing exists as listed, so this booking will be moved to another place or refunded in full. The host is not paid for it.');
+  await require('./_cancellations').postThreadMessage(sql, o.id, 'system', 'Aerva could not confirm this listing exists as listed, so this booking is moved to another place or refunded in full. You are not paid for it.', { audience: 'host' });
+  await require('./_cancellations').postThreadMessage(sql, o.id, 'system', 'This stay cannot go ahead as booked. Aerva will offer you other places for the same nights — you pay only any difference in price — or refund everything you paid in full.', { audience: 'guest' });
   await email(o.guest_email, `Your booking at ${o.property_name}: Aerva will move you or refund you`,
     `<h2 style="font-family:Georgia,serif;">Your stay cannot go ahead as booked</h2><p>Aerva could not confirm that <strong>${esc(o.property_name)}</strong> exists as listed. We will offer you other places for the same nights (you pay only any difference), or refund everything you paid, including Aerva’s service fee.</p>
      <p><a href="https://aerva.in/index.html?view=my-bookings" style="color:#8a6c39;">Open My Bookings</a></p>`);
@@ -629,7 +698,7 @@ async function applyRebook(sql, razorpay, change, { paymentId = null } = {}) {
   const { postThreadMessage } = C;
   const money = diff > 0 ? `You paid the difference of ${inr(diff)}.` : diff < 0 ? `${inr(-diff)} comes back to you${credit ? ` (${inr(credit)} as Aerva credit${expiresAt ? ` until ${new Date(expiresAt).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric', timeZone: 'Asia/Kolkata' })}` : ''})` : ''}${couponBack ? `, ${inr(couponBack)} as a coupon` : ''}${creditBack ? `, ${inr(creditBack)} back on your earlier Aerva credit` : ''}${depositBack ? `, ${inr(depositBack)} of your deposit refunded to your original payment` : ''}.` : 'There is no difference to pay.';
   await S.systemUpdate(sql, r.guest_ticket_id, `You are now booked at ${q.name}, ${niceDate(q.from)} – ${niceDate(q.to)}${code ? ` (booking ${code})` : ''}. ${money}`, { resolve: true });
-  await postThreadMessage(sql, o.id, 'system', `The guest has been moved to another place under Aerva’s check-in promise. The host is not paid for this booking.`);
+  await postThreadMessage(sql, o.id, 'system', `The guest has been moved to another place under Aerva’s check-in promise. You are not paid for this booking.`, { audience: 'host' });
   await postThreadMessage(sql, newId, 'system', `Booking made by Aerva under its check-in promise: ${q.name}, ${niceDate(q.from)} – ${niceDate(q.to)}, ${plural(Number(d.guests), 'guest')}.`);
   const orig = r.original || {};
   await email(o.guest_email, `You are booked at ${q.name}`,
@@ -647,6 +716,9 @@ async function applyRebook(sql, razorpay, change, { paymentId = null } = {}) {
   const oh = await hostAccount(sql, o.host_id);
   await email(oh && oh.email, `Booking closed: ${o.property_name}`,
     `<p>Your guest for ${esc(stayLine(o))} was moved to another place under Aerva’s check-in promise. You are not paid for this booking.${settled.hostRecovered > 0 ? ` Your payout for it had already been sent, so ${inr(settled.hostRecovered)} will be deducted from your later payouts.` : ''}</p>`);
+  await tellGiftGuest(sql, o.id, `You are booked at ${q.name}`, 'You have a new place for the rest of the stay',
+    `<p>Under Aerva's check-in promise you are now booked at <strong>${esc(q.name)}</strong>, ${esc(niceDate(q.from))} – ${esc(niceDate(q.to))}${code ? ` (booking ${esc(code)})` : ''}.</p>
+     <p>The address and check-in details are in My Bookings.</p>`);
   await logAudit(sql, { action: 'checkin_rebook_applied', success: true, actorType: 'system', targetType: 'order', targetId: o.id,
     metadata: { reportId: r.id, changeId: change.id, newOrderId: newId, oldTotal: change.old_total, newTotal: change.new_total, difference: diff, credit, couponBack, creditBack, depositBack, recovered: settled.hostRecovered || 0, paymentId } });
   return { ok: true, newOrderId: newId, difference: diff, credit: credit + creditBack, couponBack };
@@ -687,6 +759,8 @@ async function refundInFull(sql, razorpay, { reportId, by = 'admin', guestId = n
   await email(o.guest_email, `Full refund: ${o.property_name}`, `<h2 style="font-family:Georgia,serif;">You are refunded in full</h2><p>${esc(stayLine(o))}: <strong>${inr(total)}</strong> — the booking price, GST, deposit and Aerva’s service fee — is refunded to your original payment method${out.couponBack ? ' (the part paid by coupon comes back as a coupon)' : ''}. Refunds usually arrive in 5–7 working days.</p>`);
   const h = await hostAccount(sql, o.host_id);
   if (recovered) await email(h && h.email, `Amount to be deducted: ${o.property_name}`, `<p>The guest for ${esc(stayLine(o))} was refunded in full under Aerva’s check-in promise. Your payout for this booking had already been sent, so ${inr(recovered)} will be deducted from your later payouts. You can see it in My Earnings → Payout details.</p>`);
+  await tellGiftGuest(sql, r.order_id, `The stay at ${o.property_name} is cancelled and refunded`, 'The stay is refunded in full',
+    `<p><strong>${esc(stayLine(o))}</strong> is cancelled under Aerva's check-in promise, and everything paid for it has been refunded.</p>`);
   await logAudit(sql, { action: 'checkin_refunded_in_full', success: true, actorType: by === 'guest' ? 'guest' : 'admin', actorIdentifier: by === 'guest' ? String(guestId) : adminLabel, targetType: 'order', targetId: r.order_id,
     metadata: { reportId: r.id, refundCash: out.refundCash, couponBack: out.couponBack, creditBack: out.creditBack, recovered } });
   return { refunded: total, refundCash: out.refundCash, couponBack: out.couponBack || 0, creditBack: out.creditBack || 0, recovered };
@@ -754,14 +828,20 @@ async function decorateGuestBookings(sql, bookings) {
       const x = ex.get(Number(b.id)) || {};
       if (r && r.status === 'rebooked') { b._hide = true; continue; }
       if (r) {
-        b.checkin = { reportId: r.id, reason: r.reason, status: r.status, statusText: r.status === 'confirmed' && !(r.offers || []).length
+        // A booking that is no longer live (cancelled, refunded, moved) has
+        // nothing left to choose: offering a place that cannot be taken is a
+        // dead end (owner, 12 Nov 2026). Say what happened instead.
+        const live = b.status === 'paid';
+        b.checkin = { reportId: r.id, reason: r.reason, status: r.status, statusText: !live && ACTIVE.includes(r.status)
+            ? 'Aerva confirmed your report. This booking has since been cancelled, so there is nothing to choose here — anything owed to you comes back to the payment you used.'
+            : r.status === 'confirmed' && !(r.offers || []).length
             // A group booking is never moved (sendOffers refuses it): every payer is refunded in full.
-            ? (x.group_booking_id ? 'Aerva confirmed your report · a group booking is not moved to another place: every payer is refunded in full to their own payment' : 'Aerva confirmed your report · we are finding you a new place')
+            ? (x.group_booking_id ? 'Aerva confirmed your report · a group booking is not moved to another place: every payer is refunded in full to their own payment' : 'Aerva confirmed your report · no other place nearby is free for these nights yet. Aerva is still looking — or ask for a full refund now.')
             : STATUS[r.status] || '',
           note: r.status === 'cleared' ? r.decision_note : null,
-          offers: r.status === 'confirmed' ? (r.offers || []).map(k => ({ n: k.n, name: k.name, city: k.city, area: k.area, photo: k.photo, distanceKm: k.distanceKm, from: k.from, to: k.to, nights: k.nights,
+          offers: live && r.status === 'confirmed' ? (r.offers || []).map(k => ({ n: k.n, name: k.name, city: k.city, area: k.area, photo: k.photo, distanceKm: k.distanceKm, from: k.from, to: k.to, nights: k.nights,
             subtotal: k.subtotal, gst: k.gst, fee: k.fee, deposit: k.deposit, total: k.total, oldTotal: k.oldTotal, difference: k.difference })) : [],
-          canDecline: r.status === 'confirmed' };
+          canDecline: live && r.status === 'confirmed' };
         if (ACTIVE.includes(r.status)) { b.can_change = false; b.can_cancel_request = false; b.can_report = false; }
       }
       const m = movedTo.get(Number(b.id));
@@ -779,6 +859,38 @@ async function decorateGuestBookings(sql, bookings) {
     }
     for (let i = bookings.length - 1; i >= 0; i--) if (bookings[i]._hide) bookings.splice(i, 1);
   } catch (err) { console.error('check-in promise view failed:', err.message); }
+  return bookings;
+}
+
+// The guest staying on a gift sees where the report stands on their own
+// copy of the booking — read only. Every choice and every rupee belongs to
+// the person who paid, so there are no offers and no buttons here.
+// Called AFTER _gifts.js has added their rows.
+const SHARED_STATUS = {
+  open: 'Reported on arrival · Aerva is checking it now',
+  confirmed: 'Aerva confirmed the report · Aerva is settling a new place or a refund',
+  rebooking: 'Moving to the new place…',
+  refunding: 'The refund is being made…',
+  cleared: 'Aerva reviewed the report and did not uphold it',
+  refunded: 'Cancelled and refunded in full under Aerva’s check-in promise',
+  rebooked: 'Moved to another place under Aerva’s check-in promise'
+};
+async function decorateSharedBookings(sql, bookings) {
+  const rows = (bookings || []).filter(b => b && b.shared === 'gift' && !b.checkin);
+  if (!rows.length || !(await ready(sql))) return bookings;
+  try {
+    const ids = [...new Set(rows.map(b => Number(b.id)))];
+    const reps = await sql`SELECT DISTINCT ON (order_id) order_id, id, reason, status, decision_note FROM checkin_reports WHERE order_id = ANY(${ids}) ORDER BY order_id, id DESC`;
+    const byOrder = new Map(reps.map(r => [Number(r.order_id), r]));
+    for (const b of rows) {
+      const r = byOrder.get(Number(b.id));
+      if (!r) continue;
+      b.checkin = { reportId: null, reason: r.reason, status: r.status, statusText: SHARED_STATUS[r.status] || '',
+        note: r.status === 'cleared' ? r.decision_note : null, offers: [], canDecline: false,
+        readOnly: true, byBuyer: b.gift_from || null };
+      if (ACTIVE.includes(r.status)) b.can_report_arrival = false;
+    }
+  } catch (err) { console.error('check-in promise (shared) view failed:', err.message); }
   return bookings;
 }
 
@@ -901,5 +1013,5 @@ async function runJob(sql, { deadlineMs = 4000 } = {}) {
 
 module.exports = {
   REASONS, MAX_OFFERS, NOT_READY, HOLD_NOTICE_ID, holdFrom, isArrivalReason, ready, payoutHolds, holdFor, openReport, decideReport, startListingReview, candidates, sendOffers,
-  quoteRebook, rebookHolds, acceptOffer, applyRebook, refundInFull, declineOffers, confirmStay, decorateGuestBookings, adminView, balances, unblockListing, hostView, runJob, rebookRange
+  quoteRebook, rebookHolds, acceptOffer, applyRebook, refundInFull, declineOffers, confirmStay, decorateGuestBookings, decorateSharedBookings, adminView, balances, unblockListing, hostView, runJob, rebookRange
 };

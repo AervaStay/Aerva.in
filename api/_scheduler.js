@@ -77,10 +77,14 @@ async function logRun(sql, name, since, ok, result, error, affected) {
 }
 
 // Recent logged runs of one job (or all), newest first, for the admin page.
-async function jobRuns(sql, { job = null, limit = 30 } = {}) {
+async function jobRuns(sql, { job = null, limit = 30, withPeople = false } = {}) {
   try {
+    // withPeople: only runs that affected someone. Admin → Batch Jobs says
+    // "Last affected N people" about the last such run, which is not always
+    // the last run, so "see who" must ask for that run and not the newest.
     return await sql`SELECT id, job, started_at, finished_at, ok, result, error, affected_count, affected
                      FROM job_run_log WHERE (${job}::text IS NULL OR job = ${job})
+                       AND (${!!withPeople} = false OR affected_count > 0)
                      ORDER BY started_at DESC LIMIT ${Math.min(100, Math.max(1, Number(limit) || 30))}`;
   } catch (err) { return []; }
 }

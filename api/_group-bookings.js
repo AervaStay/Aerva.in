@@ -117,6 +117,14 @@ function topupOwed(g, claims) {
   return Math.max(0, due - paid);
 }
 // Paid toward the group's total: places, balances and the organiser's rest.
+// The security deposit is the ORGANISER's alone (owner, 12 Nov 2026): the
+// places split the stay, its GST and the service fee, and the deposit is
+// added to the organiser's own first payment. g.shares therefore add up to
+// the total WITHOUT the deposit.
+const depositOf = (g) => Math.round(Number((g && g.stay && g.stay.detail && g.stay.detail.depositAmount) || 0));
+const sharesTotal = (g) => Math.max(0, Math.round(Number(g.total) || 0) - depositOf(g));
+// What a payment put towards the PLACES (the organiser's deposit taken off).
+const shareAmount = (c, dep) => Math.max(0, Number(c.amount || 0) - (c && c.carries_deposit ? Math.round(Number(dep) || 0) : 0));
 const paidToward = (claims) => sum(claims.filter(c => c.status === 'paid' && ['places', 'topup', 'gap'].includes(c.kind)).map(c => c.amount));
 // What is still to pay for the whole stay (the organiser's "rest").
 const restOf = (g, claims) => Math.max(0, Number(g.total) - paidToward(claims));
@@ -295,7 +303,8 @@ async function startGroup(sql, razorpay, { guestId, email, firstName, lastName, 
   if (places < 2) throw userError('Splitting the payment needs at least 2 guests.');
   const k = Math.round(Number(payNow) || 0);
   if (!(k >= 1 && k <= places - 1)) throw userError(`Choose how many places you pay for now: from 1 to ${places - 1}.`);
-  const shares = splitShares(total, places);
+  const deposit = Math.round(Number(detail.depositAmount) || 0);
+  const shares = splitShares(Math.max(0, Math.round(Number(total) || 0) - deposit), places);
   const token = crypto.randomBytes(12).toString('hex');
   const g = (await sql`
     INSERT INTO group_bookings (token, organiser_guest_id, organiser_first_name, organiser_last_name, organiser_email, listing_id, room_id, arrival, departure,
@@ -304,11 +313,12 @@ async function startGroup(sql, razorpay, { guestId, email, firstName, lastName, 
             ${places}, ${JSON.stringify({ input, detail })}::jsonb, ${total}, ${shares}, ${agreement || null}, ${prices ? JSON.stringify(prices) : null}::jsonb, 'starting', now())
     RETURNING *`)[0];
   g.stay = { input, detail };
-  const amount = sum(shares.slice(0, k));
+  // The organiser's own payment: their places plus the whole deposit.
+  const amount = sum(shares.slice(0, k)) + deposit;
   const claim = (await sql`
-    INSERT INTO group_claims (group_id, guest_id, first_name, last_name, email, phone, kind, places, seats, amount, expires_at, nonrefundable_ack_at)
+    INSERT INTO group_claims (group_id, guest_id, first_name, last_name, email, phone, kind, places, seats, amount, expires_at, nonrefundable_ack_at, carries_deposit)
     VALUES (${g.id}, ${guestId}, ${firstName}, ${lastName}, ${email}, ${phone || null}, 'places', ${k}, ${Array.from({ length: k }, (_, i) => i + 1)}, ${amount},
-            now() + make_interval(secs => ${HOLD_SECONDS}), now())
+            now() + make_interval(secs => ${HOLD_SECONDS}), now(), ${deposit > 0})
     RETURNING *`)[0];
   const seats = await takeSeats(sql, g, claim.id, k);
   if (!seats) throw new Error('could not take the organiser’s places in a new group');
@@ -316,7 +326,7 @@ async function startGroup(sql, razorpay, { guestId, email, firstName, lastName, 
   await sql`UPDATE group_claims SET razorpay_order_id = ${order.id} WHERE id = ${claim.id}`;
   await sql`UPDATE group_bookings SET hold_order_id = ${order.id} WHERE id = ${g.id}`;
   await logAudit(sql, { action: 'booking_order_created', success: true, actorType: 'guest', actorIdentifier: email || null, targetType: 'group_booking', targetId: g.id,
-    metadata: { razorpayOrderId: order.id, group: true, groupId: g.id, claimId: claim.id, places, payNow: k, amount, total, holdIds, commitment: true, nonRefundable: true } });
+    metadata: { razorpayOrderId: order.id, group: true, groupId: g.id, claimId: claim.id, places, payNow: k, amount, total, deposit, holdIds, commitment: true, nonRefundable: true } });
   return { order, group: g, claim: { ...claim, razorpay_order_id: order.id }, token, shares, amount };
 }
 
@@ -601,7 +611,7 @@ async function openGroup(sql, razorpay, g, claim) {
     await cancelGroup(sql, razorpay, Object.assign({}, g, opened, { stay: g.stay }), taken);
     return { status: 'conflict', group: { token: g.token }, message: `${taken} Your payment is being refunded in full — we have emailed you.` };
   }
-  const rest = sum(g.shares) - claim.amount;
+  const rest = sum(g.shares) - shareAmount(claim, depositOf(g));
   await sendMail(g.organiser_email, 'Your group booking is open: share the link', frame('Your group booking is open for 2 hours',
     `<p>Hello ${esc(g.organiser_first_name || '')},</p><p>You paid for ${claim.places} of ${g.places} places (${inr(claim.amount)}) for ${stayLine(g)}.</p>
      <p>Each place is <strong>${inr(g.shares[0])}</strong>${g.shares[g.shares.length - 1] !== g.shares[0] ? ` (the last place${g.shares.filter(s => s !== g.shares[0]).length === 1 ? '' : 's'} ${inr(g.shares[g.shares.length - 1])})` : ''}. Send this link to your friends so each can pay for their own place:</p>
@@ -671,7 +681,7 @@ async function completeConfirm(sql, razorpay, g) {
   const done = (await sql`UPDATE group_bookings SET status = 'confirmed', order_id = ${orderId}, outcome = ${outcome} WHERE id = ${g.id} AND status = 'confirming' RETURNING id`)[0];
   if (!done) return { outcome, orderId };
   // Everyone who paid: the confirmation email, with the non-refundable warning.
-  const warning = `<p style="background:#fff4e5; border:1px solid #e8c48a; border-radius:8px; padding:10px 12px; font-size:13px;"><strong>This group booking is non-refundable.</strong> If plans change, nothing is refunded, whatever the listing’s cancellation policy (any deposit is still refunded to each payer). If Aerva approves a cancellation for a natural disaster or government order, or the host cancels, each person gets their own share as Aerva credit (refundable to their payment any time); if Aerva’s check-in promise is not kept, each person is refunded in full.</p>`;
+  const warning = `<p style="background:#fff4e5; border:1px solid #e8c48a; border-radius:8px; padding:10px 12px; font-size:13px;"><strong>This group booking is non-refundable.</strong> If plans change, nothing is refunded, whatever the listing’s cancellation policy (any deposit is still refunded to the organiser, who paid it). If Aerva approves a cancellation for a natural disaster or government order, or the host cancels, each person gets their own share as Aerva credit (refundable to their payment any time); if Aerva’s check-in promise is not kept, each person is refunded in full.</p>`;
   const byPerson = new Map();
   claims.forEach(c => { const p = byPerson.get(c.guest_id) || { email: c.email, first: c.first_name, places: 0, paid: 0 }; p.places += c.places; p.paid += c.amount; byPerson.set(c.guest_id, p); });
   let pdf = null;
@@ -847,8 +857,9 @@ async function addGuests(sql, razorpay, { token, guestId, places }) {
   const d = priced.detail;
   const total = quoteTotal(d);
   const paidSeats = (await sql`SELECT s.seat FROM group_seats s JOIN group_claims c ON c.id = s.claim_id WHERE s.group_id = ${g.id} AND c.status = 'paid' AND c.kind = 'places' ORDER BY s.seat`).map(r => Number(r.seat));
-  const paid = sum(claims.filter(c => c.status === 'paid' && (c.kind === 'places' || c.kind === 'topup')).map(c => c.amount));
-  const r = repriceShares(g, { total, newPlaces: N, paidSeats, paid });
+  const dep = Math.round(Number(d.depositAmount) || 0);
+  const paid = sum(claims.filter(c => c.status === 'paid' && (c.kind === 'places' || c.kind === 'topup')).map(c => shareAmount(c, depositOf(g))));
+  const r = repriceShares(g, { total: Math.max(0, total - dep), newPlaces: N, paidSeats, paid });
   if (!r) throw userError('The stay could not be priced for that many guests. Please raise a request in the Resolution Center (Help → Raise a request).');
   const text = `Guest${k === 1 ? '' : 's'} added — now ${N} places, ${inr(r.perPlace)} each${r.lastPlace !== r.perPlace ? ` (last place ${inr(r.lastPlace)})` : ''}. The whole stay is ${inr(total)} for ${N} guests.${r.topup ? ` The places already paid now owe a balance of ${inr(r.topup)}, which anyone in the group can pay.` : ''}`;
   const notice = JSON.stringify([{ at: new Date().toISOString(), text }]);
@@ -1164,7 +1175,7 @@ async function status(sql, razorpay, token, viewerGuestId = null) {
     token: g.token, status: g.status, outcome: g.outcome || null,
     stay: { listingId: g.listing_id, name: l.property_name || g.stay.detail.suite, city: l.city || null, area: l.area || null, photo: l.cover_photo_url || null,
             arrival: dateStr(g.arrival), departure: dateStr(g.departure), nights: g.stay.detail.nights, checkIn: l.check_in_time || null, checkOut: l.check_out_time || null },
-    places: g.places, total: g.total, shares: g.shares, freeShares,
+    places: g.places, total: g.total, shares: g.shares, freeShares, deposit: depositOf(g),
     // What a place still to pay costs now (paid places keep what they paid).
     perPlace: freeShares.length ? freeShares[0] : g.shares[0], lastPlace: freeShares.length ? freeShares[freeShares.length - 1] : g.shares[g.shares.length - 1],
     paidPlaces: g.status === 'confirmed' ? Math.max(P + covered, sum(payers.map(p => p.places))) : P, placesLeft: Math.max(0, g.places - seatsTaken), beingPaid: Math.max(0, seatsTaken - P),
@@ -1180,7 +1191,7 @@ async function status(sql, razorpay, token, viewerGuestId = null) {
     myPaid: sum(mineClaims.filter(c => c.status === 'paid').map(c => c.amount)),
     myRefunded: sum(mineClaims.filter(c => c.status === 'paid' && c.refund_status && c.refund_status !== 'failed').map(c => Math.round(Number(c.refund_amount || 0) / 100))),
     myOpenPayment: mineClaims.some(c => c.status === 'open'),
-    policy: 'Non-refundable group booking: no refund if plans change, whatever the listing’s policy (any deposit is refunded).',
+    policy: 'Non-refundable group booking: no refund if plans change, whatever the listing’s policy (any deposit goes back to the organiser, who paid it).',
     orderId: g.order_id && (isOrg || mineClaims.some(c => c.status === 'paid')) ? g.order_id : null
   };
   // A confirmed booking that was cancelled afterwards (by the organiser, the host or Aerva): the page must not go on saying "Confirmed".
@@ -1221,7 +1232,7 @@ async function publicPreview(sql, token) {
   const l = (await sql`SELECT property_name, city, cover_photo_url FROM listings WHERE id = ${g.listing_id}`)[0] || {};
   return { token: g.token, status: g.status, organiserFirstName: g.organiser_first_name || null,
     stay: { name: l.property_name || g.stay.detail.suite, city: l.city || null, photo: l.cover_photo_url || null, arrival: dateStr(g.arrival), departure: dateStr(g.departure), nights: g.stay.detail.nights },
-    places: g.places, perPlace: g.shares[0], lastPlace: g.shares[g.shares.length - 1],
+    places: g.places, perPlace: g.shares[0], lastPlace: g.shares[g.shares.length - 1], deposit: depositOf(g),
     ...(await (async () => {
       if (!(await addReady(sql))) return {};
       const held = new Set((await sql`SELECT seat FROM group_seats WHERE group_id = ${g.id}`).map(r => Number(r.seat)));
@@ -1245,7 +1256,25 @@ async function decorateBookings(sql, guestId, bookings) {
       SELECT g.*, (SELECT COALESCE(sum(c.places), 0)::int FROM group_claims c WHERE c.group_id = g.id AND c.guest_id = ${guestId} AND c.status = 'paid' AND c.kind IN ('places', 'change')) AS my_places,
              (SELECT COALESCE(sum(c.amount), 0)::int FROM group_claims c WHERE c.group_id = g.id AND c.guest_id = ${guestId} AND c.status = 'paid') AS my_paid,
              (SELECT COALESCE(sum(c.places), 0)::int FROM group_claims c WHERE c.group_id = g.id AND c.status = 'paid' AND c.kind IN ('places', 'change')) AS paid_total,
-             EXISTS (SELECT 1 FROM group_claims c WHERE c.group_id = g.id AND c.status = 'paid' AND c.kind = 'gap') AS gap_paid
+             EXISTS (SELECT 1 FROM group_claims c WHERE c.group_id = g.id AND c.status = 'paid' AND c.kind = 'gap') AS gap_paid,
+             -- Who is going: everyone who paid for a place. First names only.
+             (SELECT COALESCE(json_agg(json_build_object('firstName', c.first_name, 'places', c.places,
+                                                         'organiser', c.guest_id = g.organiser_guest_id,
+                                                         'you', c.guest_id = ${guestId}) ORDER BY c.id), '[]'::json)
+                FROM group_claims c WHERE c.group_id = g.id AND c.status = 'paid' AND c.kind IN ('places', 'change') AND c.places > 0) AS payers_json,
+             -- What came back to THIS payer's own payment (a deposit, say). A
+             -- group's refunds are split over everyone's payments, so the
+             -- order's total is not what this person got back.
+             (SELECT COALESCE(sum(r.amount), 0)::bigint FROM refunds r
+               WHERE r.order_id = g.order_id AND r.status IN ('pending', 'processed')
+                 AND r.razorpay_payment_id IN (SELECT c.razorpay_payment_id FROM group_claims c
+                                               WHERE c.group_id = g.id AND c.guest_id = ${guestId} AND c.status = 'paid'
+                                                 AND c.razorpay_payment_id IS NOT NULL)) AS my_refunded_paise,
+             (SELECT BOOL_OR(r.status = 'pending') FROM refunds r
+               WHERE r.order_id = g.order_id AND r.status IN ('pending', 'processed')
+                 AND r.razorpay_payment_id IN (SELECT c.razorpay_payment_id FROM group_claims c
+                                               WHERE c.group_id = g.id AND c.guest_id = ${guestId} AND c.status = 'paid'
+                                                 AND c.razorpay_payment_id IS NOT NULL)) AS my_refund_pending
       FROM group_bookings g
       WHERE g.status <> 'starting' AND (g.organiser_guest_id = ${guestId} OR EXISTS (SELECT 1 FROM group_claims c WHERE c.group_id = g.id AND c.guest_id = ${guestId} AND c.status IN ('paid', 'rejected')))
         AND (g.status IN ('open', 'awaiting_confirm', 'awaiting_gap', 'confirming', 'confirmed') OR g.decided_at > now() - interval '14 days')
@@ -1256,14 +1285,17 @@ async function decorateBookings(sql, guestId, bookings) {
       if (g.status === 'confirmed' && g.gap_paid && Number(g.paid_total) < Number(g.places)) { if (isOrg) g.my_places += Number(g.places) - Number(g.paid_total); g.paid_total = Number(g.places); }
       const b = g.order_id ? bookings.find(x => Number(x.id) === Number(g.order_id)) : null;
       // Non-refundable group booking: each person's own share is shown.
-      if (b) { b.group = { token: g.token, places: g.places, paidPlaces: g.paid_total, organiser: isOrg, myPlaces: g.my_places, myPaid: g.my_paid, nonRefundable: true, label: 'Non-refundable group booking' }; continue; }
+      const myBack = { myRefunded: Math.round(Number(g.my_refunded_paise || 0) / 100), myRefundPending: !!g.my_refund_pending,
+        payers: (g.payers_json || []).map(p => ({ firstName: p.firstName || '', places: Number(p.places) || 0, organiser: !!p.organiser, you: !!p.you })),
+        coveredByOrganiser: Math.max(0, Number(g.places || 0) - sum((g.payers_json || []).map(p => Number(p.places) || 0))) };
+      if (b) { b.group = Object.assign({ token: g.token, places: g.places, paidPlaces: g.paid_total, organiser: isOrg, myPlaces: g.my_places, myPaid: g.my_paid, nonRefundable: true, label: 'Non-refundable group booking' }, myBack); continue; }
       if (g.status === 'confirmed' && g.order_id && !isOrg && g.my_paid > 0) {
         const o = (await sql`SELECT o.id, o.suite_name, o.listing_id, o.arrival, o.departure, o.nights, o.guests, o.status, to_jsonb(o)->>'confirmation_code' AS confirmation_code,
                                     l.property_name, l.city, to_jsonb(l)->>'area' AS area, l.formatted_address, l.check_in_time, l.check_out_time, COALESCE(l.listing_type, 'stay') AS listing_type,
                                     (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date AS local_today
                              FROM orders o JOIN listings l ON l.id = o.listing_id WHERE o.id = ${g.order_id}`)[0];
         if (!o) continue;
-        bookings.push({ id: o.id, shared: 'group', group: { token: g.token, places: g.places, myPlaces: g.my_places, myPaid: g.my_paid, organiser: false, organiserFirstName: g.organiser_first_name, nonRefundable: true, label: 'Non-refundable group booking' },
+        bookings.push({ id: o.id, shared: 'group', group: Object.assign({ token: g.token, places: g.places, myPlaces: g.my_places, myPaid: g.my_paid, organiser: false, organiserFirstName: g.organiser_first_name, nonRefundable: true, label: 'Non-refundable group booking' }, myBack),
           you_paid: g.my_paid, suite_name: o.suite_name, listing_id: o.listing_id, listing_type: o.listing_type, arrival: dateStr(o.arrival), departure: dateStr(o.departure),
           nights: o.nights, guests: o.guests, status: o.status, confirmation_code: o.status === 'paid' ? o.confirmation_code : null, listing_name: o.property_name,
           listing_city: o.city, listing_area: o.area, listing_address: o.status === 'paid' ? o.formatted_address : null, check_in_time: o.check_in_time, check_out_time: o.check_out_time,
