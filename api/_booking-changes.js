@@ -273,7 +273,7 @@ async function quoteChange(sql, orderId, guestId, input, requestedAt = null) {
   const askedOn = requestedAt ? localDateAt(requestedAt, o.timezone) : o.todayStr;
   const arrival = o.started ? o.arrivalStr : String(input.arrival || '').slice(0, 10);
   if (!/^\d{4}-\d{2}-\d{2}$/.test(arrival)) throw userError('Choose your new date.');
-  if (o.started && input.arrival && String(input.arrival).slice(0, 10) !== o.arrivalStr) throw userError('You have already checked in, so check-in cannot move. You can still change check-out, guests and add-ons.');
+  if (o.started && input.arrival && String(input.arrival).slice(0, 10) !== o.arrivalStr) throw userError('Your stay has started (from 12 AM on the check-in date), so check-in cannot move. You can still change check-out, guests and add-ons.');
   if (!o.started && arrival < o.todayStr) throw userError('The date cannot be in the past.');
   const adults = Math.max(0, Math.floor(Number(input.adults) || 0));
   const children = Math.max(0, Math.floor(Number(input.children) || 0));

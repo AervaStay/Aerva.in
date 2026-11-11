@@ -148,7 +148,7 @@ async function loadForTransfer(sql, orderId, guestId, moveFrom, moveTo, requeste
   // cannot move; during the stay the check-in night always stays.
   const askedOn = requestedAt ? localDateAt(requestedAt, o.timezone) : o.todayStr;
   if (from < askedOn) throw userError('Nights that have already passed cannot be moved.');
-  if (o.started && from === o.arrivalStr) throw userError('You have checked in, so the check-in night stays where it is. Choose nights from tomorrow.');
+  if (o.started && from === o.arrivalStr) throw userError('Your stay has started (from 12 AM on the check-in date), so the check-in night stays where it is. Choose nights from tomorrow.');
   // At least one night stays at the booked property (the owner's rule).
   if (from === o.arrivalStr && to === o.departureStr) throw userError(`At least one night must stay at ${o.property_name}. Choose fewer nights to move.`);
   return { o, from, to, askedOn };
