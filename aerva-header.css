@@ -162,6 +162,12 @@
   .ah-dd{ display:none; }
   .ah-mobile-only{ display:flex; }
 }
+/* Phone: the menu row swipes sideways; the right edge fades so it does not look cut off. */
+@media (max-width:600px){
+  .ah-cats{ padding-right:34px; -webkit-mask-image:linear-gradient(to right, #000 calc(100% - 34px), transparent); mask-image:linear-gradient(to right, #000 calc(100% - 34px), transparent); }
+  .ah-cat{ font-size:12px; letter-spacing:0.08em; min-height:40px; }
+  .ah-toggle{ min-width:40px; min-height:40px; align-items:center; justify-content:center; }
+}
 
 /* The pages keep their own body padding for their content; the header
    runs edge to edge above it (margins set by aerva-header.js), and each

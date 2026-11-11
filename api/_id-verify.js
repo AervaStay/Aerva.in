@@ -155,9 +155,13 @@ const SYSTEM_PROMPT = `You check identity documents for Aerva, an Indian holiday
 }
 Rules: "national_id" is a national identity card issued outside India. A PAN card is "pan". Never guess a field you cannot read: use null. looks_genuine is false for samples, specimens, templates, mock-ups, obviously edited or computer-generated documents, and photos of a person instead of a document. A photo of a real card on a table, or a phone screenshot of an official e-document (e-Aadhaar, mAadhaar, DigiLocker) is fine.`;
 
+// The technical reason a check could not run: for Aerva's audit log only,
+// never shown to the person and never anything from the ID itself.
+function why(err, reason) { err.checkReason = reason; return err; }
+
 async function readDocument(files) {
   const key = process.env.ANTHROPIC_API_KEY;
-  if (!key) throw userError('ID verification is not available right now. Please try again later.', 503);
+  if (!key) throw why(userError('ID verification is not available right now. Please try again later.', 503), 'no ANTHROPIC_API_KEY set');
   const content = files.map(f => f.type === 'application/pdf'
     ? { type: 'document', source: { type: 'base64', media_type: 'application/pdf', data: f.bytes.toString('base64') } }
     : { type: 'image', source: { type: 'base64', media_type: f.type, data: f.bytes.toString('base64') } });
@@ -168,23 +172,23 @@ async function readDocument(files) {
       method: 'POST',
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({ model: MODEL(), max_tokens: 600, system: SYSTEM_PROMPT, messages: [{ role: 'user', content }] })
-    }, 40000);
+    }, 24000);   // under the function's 30-second limit, so the person always gets an answer
   } catch (err) {
     console.error('ID check: Claude not reached:', err.message || err);
-    throw userError('ID verification is taking too long right now. Please try again in a minute.', 503);
+    throw why(userError('ID verification is taking too long right now. Please try again in a minute.', 503), 'no answer in 24 seconds: ' + String(err.message || err).slice(0, 80));
   }
   if (!res.ok) {
     const detail = await res.text().catch(() => '');
     console.error('ID check: Claude HTTP', res.status, detail.slice(0, 200));
     if (res.status === 400 && /image|pdf|document/i.test(detail)) throw userError('That file could not be read. Try a clear photo of the ID.');
-    throw userError('ID verification is not available right now. Please try again later.', 503);
+    throw why(userError('ID verification is not available right now. Please try again later.', 503), 'Claude HTTP ' + res.status + ' (model ' + MODEL() + '): ' + detail.replace(/\s+/g, ' ').slice(0, 160));
   }
   const data = await res.json().catch(() => null);
   const text = data && Array.isArray(data.content) ? data.content.filter(c => c.type === 'text').map(c => c.text).join('') : '';
   const m = text.match(/\{[\s\S]*\}/);
   try { const parsed = m ? JSON.parse(m[0]) : null; if (parsed && typeof parsed === 'object') return parsed; } catch (e) { /* below */ }
   console.error('ID check: unclear answer');
-  throw userError('ID verification is not available right now. Please try again later.', 503);
+  throw why(userError('ID verification is not available right now. Please try again later.', 503), 'answer could not be read');
 }
 
 // What was read against what was typed. Returns { ok, reason } — the

@@ -411,7 +411,7 @@ async function checkGuestId(sql, razorpay, { guestId, files }) {
   finally { decoded.forEach(f => f.bytes.fill(0)); }      // nothing of the ID outlives the request
   if (!read) {
     // The check itself could not run: not one of the day's tries.
-    await logAudit(sql, { action: 'guest_id_check_unavailable', success: false, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId, metadata: {} });
+    await logAudit(sql, { action: 'guest_id_check_unavailable', success: false, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'guest', targetId: guestId, metadata: { reason: String((readError && (readError.checkReason || readError.message)) || 'unknown').slice(0, 240), files: decoded.map(f => f.type) } });
     if (readError && !readError.isUserFacing) throw readError;
     throw userError(readError && readError.status === 400 ? readError.message : 'The check is not available right now. Try again in a minute, or send it to Aerva to check instead.',
       readError && readError.status === 400 ? 400 : 503, { canSendForReview: true, undecided: true });

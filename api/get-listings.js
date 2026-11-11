@@ -1968,6 +1968,8 @@ module.exports = async (req, res) => {
         latitude, longitude, formatted_address,
         pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
         created_at, timezone,
+        -- shown on the listing page before a guest picks dates (owner's guest review, 11 Nov 2026)
+        check_in_time, check_out_time,
         COALESCE(to_jsonb(listings)->'walkthrough', '[]'::jsonb) AS walkthrough,
         -- What's special / Recommended by your host (_listing-special.js),
         -- read this way so search works before the migration. The host's

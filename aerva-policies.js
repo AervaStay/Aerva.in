@@ -56,8 +56,8 @@ window.AERVA_POLICIES = {
   // saved with every booking and every host acceptance; it must match
   // AGREEMENT_VERSION in api/_agreements.js. Change the text → change both.
   agreements: {
-    version: '2026-11-11d',       // booking agreement (guests)
-    hostVersion: '2026-11-11d',    // host agreement — accepted for every listing
+    version: '2026-11-11e',       // booking agreement (guests)
+    hostVersion: '2026-11-11e',    // host agreement — accepted for every listing
     // How hosts already on an earlier version move to this one (_host-agreement.js):
     //   'minor'  — rewording / corrections, same meaning: nothing to do;
     //   'notice' — a material change: told at least 30 days ahead (email +
@@ -74,7 +74,7 @@ window.AERVA_POLICIES = {
       'Cancelling: only before check-in, for one of three reasons: a change of plans, a natural disaster, or a government order or travel restriction. A change of plans is a request to the host under this listing’s refund policy (shown above); if the host rejects it, there is no refund. Aerva’s service fee is not refunded; any security deposit always is, to your original payment method.',
       'Free cancellation (optional, offered only where the host has chosen to offer it, for a stay, when check-in is more than 48 hours away): add it at checkout for the amount set by the host (between 5% and 30% of the stay price), plus GST. Cancel until 48 hours before the check-in time (the property’s time) and the booking price, its GST and any security deposit are refunded in full, at once — no wait for the host. The add-on and Aerva’s service fee are not refunded. After that, the refund policy applies. A change of dates keeps it (the 48 hours move with the new check-in); if added nights take the stay price up so that the add-on would be under 5% of it, the difference is added.',
       'Natural disaster or government order (a lockdown, or a road closed by the authorities): any time before check-in, choose that reason and attach proof. Aerva checks it and decides — the host cannot decline it. If approved, what you paid (the booking price, its GST, Aerva’s service fee and any free cancellation add-on) becomes Aerva credit: use it for new dates, or have it refunded to your original payment method at any time from My Bookings. Any security deposit is always refunded to your original payment method, never as Aerva credit. If not, the booking stands.',
-      'Changes (dates, guests, pets, add-ons): ask the host before check-in, or until 10 AM (the property’s time) on the day after check-in. Before check-in, a cheaper change refunds the difference to your original payment method; Aerva’s service fee stays as charged. Leaving early: once the stay has started you can bring check-out forward, but you won’t get anything back for the nights you don’t stay — no refund and no Aerva credit — and the host is paid for the original dates.',
+      'Changes (dates, guests, pets, add-ons): ask the host before the stay starts (it starts at 12 AM, the property’s time, on the check-in date), or until 10 AM (the property’s time) on the day after check-in — from the start, the check-in date itself cannot move. Before check-in, a cheaper change refunds the difference to your original payment method; Aerva’s service fee stays as charged. Leaving early: once the stay has started you can bring check-out forward, but you won’t get anything back for the nights you don’t stay — no refund and no Aerva credit — and the host is paid for the original dates.',
       'Moving nights to another property of the same host (a transfer): ask before check-in, or until 10 AM (the property’s time) on the day after check-in. At least one night stays where you booked. Aerva’s transfer fee is 5% of what the moved nights cost at the property you booked; a lower total comes back as Aerva credit. Once completed, the booking cannot be changed, cancelled or split again.',
       'Once the stay has started it cannot be cancelled. After 10 AM (the property’s time) on the day after check-in it cannot be changed.',
       'Aerva’s check-in promise: if, when you arrive, the place does not exist, is not as listed or is not available, report it from My Bookings → Report a problem, with a photo, on your check-in day — at the latest by 10 AM (the property’s time) the next day. Reporting late can cost you your booking payment. If Aerva confirms it, you are offered other places and pay only any difference, or everything you paid is refunded in full, including Aerva’s service fee.',
@@ -321,7 +321,8 @@ window.AERVA_POLICIES = {
       ]},
       { id: 'account', title: 'Your account', points: [
         'You must be 18 or older and give accurate information.',
-        'You are responsible for everything done through your account. Keep your login secure.'
+        'You are responsible for everything done through your account. Keep your login secure.',
+        'A password must have at least 8 characters, with at least one letter and one number. Very common passwords are not accepted.'
       ]},
       { id: 'bookings', title: 'Bookings and payments', points: [
         'Every booking is covered by the Booking Agreement you accept before payment and by the documents listed above.',
@@ -549,6 +550,7 @@ window.AERVA_POLICIES = {
     { id: 'cancellation-stays', title: 'Cancellation Policy for Stays', summary: 'How cancellations work for stays.', sections: [
       { title: 'Refund policies', points: [
         'Each listing has a Flexible or Firm policy, shown before you pay. Your booking keeps the policy it was paid under.',
+        'When a stay starts: a stay counts as started from 12 AM (the property’s time) on its check-in date. From then it cannot be cancelled, and its check-in date cannot be changed. The refund brackets below are counted to the listing’s check-in time, not to 12 AM.',
         'Flexible: 30 or more days before check-in, full refund; 10 to 29 days, 80%; 5 to 9 days, 50%; 2 to 4 days, 30%; less than 2 days, the host decides (0 to 100%).',
         'Firm: 30 or more days before check-in, full refund; 5 to 29 days, 50%; less than 5 days, the host decides (0 to 100%).',
         'Where the host decides, the host chooses the refund. If the host rejects the request, there is no refund.',
@@ -594,6 +596,7 @@ window.AERVA_POLICIES = {
     { id: 'free-cancellation', title: 'Free Cancellation Add-on', summary: 'The optional add-on that gives a full refund until 48 hours before check-in.', sections: [
       { title: 'Free cancellation add-on', points: [
         'It is offered only where the host has chosen to offer it for that listing; the listing then shows “Free cancellation available at checkout”. On such a stay, booked more than 48 hours before check-in, a guest may add free cancellation at checkout. It is not offered for experiences, for a stay that comes with an experience, for resort rooms, or for split (group) payments.',
+        'Where the host includes it free, there is nothing to tick or pay: the listing and your booking say “Free cancellation included”, with the time it lasts until.',
         'Hosts choose, for each listing, whether to offer it (off unless they turn it on), and may change it at any time. A change applies to new bookings only: a booking keeps the add-on it was bought with.',
         'A host may also offer it free: free cancellation is then included in every booking of that listing at no charge, with the same 48-hour limit and the same refund.',
         'It costs the amount set by the host (between 5% and 30% of the stay price). The host sets one fixed amount per booking for the listing; for a very short or very long stay it is kept between 5% and 30% of the stay price — the stay after any offer, with paid amenities and pet fees, before GST, Aerva’s service fee and any deposit. The amount for each booking is shown at checkout before paying. GST is added on it at the stay’s rate.',
@@ -609,6 +612,7 @@ window.AERVA_POLICIES = {
     { id: 'booking-changes', title: 'Changing a Booking', summary: 'How guests change dates, guests, pets or add-ons, or move nights to another property of the same host.', sections: [
       { title: 'What can change', points: [
         'Stays: dates (move, extend or shorten), the number of guests, pets and paid add-ons.',
+        'One request at a time: while a change you asked for is waiting (for the host’s answer, or for your payment), the booking cannot be cancelled; and while a cancellation request is waiting, it cannot be changed. A stay counts as started from 12 AM (the property’s time) on its check-in date; from then the check-in date cannot move.',
         'Experiences: the date and the number of guests.',
         'An experience that includes a stay changes together with its stay: a new date moves both, and the number of guests applies to both.',
         'Any time before check-in. Once the stay has started, only until 10 AM (the property’s time) on the day after check-in. After that the booking cannot be changed and nothing more is refunded.',
@@ -641,6 +645,7 @@ window.AERVA_POLICIES = {
     { id: 'booking-requirements', title: 'Booking Requirements', summary: 'What every guest needs to book, verifying your details, and same-day bookings.', sections: [
       { title: 'To book', points: [
         'An Aerva account with a confirmed email address and a mobile number.',
+        'Extra guests: the nightly rate covers the number of guests stated on the listing (for a Resort, on each room). Each guest above that number pays the host’s extra guest fee, per night; a host may set it to ₹0. The number and the fee are shown on the listing and as their own line in your total before you pay. It is part of the booking price, so GST and Aerva’s service fee apply to it.',
         'Your name, mobile number and the number of guests are shared with the host.',
         'Carry a government photo ID for every adult guest. The host checks it at check-in. Guests from outside India carry their passport.'
       ]},
@@ -663,6 +668,7 @@ window.AERVA_POLICIES = {
     { id: 'gift-group-bookings', title: 'Gift and Group Bookings', summary: 'Booking a stay for someone else, and splitting the payment with friends.', sections: [
       { title: 'Gift bookings', points: [
         'At checkout choose “This stay is for someone else” and give the recipient’s first and last name (as on their government ID), email, and optionally a phone number and a message of up to 300 characters. Contact details in the message are removed.',
+        'A problem on arrival at a gifted stay: the guest staying (the person who accepted the gift) can report it from their own My Bookings, under Aerva’s check-in promise. The report belongs to the booking: the person who paid is told, chooses any new place Aerva offers, and receives any refund.',
         'An upcoming booking can also be sent as a gift from My Bookings before check-in. Until check-in, the person who booked can change the recipient (the old link stops working) or stop the gift.',
         'The person who booked and paid is the customer: the booking, its invoice, changes, cancellations, transfers and refunds stay with their account and payment.',
         'The recipient gets an email with the stay, dates, address, check-in details and confirmation code — never the price. To accept, they log in or create an Aerva account and give their first name, last name and a mobile number the host can reach them on.',
@@ -689,6 +695,7 @@ window.AERVA_POLICIES = {
     { id: 'cancellation-experiences', title: 'Cancellation Policy for Experiences', summary: 'How cancellations work for experiences.', sections: [
       { title: 'Rule', points: [
         'An experience follows the same refund policy and the same brackets as a stay: Flexible or Firm, as shown on the experience before you book. The same three reasons apply, and Aerva’s service fee is not refunded.',
+        'For an experience, the brackets are counted to its start time on its first day, where it takes place.',
         'An experience that includes a stay: if the experience’s host cancels it (with its stay), everything the guest paid, GST and Aerva’s service fee included, is held for them as Aerva credit to use on another stay or experience, or to have refunded; no coupon. If the stay’s host cancels, the stay’s rules apply and the coupon is worth 10% of the stay, paid for by the stay’s host.',
         'If a host or co-host cancels, everything the guest paid — the price, its GST and Aerva’s service fee — is held for them as Aerva credit for up to 6 months (its end date is shown in My Bookings) (whatever is left when it ends is refunded automatically): it is taken off what they pay for their next Aerva booking (anything left stays on the credit), or refunded in full to the original payment method at any time from My Bookings. If the cancellation is within 48 hours of check-in, 15 minutes later the guest also receives an Aerva coupon worth 10% of the booking, paid for by whoever cancelled.'
       ]}
@@ -706,6 +713,7 @@ window.AERVA_POLICIES = {
     { id: 'stay-issues', title: 'Stay Issues and Refund Policy', summary: 'What happens when a guest is not happy during a stay.', sections: [
       { title: 'Check-in promise', points: [
         'If, when you arrive, the property does not exist, is not as listed or is not available, report it immediately from My Bookings → Report a problem, with at least one photo, on your check-in day. The last moment to report is 10 AM (the property’s time) on the day after check-in; any delay can cost you your booking payment. It is treated as urgent.',
+        'Messages with your host stay open until 15 days after check-out. After that, raise a request in the Resolution Center (Help → Raise a request) for anything about the stay.',
         'A report that the property does not exist hides that listing from search at once while Aerva checks. If Aerva confirms it, that listing is blocked and its other guests are moved or refunded; if not, it goes back live.',
         'If Aerva confirms your report, you are offered up to 3 other places in the same city that are free for the rest of your stay and fit your party, nearest first. You pay only the difference: the new place’s price for those nights, with GST and Aerva’s service fee worked out the normal way, less what you paid for your booking. If it costs more, you pay the difference before it is confirmed; if it costs less, the difference is held for you as Aerva credit, which you can use or have refunded at any time.',
         'Your new stay shows as one booking in My Bookings, with one amount: what you paid, plus (or less) the difference.',
@@ -734,6 +742,7 @@ window.AERVA_POLICIES = {
     { id: 'resolution', title: 'Security Deposit and Damage Policy', summary: 'How security deposits are refunded and damage is handled.', sections: [
       { title: 'Security deposit', points: [
         'Some listings hold a refundable security deposit, shown before you pay.',
+        'A Resort booked with several rooms in one payment has one security deposit for the booking, not one per room. When to expect it: with no damage reported, the refund is sent once 24 hours have passed after check-out, and usually shows in your account about 3 days after check-out, depending on your bank.',
         'It is always refunded to the original payment method, never as Aerva credit — after check-out, unless the host reports damage through Aerva within 24 hours of check-out. Once those 24 hours have passed, the refund is sent; the bank may take a few working days to show it.',
         'The deposit covers damage and extra cleaning — by the host, or a cleaner or other help the host calls in — up to the deposit amount, never more.',
         'To keep any of the deposit, the host must report it through Aerva, say how much they ask to keep, and share photos or videos of the damage with Aerva. Aerva reviews both sides and approves how much of the deposit, and what percentage, is paid to the host; the rest is refunded. Aerva’s decision is fair, full and final, and both the host and the guest abide by it.',
@@ -873,7 +882,7 @@ window.AERVA_POLICIES = {
       email: 'aervastudios@gmail.com'
     },
     intro: 'Help with a booking, a stay, hosting or your account. Find answers below, or raise a request and our support team will take it from there.',
-    emergency: 'If anyone is in danger or needs urgent medical help, call 112 first. Then tell us.',
+    emergency: 'If anyone is in danger or needs urgent medical help, call 112 first. Then tell Aerva.',
 
     // Shown as "Our commitments".
     commitments: [
@@ -947,7 +956,7 @@ window.AERVA_POLICIES = {
     topics: [
       // ---------------------------------------------------------- guests
       { id: 'booking-payment', group: 'guest', title: 'Booking and payment', category: 'booking_payment',
-        summary: 'Payment taken but no booking, a failed payment, or a charge you do not recognise.',
+        summary: 'Payment taken but no booking, a failed payment, a charge you do not recognise, or a total higher than the nightly rate.',
         sections: [
           { title: 'Asked to verify your details', points: [
             'Aerva may ask you to verify your details before a booking is confirmed. If it does, My Bookings shows “Waiting for your details” with the deadline. See the help topic “Verifying your details”.'
@@ -960,6 +969,12 @@ window.AERVA_POLICIES = {
           { title: 'A payment that failed', points: [
             'A failed payment does not book the dates. If you were charged anyway, your bank normally reverses it on its own; if it does not, raise a request with the payment reference.',
             'You have 5 payment attempts per listing per day.'
+          ]},
+          { title: 'Extra guests, and why the total is higher than the nightly rate', points: [
+            'The nightly rate covers the number of guests the host has included. The listing page shows this under “Extra guests”.',
+            'Each guest above that number is charged the host’s extra-guest fee, per guest, per night. It appears as its own line in the price summary before you pay.',
+            'GST and Aerva’s guest service fee apply to the extra-guest fee in the same way as to the nightly rate.',
+            'The total also includes Aerva’s guest service fee, GST and any refundable security deposit, each shown as its own line.'
           ]},
           { title: 'What you pay', points: [
             'The total shown before you pay is the full price: the booking price, Aerva’s guest service fee, GST and any security deposit.',
@@ -1337,6 +1352,7 @@ window.AERVA_POLICIES = {
         sections: [
           { title: 'Signing in', points: [
             'Use the email address or phone number on your account. If a code does not arrive, check your spam folder and wait a minute before asking again.',
+            'A password must have at least 8 characters, with at least one letter and one number. Very common passwords are not accepted.',
             'If you cannot sign in — your account is suspended, someone changed your email, or sign-in codes do not arrive — use Help → “Can’t sign in?”. You do not need to sign in for it. See the help topic “Can’t sign in?”.'
           ]},
           { title: 'Deleting your account', points: [

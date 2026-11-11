@@ -1795,7 +1795,7 @@ module.exports = async (req, res) => {
         }
         const comment = typeof b.comment === 'string' ? b.comment.trim() : '';
         if (comment.length < 10) {
-          return res.status(400).json({ error: 'Please write a few words about your stay.' });
+          return res.status(400).json({ error: 'Please write at least 10 characters about your stay.' });
         }
         // Photos of the stay: up to 5, Aerva uploads only, each once
         // (_review-policy.js cleanReviewPhotos).

@@ -1906,7 +1906,7 @@ module.exports = async (req, res) => {
         vals[f] = v;
       }
       const comment = typeof b.comment === 'string' ? b.comment.trim() : '';
-      if (comment.length < 10) return res.status(400).json({ error: 'Please write a few words about this guest.' });
+      if (comment.length < 10) return res.status(400).json({ error: 'Please write at least 10 characters about this guest.' });
 
       // guest_reviews.rating predates the factor columns and is still read
       // by older code paths, so it is kept in step: the plain mean of the
