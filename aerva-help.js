@@ -186,6 +186,7 @@
         go(a.getAttribute('data-help'));
       });
     });
+    if(scope === root) wireSupportButtons();
   }
   function hlink(qs, label, cls){
     return '<a href="' + esc(helpUrl(qs)) + '" data-help="' + esc(qs) + '"' + (cls ? ' class="' + cls + '"' : '') + '>' + label + '</a>';
@@ -211,7 +212,7 @@
 
   function emergencyBar(){
     var s = S();
-    return s.emergency ? '<p class="hc-emergency" role="note"><strong>Emergency?</strong> ' + esc(s.emergency) + '</p>' : '';
+    return s.emergency ? '<p class="hc-emergency" role="note"><strong>Emergency?</strong> ' + esc(s.emergency) + ' Use <button type="button" class="hc-inline-link" data-open-support>Start a chat</button> for the fastest answer, or ' + hlink('new=1&category=safety', 'raise a request') + '.</p>' : '';
   }
 
   // The ways to reach support. A blank number hides that option.
@@ -221,12 +222,12 @@
     // Aerva Support in Messages: the assistant answers at once; an agent
     // (chat, call or call back) once it has tried.
     cards.push('<div class="hc-contact hc-contact-primary">'
-      + '<h3>Message Aerva Support</h3>'
+      + '<h3>Chat with Aerva Support</h3>'
       + '<p>Get an answer straight away from our assistant, which knows our policies and your bookings. If it cannot sort it out, speak to an agent — by chat or phone.</p>'
-      + '<button type="button" class="btn solid" data-open-support>Open Aerva Support</button></div>');
+      + '<button type="button" class="btn solid" data-open-support>Start a chat</button></div>');
     cards.push('<div class="hc-contact">'
       + '<h3>Raise a request</h3>'
-      + '<p>Tracked from start to finish, with a reference number. Best for anything about a booking, a stay or a payout.</p>'
+      + '<p>A written request with a reference number, tracked from start to finish, with a reply within 48 hours. Best for anything about a booking, a stay or a payout.</p>'
       + hlink('new=1', 'Raise a request', 'btn') + '</div>');
     // Signed out: a way in for someone who cannot sign in at all.
     if(!token()){
@@ -234,7 +235,7 @@
         + '<h3>Can’t sign in?</h3>'
         + '<p>Account suspended, your email changed without your permission, or sign-in codes not arriving? Tell us here — you do not need an account.</p>'
         + hlink('signin=1', 'Can’t sign in?', 'btn')
-        + '<p class="hc-muted hc-small">Already sent one? ' + hlink('newlink=1', 'Get a new link to it') + '.</p></div>');
+        + '<p class="hc-muted hc-small hc-newlink">Already sent one? ' + hlink('newlink=1', 'Get a new link to it', 'hc-linkbtn') + '</p></div>');
     }
     if(c.tollFree){
       cards.push('<div class="hc-contact"><h3>Call us, toll-free</h3>'
@@ -250,27 +251,39 @@
       + (c.hours ? '<p class="hc-hours">Phone and WhatsApp: ' + esc(c.hours) + '</p>' : '');
   }
 
+  function wireSupportButtons(){
+    root.querySelectorAll('[data-open-support]').forEach(function(b){
+      if(b.__wired) return; b.__wired = true;
+      b.addEventListener('click', function(){ if(window.aervaOpenSupportChat) window.aervaOpenSupportChat(); });
+    });
+  }
+
   // ------------------------------------------------------------------- home
   function renderHome(){
     var s = S();
     var groups = [['guest', 'For guests'], ['host', 'For hosts'], ['everyone', 'For everyone']];
     var topics = s.topics || [];
-    var html = '<div class="privacy-eyebrow">Aerva Support</div>'
+    var html = '<div class="privacy-eyebrow">Help</div>'
       + '<h1 class="policies-title">Resolution Center</h1>'
       + '<p class="hc-intro">' + esc(s.intro || '') + '</p>'
       + emergencyBar()
       + contactBlock()
       + '<div id="hcMineSummary"></div>'
       + '<h2 class="hc-h2">Help topics</h2>'
+      + '<div class="hc-search"><label for="hcSearch">Search help topics</label><input type="search" id="hcSearch" placeholder="For example: refund, deposit, extra guest" autocomplete="off"><p class="hc-muted hc-small" id="hcSearchNone" hidden>No topic matches. Try another word, or raise a request.</p></div>'
       + groups.map(function(g){
           var list = topics.filter(function(t){ return t.group === g[0]; });
           if(!list.length) return '';
-          return '<div class="hc-group"><h3 class="hc-group-title">' + esc(g[1]) + '</h3><div class="hc-topics">'
+          var cards = '<div class="hc-topics">'
             + list.map(function(t){
-                return '<a class="hc-topic" href="' + esc(helpUrl('topic=' + t.id)) + '" data-help="topic=' + esc(t.id) + '">'
+                var words = [t.title, t.summary || ''].concat((t.sections || []).map(function(sec){ return sec.title + ' ' + sec.points.join(' '); })).join(' ').toLowerCase();
+                return '<a class="hc-topic" href="' + esc(helpUrl('topic=' + t.id)) + '" data-help="topic=' + esc(t.id) + '" data-words="' + esc(words) + '">'
                   + '<span class="hc-topic-title">' + esc(t.title) + '</span>'
                   + '<span class="hc-topic-summary">' + esc(t.summary || '') + '</span></a>';
-              }).join('') + '</div></div>';
+              }).join('') + '</div>';
+          // Hosting topics are folded away: most people here are guests.
+          if(g[0] === 'host') return '<details class="hc-group hc-group-fold"><summary class="hc-group-title">Hosting help <span>' + list.length + ' topics</span></summary>' + cards + '</details>';
+          return '<div class="hc-group"><h3 class="hc-group-title">' + esc(g[1]) + '</h3>' + cards + '</div>';
         }).join('')
       + '<h2 class="hc-h2">How a request works</h2>'
       + '<ol class="hc-steps">' + (s.process || []).map(function(p){
@@ -283,8 +296,20 @@
       + '<p class="policy-note">The rules behind every answer: <a href="index.html?view=policies">Aerva Policies</a> · <a href="index.html?view=terms">Terms of Service</a> · <a href="index.html?view=privacy">Privacy</a></p>';
     root.innerHTML = frame('home', html);
     wireLinks(root);
-    root.querySelectorAll('[data-open-support]').forEach(function(b){
-      b.addEventListener('click', function(){ if(window.aervaOpenSupportChat) window.aervaOpenSupportChat(); });
+    wireSupportButtons();
+    var search = document.getElementById('hcSearch');
+    if(search) search.addEventListener('input', function(){
+      var q = search.value.trim().toLowerCase(); var any = false;
+      root.querySelectorAll('.hc-group').forEach(function(grp){
+        var shown = 0;
+        grp.querySelectorAll('.hc-topic').forEach(function(a){
+          var hit = !q || q.split(/\s+/).every(function(w){ return (a.getAttribute('data-words') || '').indexOf(w) !== -1; });
+          a.hidden = !hit; if(hit) shown++;
+        });
+        grp.hidden = !shown; if(shown) any = true;
+        if(grp.tagName === 'DETAILS') grp.open = !!q && shown > 0;
+      });
+      var none = document.getElementById('hcSearchNone'); if(none) none.hidden = any;
     });
     document.title = 'Resolution Center — Aerva';
     if(token()) loadMineSummary();
@@ -327,6 +352,7 @@
       + hlink('new=1&category=' + encodeURIComponent(t.category), 'Raise a request', 'btn solid') + '</div>';
     root.innerHTML = frame('home', html);
     wireLinks(root);
+    wireSupportButtons();
     document.title = t.title + ' — Aerva Resolution Center';
   }
 

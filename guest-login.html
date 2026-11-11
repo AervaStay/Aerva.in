@@ -71,7 +71,7 @@
 </style>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:wght@500&family=Jost:wght@400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="aerva-header.css?v=2026-10-10a">
+<link rel="stylesheet" href="aerva-header.css?v=2026-11-11y">
 <script src="aerva-cohost.js?v=2026-11-11d"></script>
 </head>
 <body>
@@ -178,7 +178,8 @@
       </div>
       <div class="field">
         <label for="newPassword">New password</label>
-        <input id="newPassword" type="password" placeholder="At least 8 characters, with a letter and a number" autocomplete="new-password" required>
+        <input id="newPassword" type="password" placeholder="Choose a new password" autocomplete="new-password" aria-describedby="newPasswordHint" required>
+        <p id="newPasswordHint" style="font-size:13px; color:#6e675d; margin:6px 0 0;">At least 8 characters, with a letter and a number.</p>
       </div>
       <button type="submit" class="btn" id="resetPasswordBtn">Set new password</button>
       <p class="error" id="resetPasswordError" style="display:none;"></p>
@@ -217,7 +218,8 @@
       </div>
       <div class="field">
         <label for="signupPassword">Password</label>
-        <input id="signupPassword" type="password" placeholder="At least 8 characters, with a letter and a number" autocomplete="new-password" required>
+        <input id="signupPassword" type="password" placeholder="Choose a password" autocomplete="new-password" aria-describedby="signupPasswordHint" required>
+        <p id="signupPasswordHint" style="font-size:13px; color:#6e675d; margin:6px 0 0;">At least 8 characters, with a letter and a number.</p>
       </div>
       <!-- Required: an account is only made with this tick (DPDP). -->
       <label class="consent" id="signupConsentRow">

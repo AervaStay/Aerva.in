@@ -3814,3 +3814,101 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 /* An option the page hides (e.g. free cancellation when it isn't offered)
    must really go: .ag-opt's display:flex would otherwise win over [hidden]. */
 .ag-opt[hidden], .fc-available[hidden]{display:none;}
+
+
+/* ===== Guest review, 11 Nov 2026 ===== */
+/* Listing page: the basics in one row under the name. */
+.listing-facts{ display:flex; flex-wrap:wrap; gap:10px 28px; margin:6px 0 18px; padding:14px 0; border-bottom:1px solid var(--line-dark); }
+.listing-facts > div{ min-width:120px; }
+.listing-facts dt{ font-size:12px; letter-spacing:0.06em; text-transform:uppercase; color:var(--ink-3, #6e675d); margin:0 0 2px; }
+.listing-facts dd{ font-size:15px; margin:0; color:var(--ink); }
+/* On a phone the photos come first, then the booking steps, then the map. */
+@media (max-width: 900px){
+  .listing-three-col > .listing-col-photos{ order:-1; }
+  .listing-three-col > .listing-col-photos .listing-modal-section-title:first-child{ margin-top:0 !important; }
+}
+/* "This property" / "This experience" above the badges: readable. */
+.ts-badge-caption{ font-size:12px; opacity:0.75; }
+/* Small labels that were under 12px. */
+.suite-check-availability, .ag-meta{ font-size:max(12px, 1em); }
+/* Phone: links and buttons a finger can hit (they were 12–28px tall). */
+@media (max-width: 600px){
+  .site-nav a, .main-nav a, header nav a{ min-height:40px; display:inline-flex; align-items:center; }
+  footer a, .foot a, .foot-links a, .foot-legal a{ display:inline-block; padding:11px 0; min-height:40px; box-sizing:border-box; }
+  .suite-photo-dots span, .suite-photo-dots button{ min-width:10px; }
+  .pol-links a, .policy-links a, .terms-links a, .help-links a{ display:inline-block; padding:10px 0; }
+}
+
+/* My Bookings: group headings. */
+.mb-group{ font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:20px; margin:28px 0 12px; }
+.mb-group:first-child{ margin-top:0; }
+/* The review reminder: one compact row on a phone, and not on a listing page while booking. */
+@media (max-width: 600px){
+  #reviewReminderBar{ padding:8px 14px !important; }
+  #reviewReminderBar > *{ display:flex; align-items:center; gap:10px; flex-wrap:nowrap; }
+  #reviewReminderText{ font-size:13.5px; line-height:1.35; margin:0; flex:1 1 auto; min-width:0; }
+  #reviewReminderText .rr-long{ display:none; }
+  #reviewReminderBtn{ min-height:40px; padding:0 12px; font-size:12px; white-space:nowrap; flex:0 0 auto; }
+  #reviewReminderDismiss{ min-width:40px; min-height:40px; flex:0 0 auto; }
+  .nav-links a, nav.wrap a{ min-height:40px; display:inline-flex; align-items:center; }
+  /* Coupon and credit cards: amount above the text, not a narrow column beside it. */
+  .fee-credit-card{ flex-direction:column; align-items:flex-start; gap:6px; }
+}
+
+/* ===== Guest review, part 2 (11 Nov 2026) ===== */
+/* Phone header: the menu row swipes sideways; the right edge fades so it reads as "more this way", not as cut off. */
+@media (max-width: 600px){
+  .header-category-nav{ padding-right:34px; -webkit-mask-image:linear-gradient(to right, #000 calc(100% - 34px), transparent); mask-image:linear-gradient(to right, #000 calc(100% - 34px), transparent); }
+  .header-category-nav .category-item{ font-size:12px; letter-spacing:0.08em; }
+  /* Listing page: less empty space between the back link and the name. */
+  #listingFullView.pad, #experienceFullView.pad{ padding-top:104px; }
+  #listingFullView .sticky-back-bar, #experienceFullView .sticky-back-bar{ margin-bottom:0; padding-top:8px; padding-bottom:8px; }
+  #listingFullViewBody > *:first-child, #experienceFullViewBody > *:first-child{ margin-top:0 !important; padding-top:14px !important; }
+  /* Links a finger can hit. */
+  #clearFiltersBtn{ min-height:40px; }
+  .policy-back a, .policy-note a, .hc-doclinks a, .policy-section li > a:only-child, .terms-docs a, .policies-list a{ display:inline-block; padding:11px 0; }
+  .policy-note{ line-height:1; }
+  .cal-nav{ min-width:40px; min-height:40px; }
+  .inbox-filter-pill{ min-height:36px; }
+}
+/* Small labels: 12px at least, and not faded past reading. */
+.inbox-status-tag{ font-size:12px; }
+.profile-section-title{ font-size:12px; opacity:0.75; }
+.ts-host-label{ font-size:12px; opacity:0.7; }
+.ts-host-view{ font-size:12px; }
+.ts-place-address{ font-size:12px; }
+.inbox-chat-placeholder{ opacity:0.75; }
+/* My Bookings: why and what was refunded, on a cancelled card. */
+.booking-cancel-line{ font-size:14px; color:#a3402f; margin:6px 0 0; line-height:1.5; }
+.wishlist-empty-heart{ width:18px; height:18px; vertical-align:-3px; fill:none; stroke:var(--gold-deep); stroke-width:1.6; }
+/* Resolution Center: search, folded hosting topics, clearer links. */
+.hc-search{ margin:0 0 18px; }
+.hc-search label{ display:block; font-size:14px; margin:0 0 6px; color:var(--ink-3); }
+.hc-search input{ width:100%; box-sizing:border-box; min-height:46px; padding:10px 14px; font:inherit; font-size:16px; border:1px solid var(--hairline); border-radius:10px; background:#fff; }
+.hc-group-fold > summary{ cursor:pointer; min-height:44px; display:flex; align-items:center; gap:10px; list-style:none; }
+.hc-group-fold > summary::-webkit-details-marker{ display:none; }
+.hc-group-fold > summary::before{ content:'+'; font-size:18px; width:18px; text-align:center; }
+.hc-group-fold[open] > summary::before{ content:'\2212'; }
+.hc-group-fold > summary span{ text-transform:none; letter-spacing:0; opacity:0.75; }
+.hc-topic[hidden], .hc-group[hidden]{ display:none; }
+.hc-inline-link{ background:none; border:none; padding:0; font:inherit; color:var(--alert); text-decoration:underline; cursor:pointer; }
+.hc-emergency a{ color:var(--alert); }
+.hc-linkbtn{ display:inline-block; padding:10px 0; font-size:15px; }
+@media (max-width: 600px){
+  /* Terms: the list of linked documents. */
+  .legal-notice li{ padding:6px 0; }
+  .legal-notice li > a{ display:inline-block; padding:6px 0; }
+}
+
+/* ===== Phone: fixed "Check availability" bar on a listing page ===== */
+.reserve-bar{ display:none; }
+@media (max-width: 900px){
+  .reserve-bar{ position:fixed; left:0; right:0; bottom:0; z-index:250; display:flex; align-items:center; justify-content:space-between; gap:12px;
+    padding:10px 16px calc(10px + env(safe-area-inset-bottom)); background:#fff; border-top:1px solid var(--line-dark); box-shadow:0 -6px 18px rgba(28,26,23,0.08); }
+  .reserve-bar[hidden]{ display:none; }
+  .reserve-bar-price{ font-size:15px; font-weight:500; color:var(--ink); min-width:0; line-height:1.3; }
+  .reserve-bar-btn{ flex:0 0 auto; min-height:46px; padding:0 18px; white-space:nowrap; }
+  /* Room for the bar so it never covers the end of the page. */
+  body.has-reserve-bar footer, body.has-reserve-bar .listing-modal{ padding-bottom:84px; }
+  .listing-col-booking, #listingBookingAction{ scroll-margin-top:190px; }
+}

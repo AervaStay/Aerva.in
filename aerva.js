@@ -5636,7 +5636,7 @@
       : '';
     const placeBlock = placeName || placeAddress ? `
       <div class="ts-place">
-        ${placeName ? `<div class="ts-place-name">${escapeMessageHtml(placeName)}</div>` : ''}
+        ${placeName ? `<div class="ts-place-name" role="heading" aria-level="1">${escapeMessageHtml(placeName)}</div>` : ''}
         ${placeAddress ? `<div class="ts-place-address">${escapeMessageHtml(placeAddress)}</div>` : ''}
       </div>` : '';
 
@@ -7429,9 +7429,8 @@
     if(!count){ bar.style.display = 'none'; reviewBarSpace(); return; }
     const dismissedFor = safeSessionGet('aerva_review_reminder_dismissed');
     if(dismissedFor === String(count)){ bar.style.display = 'none'; reviewBarSpace(); return; }
-    document.getElementById('reviewReminderText').textContent = count === 1
-      ? 'You have a stay to review. It takes a minute, and the window closes 15 days after checkout.'
-      : `You have ${count} stays to review. It takes a minute, and the window closes 15 days after checkout.`;
+    document.getElementById('reviewReminderText').innerHTML = (count === 1 ? 'You have a stay to review' : `You have ${Number(count)} stays to review`)
+      + '<span class="rr-long"> (open for 15 days after check-out)</span>.';
     bar.style.display = 'block';
     reviewBarSpace();
     document.getElementById('reviewReminderBtn').onclick = () => { window.location.href = 'index.html?view=my-bookings'; };
@@ -7673,7 +7672,7 @@
       <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 2px;">How was your guest?</h2>
       <p class="payout-muted" style="margin:0 0 14px;">${escapeMessageHtml(p.guestName)} \u00b7 ${escapeMessageHtml(p.listingName)}</p>
       <div class="rv-set">${GUEST_REVIEW_FACTORS.map(starRowHtml).join('')}</div>
-      <label class="rv-comment-label" for="guestReviewComment">A few words for other hosts</label>
+      <label class="rv-comment-label" for="guestReviewComment">A few words for other hosts <span class="label-hint">(at least 10 characters)</span></label>
       <textarea id="guestReviewComment" rows="4" maxlength="1000" placeholder="How was it having them stay?"></textarea>
       ${p.depositHeld ? `<label style="display:flex; gap:10px; align-items:flex-start; margin-top:12px; font-size:14px; cursor:pointer;"><input type="checkbox" id="guestReviewDeposit" style="margin-top:3px; width:18px; height:18px;"> <span>No damage — refund the guest’s ₹${Number(p.depositHeld).toLocaleString('en-IN')} security deposit now, without waiting for the 24 hours after check-out. You can no longer report damage on it.</span></label>` : ''}
       <button type="button" class="btn solid" id="guestReviewSend" style="width:100%; margin-top:14px; cursor:pointer;">Send review</button>
@@ -7690,6 +7689,7 @@
       const msg = ov.querySelector('#guestReviewMsg');
       const missing = GUEST_REVIEW_FACTORS.filter(f => !scores[f.key]);
       if(missing.length){ msg.textContent = 'Please rate all four.'; return; }
+      if(ov.querySelector('#guestReviewComment').value.trim().length < 10){ msg.textContent = 'Please write at least 10 characters about this guest.'; return; }
       const btn = ov.querySelector('#guestReviewSend'); btn.disabled = true;
       try{
         const res = await fetch(SUITES_API_BASE + '/api/host-listings', { method: 'POST',
@@ -7714,7 +7714,7 @@
         <h2>How was it?</h2>
         <div class="loc">${escapeMessageHtml(booking.suite_name || '')}</div>
         <div class="rv-set">${set.map(starRowHtml).join('')}</div>
-        <label class="rv-comment-label" for="reviewComment">Tell other guests about it</label>
+        <label class="rv-comment-label" for="reviewComment">Tell other guests about it <span class="label-hint">(at least 10 characters)</span></label>
         <textarea id="reviewComment" rows="4" placeholder="What stood out? What should someone know before booking?"></textarea>
         <div class="rv-photos" id="reviewPhotos">
           <div class="rv-photos-head">
@@ -7844,7 +7844,7 @@
     }
     const comment = (document.getElementById('reviewComment').value || '').trim();
     if(comment.length < 10){
-      errEl.textContent = 'Please write at least a sentence about your visit.';
+      errEl.textContent = 'Please write at least 10 characters about your visit.';
       errEl.style.display = 'block'; return;
     }
     if(reviewPhotoPicker && reviewPhotoPicker.busy()){
@@ -7938,7 +7938,7 @@
             <button type="button" class="filter-clear" data-refund-credit="${c.id}">Refund to original payment</button> <span class="fee-credit-msg"></span>
           </div>
         </div>` : c.status === 'refunding' ? `<div class="fee-credit-card done"><div class="fee-credit-body">Your Aerva credit of ${fmtGuest(c.remaining)} is being refunded.</div></div>`
-        : (c.refunded > 0 ? `<div class="fee-credit-card done"><div class="fee-credit-body">${fmtGuest(c.refunded)} of your Aerva credit was refunded on ${escapeMessageHtml(fmtDate(c.refundedAt))}. It usually reaches your account within 5–7 working days.</div></div>` : '')).join('');
+        : (c.refunded > 0 ? `<div class="fee-credit-card done"><div class="fee-credit-body">${fmtGuest(c.refunded)} of your Aerva credit was refunded on ${escapeMessageHtml(fmtDate(c.refundedAt))}. Your bank may take a few working days to show it.</div></div>` : '')).join('');
       box.querySelectorAll('[data-copy-coupon]').forEach(btn => btn.addEventListener('click', async () => {
         const msg = btn.parentNode.querySelector('.fee-credit-msg');
         try{ await navigator.clipboard.writeText(btn.dataset.copyCoupon); msg.textContent = 'Copied.'; }catch(e){ msg.textContent = btn.dataset.copyCoupon; }
@@ -7974,7 +7974,22 @@
         container.innerHTML = '<p class="suites-empty">No bookings yet — once you book a stay or experience, it\'ll show up here.</p>';
         return;
       }
-      container.innerHTML = bookings.map(b => {
+      // Grouped and ordered the way a guest thinks about them (guest review,
+      // 11 Nov 2026): the stay happening now first, then upcoming (soonest
+      // first), then past (latest first), then cancelled.
+      { const todayStr = new Date(Date.now() - new Date().getTimezoneOffset() * 60000).toISOString().slice(0, 10);
+        const d = (v) => String(v || '').slice(0, 10);
+        const groupOf = (b) => { const st = String(b.status || '');
+          if(st === 'cancelled' || st === 'refunded') return 3;
+          const t = d(b.local_today) || todayStr;
+          if(b.pending_group || b.waiting_details) return 1;
+          if(d(b.arrival) <= t && d(b.departure) >= t && st === 'paid' && d(b.departure) !== d(b.arrival) && d(b.departure) > t) return 0;
+          if(d(b.departure) <= t && d(b.arrival) < t) return 2;
+          return d(b.arrival) > t ? 1 : (d(b.departure) > t ? 0 : 2); };
+        bookings.forEach(b => { b.__group = groupOf(b); });
+        bookings.sort((a, b) => a.__group - b.__group || (a.__group <= 1 ? d(a.arrival).localeCompare(d(b.arrival)) : d(b.arrival).localeCompare(d(a.arrival)))); }
+      const MB_GROUPS = ['Staying now', 'Upcoming', 'Past stays', 'Cancelled'];
+      container.innerHTML = bookings.map((b, __i) => { const __head = (__i === 0 || bookings[__i - 1].__group !== b.__group) ? `<h3 class="mb-group">${MB_GROUPS[b.__group]}</h3>` : ''; return __head + ((b) => {
         // Gifts and group bookings shared with this account, and groups still
         // collecting: their own cards, never any price or change/cancel action.
         if(b.pending_group || b.shared) return aervaSharedBookingCard(b);
@@ -7988,7 +8003,7 @@
           ? new Date(new Date(String(b.departure).slice(0, 10) + 'T00:00:00Z').getTime() - 86400000).toISOString().slice(0, 10) : b.departure;
         const dateLine = String(b.arrival).slice(0, 10) === String(lastDay).slice(0, 10)
           ? new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })
-          : `${new Date(b.arrival).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' })} – ${new Date(lastDay).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
+          : `${new Date(b.arrival).toLocaleDateString('en-IN', String(b.arrival).slice(0, 4) !== String(lastDay).slice(0, 4) ? { day: 'numeric', month: 'short', year: 'numeric' } : { day: 'numeric', month: 'short' })} – ${new Date(lastDay).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}`;
         // Messaging only ever unlocks for a confirmed (paid) booking —
         // matches the same rule messages.js/guest-profile.js enforces
         // server-side; this button simply doesn't exist for anything else,
@@ -8056,6 +8071,7 @@
             <div class="listing-info">
               <h3>${escapeMessageHtml(b.suite_name || '')}</h3>
               <div class="listing-meta">${dateLine} · ${b.guests} guest${b.guests === 1 ? '' : 's'} · ${statusBadgeHtmlGuest(completed ? 'completed' : b.status)}</div>
+              ${b.status === 'cancelled' || b.status === 'refunded' ? `<p class="booking-cancel-line">Cancelled${b.cancelled_at ? ` on ${new Date(b.cancelled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' })}` : ''}${b.cancellation_reason ? ` · ${escapeMessageHtml(b.cancellation_reason)}` : ''}${b.refunded && b.refunded.amount > 0 ? ` · ${moneyBoth(b.refunded.amount)} ${b.refunded.pending ? 'is being refunded' : 'refunded'}` : ''}</p>` : ''}
               ${codeHtml}
               ${aervaOwnBookingExtrasHtml(b)}
               <div class="booking-actions">${chatBtnHtml}${reviewHtml}${b.checkin ? '' : changeHtml}${reportHtml}${b.checkin ? '' : requestHtml}${aervaOwnBookingButtonsHtml(b)}</div>
@@ -8066,7 +8082,7 @@
             </div>
           </div>
         `;
-      }).join('');
+      })(b); }).join('');
       container.querySelectorAll('[data-order-id]').forEach(btn => {
         btn.addEventListener('click', () => openChatForOrder(Number(btn.dataset.orderId), btn.dataset.listingName));
       });
@@ -10639,6 +10655,28 @@
     new google.maps.Marker({ position, map, title: label });
   }
 
+  // The basics a guest needs before choosing dates, in one row under the
+  // name: guests, bedrooms, check-in / check-out, refund policy, deposit,
+  // extra-guest fee (guest review, 11 Nov 2026).
+  function listingFactsHtml(listing){
+    const nice = (t) => { const m = String(t || '').trim().match(/^(\d{1,2}):(\d{2})/); if(!m) return String(t || '').trim(); const h = Number(m[1]); return `${h % 12 || 12}:${m[2]} ${h < 12 ? 'AM' : 'PM'}`; };
+    const isResort = listing.property_type === 'Resort';
+    const facts = [];
+    const max = parseInt(listing.max_guests, 10);
+    if(!isResort && max >= 1) facts.push(['Guests', `Up to ${max}`]);
+    if(!isResort && Number(listing.bedrooms) >= 1) facts.push(['Bedrooms', String(Number(listing.bedrooms))]);
+    if(listing.check_in_time) facts.push(['Check-in', 'From ' + nice(listing.check_in_time)]);
+    if(listing.check_out_time) facts.push(['Check-out', 'By ' + nice(listing.check_out_time)]);
+    const pol = String(listing.cancellation_policy || 'flexible').toLowerCase() === 'firm' ? 'Firm' : 'Flexible';
+    facts.push(['Refund policy', `<a href="index.html?view=policies&doc=cancellation-stays" target="_blank" rel="noopener" style="color:inherit; text-decoration:underline;">${pol}</a>`]);
+    if(Number(listing.security_deposit) > 0) facts.push(['Security deposit', `${guestPrice(listing.security_deposit)}, refundable`]);
+    if(!isResort){
+      const t = extraGuestTermsOf(listing);
+      if(max > t.included) facts.push(['Extra guests', t.fee > 0 ? `Price covers ${t.included}; ${guestPrice(t.fee)} per extra guest, per night` : `No extra charge up to ${max}`]);
+    }
+    if(!facts.length) return '';
+    return `<dl class="listing-facts" aria-label="About this stay">${facts.map(([k, v]) => `<div><dt>${k}</dt><dd>${v}</dd></div>`).join('')}</dl>`;
+  }
   function buildListingDetailHtml(listing){
     const exteriorPhotos = Array.isArray(listing.exterior_photo_urls) ? listing.exterior_photo_urls : [];
     const interiorPhotos = Array.isArray(listing.interior_photo_urls) ? listing.interior_photo_urls : [];
@@ -10709,6 +10747,7 @@
           ${/* Name, address and type all sit in the strip below, so
                 nothing is repeated above it. */''}
           ${listingStandingHtml(listing, { type: 'stay', subtitle: 'Resort' })}
+          ${listingFactsHtml(listing)}
           ${aervaSpecialHereHtml(listing)}
           <div class="listing-three-col">
             <div class="listing-col-booking">
@@ -10786,6 +10825,7 @@
     return `
       <div class="listing-modal-content">
         ${listingStandingHtml(listing, { type: 'stay', subtitle: listing.property_type || '' })}
+        ${listingFactsHtml(listing)}
         ${aervaSpecialHereHtml(listing)}
         <div class="listing-three-col">
           <div class="listing-col-booking">
@@ -13583,7 +13623,7 @@
     const gone = ids.length - homes.length;
     if(countEl) countEl.textContent = homes.length ? `${homes.length} saved home${homes.length === 1 ? '' : 's'}` : '';
     if(!homes.length){
-      container.innerHTML = `<div class="wishlist-empty"><p>${gone ? 'The homes you saved are no longer listed.' : 'Nothing saved yet.'} Tap the heart on any home to keep it here.</p><a class="btn" href="index.html">Browse homes</a></div>`;
+      container.innerHTML = `<div class="wishlist-empty"><p>${gone ? 'The homes you saved are no longer listed.' : 'Nothing saved yet.'} Tap the heart <svg class="wishlist-empty-heart" viewBox="0 0 24 24" aria-hidden="true"><path d="M12 20.5s-7.5-4.6-7.5-10.2A4.3 4.3 0 0 1 12 7.6a4.3 4.3 0 0 1 7.5 2.7c0 5.6-7.5 10.2-7.5 10.2z"/></svg> on any home’s photo to keep it here.</p><a class="btn" href="index.html">Browse homes</a></div>`;
       return;
     }
     container.innerHTML = '';
@@ -17867,3 +17907,62 @@ function aervaOpenGiftForm(b){
     if(typeof loadMyBookings === 'function') loadMyBookings();
   });
 }
+
+// ---- Phone: a fixed "Check availability" bar on a listing or experience page ----
+// The photos come first on a phone, so the price and the way to book stay
+// in reach at the bottom of the screen. Tapping it goes to the booking steps.
+// Hidden on wider screens, while the booking steps are on screen, while
+// another window is open over the page, and while the keyboard is up.
+(function(){
+  var bar = null, lastKey = '';
+  function visible(el){ return !!el && el.getClientRects().length > 0 && getComputedStyle(el).visibility !== 'hidden'; }
+  function bookingColumn(){
+    var cols = document.querySelectorAll('.listing-col-booking');
+    for(var i = 0; i < cols.length; i++){ if(visible(cols[i])) return cols[i]; }
+    return null;
+  }
+  function otherWindowOpen(){
+    var open = document.querySelectorAll('.listing-modal-overlay, .inbox-overlay, .avail-peek-overlay, .ag-modal, .payout-overlay');
+    for(var i = 0; i < open.length; i++){ if(open[i].id !== 'listingModalOverlay' && visible(open[i])) return true; }
+    return false;
+  }
+  function typing(){
+    var a = document.activeElement;
+    return !!a && /^(INPUT|TEXTAREA|SELECT)$/.test(a.tagName) && a.type !== 'checkbox' && a.type !== 'radio';
+  }
+  function sync(){
+    var col = window.innerWidth <= 900 ? bookingColumn() : null;
+    var show = false, priceText = '', label = 'Check availability';
+    if(col && !otherWindowOpen() && !typing()){
+      var r = col.getBoundingClientRect();
+      // On screen = the booking steps cover the middle of the screen.
+      var onScreen = r.top < window.innerHeight * 0.55 && r.bottom > window.innerHeight * 0.45;
+      var price = col.querySelector('.price');
+      priceText = price ? (price.innerText || '').replace(/\s+/g, ' ').trim() : '';
+      var action = col.querySelector('#listingBookingAction, #resortBookingAction');
+      if(action && visible(action)) label = 'Continue booking';
+      show = !onScreen;
+    }
+    if(!show){ if(bar) bar.hidden = true; document.body.classList.remove('has-reserve-bar'); return; }
+    if(!bar){
+      bar = document.createElement('div');
+      bar.id = 'reserveBar'; bar.className = 'reserve-bar';
+      bar.innerHTML = '<div class="reserve-bar-price"></div><button type="button" class="btn solid reserve-bar-btn"></button>';
+      document.body.appendChild(bar);
+      bar.querySelector('button').addEventListener('click', function(){
+        var c = bookingColumn(); if(!c) return;
+        var act = c.querySelector('#listingBookingAction, #resortBookingAction');
+        (act && visible(act) ? act : c).scrollIntoView({ behavior: 'smooth', block: 'start' });
+      });
+    }
+    var key = priceText + '|' + label;
+    if(key !== lastKey){ bar.firstChild.textContent = priceText; bar.querySelector('button').textContent = label; lastKey = key; }
+    bar.hidden = false; document.body.classList.add('has-reserve-bar');
+  }
+  var queued = false;
+  function queue(){ if(queued) return; queued = true; requestAnimationFrame(function(){ queued = false; sync(); }); }
+  document.addEventListener('scroll', queue, { passive: true, capture: true });
+  window.addEventListener('resize', queue);
+  document.addEventListener('focusin', queue); document.addEventListener('focusout', queue);
+  setInterval(sync, 700);
+})();
