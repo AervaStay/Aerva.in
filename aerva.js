@@ -7320,7 +7320,7 @@
         ${lines.join('')}
         <div style="display:flex; gap:10px; flex-wrap:wrap; margin-top:12px;">
           <a href="index.html" data-wr-close style="background:#1c1a17; color:#f4eadc; padding:10px 16px; border-radius:8px; text-decoration:none; font-size:14px;">Find a stay</a>
-          <a href="index.html?view=my-bookings" style="padding:10px 4px; color:#8a6c39; text-decoration:underline; font-size:14px;">See it in My Bookings</a>
+          <a href="index.html?view=wallet" style="padding:10px 4px; color:#8a6c39; text-decoration:underline; font-size:14px;">Open your wallet</a>
         </div>`;
       document.body.appendChild(box);
       box.querySelectorAll('[data-wr-close]').forEach(el => el.addEventListener('click', () => box.remove()));
@@ -7386,6 +7386,16 @@
     if(!x || (!x.ends_at && !x.then)) return '';
     const by = x.ends_at ? 'You have until <strong>' + escapeMessageHtml(whenLocal(x.ends_at)) + '</strong>. ' : '';
     return '<span class="booking-request-note booking-request-then">' + by + escapeMessageHtml(x.then || '') + '</span>';
+  }
+
+  // Explanation goes behind a toggle, never on the screen by default
+  // (owner, 12 Nov 2026): the figures and the one thing to do are visible,
+  // and anyone who wants the reasoning opens it. Native <details>, so it
+  // works with a keyboard and a screen reader without any script.
+  //   more('Why do I have this?', '<p>…</p>')
+  function more(label, html){
+    if(!html) return '';
+    return `<details class="say-more"><summary>${escapeMessageHtml(label)}</summary><div class="say-more-body">${html}</div></details>`;
   }
 
   // One name for one thing (owner, 12 Nov 2026, suggestion 9). The same
@@ -8004,12 +8014,12 @@
       if(!list.length && !coupons.length && !refunds.length){
         box.innerHTML = full
           ? `<div class="wallet-empty"><p><strong>Your wallet is empty.</strong></p>
-               <p>Aerva credit and coupons show here when there is something to show — after a cancellation, for example. So does a refund on its way back to your card.</p>
-               <ul class="wallet-what">
-                 <li><strong>Refund</strong> — ${MONEY_WORDS.refund}</li>
-                 <li><strong>Aerva credit</strong> — ${MONEY_WORDS.credit}</li>
-                 <li><strong>Aerva coupon</strong> — ${MONEY_WORDS.coupon}</li>
-               </ul></div>`
+               ${more('What shows up here?', `<p>A refund on its way back to your card, Aerva credit, and Aerva coupons — after a cancellation, for example.</p>
+                 <ul class="money-words">
+                   <li><strong>Refund</strong> — ${MONEY_WORDS.refund}</li>
+                   <li><strong>Aerva credit</strong> — ${MONEY_WORDS.credit}</li>
+                   <li><strong>Aerva coupon</strong> — ${MONEY_WORDS.coupon}</li>
+                 </ul>`)}</div>`
           : '';
         return;
       }
@@ -8021,9 +8031,10 @@
           <div class="fee-credit-body">
             <strong>Aerva coupon</strong>${c.from ? ` <span class="fee-credit-from">from ${escapeMessageHtml(c.from)}</span>` : ''}
             ${c.status === 'active'
-              ? `<p>Enter <code style="font-size:15px; letter-spacing:0.04em; background:#f4eadc; padding:2px 8px; border-radius:6px;">${escapeMessageHtml(c.code)}</code> at checkout. It covers the booking price and can be used with your Aerva credit. Use it by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong>; it is not refundable.</p>
-                 <button type="button" class="filter-clear" data-copy-coupon="${escapeMessageHtml(c.code)}">Copy code</button> <span class="fee-credit-msg"></span>`
-              : '<p>On its way — it arrives by email about 15 minutes after the cancellation, and shows here with its code.</p>'}
+              ? `<p class="fee-credit-lead"><code class="coupon-code">${escapeMessageHtml(c.code)}</code> · use by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong></p>
+                 <button type="button" class="filter-clear" data-copy-coupon="${escapeMessageHtml(c.code)}">Copy code</button> <span class="fee-credit-msg"></span>
+                 ${more('Details', '<p>Enter the code at checkout. It comes off the booking price and can be used together with your Aerva credit. It cannot be cashed, and anything left over does not carry to another booking.</p>')}`
+              : '<p class="fee-credit-lead">On its way — about 15 minutes after the cancellation. The code arrives by email and shows here.</p>'}
           </div>
         </div>`).join('');
       // "Your money with Aerva": one heading over the three kinds, each
@@ -8032,16 +8043,21 @@
       const coming = sum(refunds, x => x.amount);
       const creditLeft = sum(list.filter(c => c.status === 'active'), c => c.remaining);
       const couponLeft = sum(coupons.filter(c => c.status === 'active'), c => c.amount);
-      const fig = (label, amount, note) => amount > 0
-        ? `<div class="money-fig"><div class="money-fig-n">${fmtGuest(amount)}</div><div class="money-fig-l">${label}</div><div class="money-fig-note">${note}</div></div>` : '';
+      const fig = (label, amount) => amount > 0
+        ? `<div class="money-fig"><div class="money-fig-n">${fmtGuest(amount)}</div><div class="money-fig-l">${label}</div></div>` : '';
       const head = (coming || creditLeft || couponLeft) ? `
         <div class="money-head">
           <h3>Your money with Aerva</h3>
           <div class="money-figs">
-            ${fig('Refund', coming, MONEY_WORDS.refund)}
-            ${fig('Aerva credit', creditLeft, MONEY_WORDS.credit)}
-            ${fig('Aerva coupon', couponLeft, MONEY_WORDS.coupon)}
+            ${fig('Refund', coming)}
+            ${fig('Aerva credit', creditLeft)}
+            ${fig('Aerva coupon', couponLeft)}
           </div>
+          ${more('What is the difference?', `<ul class="money-words">
+            <li><strong>Refund</strong> — ${MONEY_WORDS.refund}</li>
+            <li><strong>Aerva credit</strong> — ${MONEY_WORDS.credit}</li>
+            <li><strong>Aerva coupon</strong> — ${MONEY_WORDS.coupon}</li>
+          </ul>`)}
         </div>` : '';
       // Refunds on their way: which booking, how much, and by when.
       const refundHtml = refunds.map(x => `
@@ -8049,7 +8065,8 @@
           <div class="fee-credit-amount">${fmtGuest(x.amount)}</div>
           <div class="fee-credit-body">
             <strong>On its way to your card</strong> <span class="fee-credit-from">${escapeMessageHtml(x.what)}${x.listing ? ' · ' + escapeMessageHtml(x.listing) : ''}</span>
-            <p>Aerva has made this refund${x.code ? ` on booking ${escapeMessageHtml(x.code)}` : ''}. It goes back to the card you paid with — banks usually show it by <strong>${escapeMessageHtml(fmtDate(x.byDate))}</strong>. There is nothing for you to do.</p>
+            <p class="fee-credit-lead">With your bank by <strong>${escapeMessageHtml(fmtDate(x.byDate))}</strong>. Nothing for you to do.</p>
+            ${more('Details', `<p>Aerva has made this refund${x.code ? ` on booking ${escapeMessageHtml(x.code)}` : ''}. It goes back to the card or account you paid with, and banks usually take 5 to 7 working days to show it.</p>`)}
           </div>
         </div>`).join('');
       // On My Bookings: one line with the figures and a way to the Wallet.
@@ -8069,8 +8086,10 @@
           <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
           <div class="fee-credit-body">
             <strong>Aerva credit</strong>${c.from ? ` <span class="fee-credit-from">from ${escapeMessageHtml(c.from)}</span>` : ''}${c.amount > c.remaining ? ` <span class="fee-credit-from">· ${fmtGuest(c.remaining)} left of ${fmtGuest(c.amount)}</span>` : ''}
-            <p>${c.reason === 'natural_disaster' ? 'Aerva approved your cancellation (natural disaster or government order), so what you paid for that booking is held for you as Aerva credit. Use it for new dates, or have it refunded to your original payment whenever you like.' : c.reason === 'emergency_fee' ? 'Your emergency cancellation came with proof, so Aerva’s service fee is held for you.' : c.reason === 'booking_transfer' ? 'Part of your booking moved to another property for less, so the difference (after Aerva’s transfer fee) is held for you.' : c.reason === 'checkin_rebook' ? 'Aerva moved you to a place that costs less, so the difference is held for you.' : c.reason === 'stay_shortened' ? 'Your stay was shortened, so what you paid for the nights you did not stay is held for you.' : (c.reason === 'host_cancelled' ? 'Your host cancelled, so Aerva’s service fee is held for you.' : 'Your host cancelled, so what you paid is held for you.')} ${c.expiresAt ? `Book another stay or experience by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong> and it is taken off what you pay, automatically — anything left stays here. Not booking again? Have it refunded to your original payment method at any time — anything left on that date is refunded automatically.` : `It does not expire: it is taken off what you pay on your next stay or experience, automatically — anything left stays here. Or have it refunded to your original payment method whenever you choose.`}</p>
-            <button type="button" class="filter-clear" data-refund-credit="${c.id}">Refund to original payment</button> <span class="fee-credit-msg"></span>
+            <p class="fee-credit-lead">${c.expiresAt
+              ? `Comes off your next booking automatically. Use it by <strong>${escapeMessageHtml(fmtDate(c.expiresAt))}</strong>, or get it refunded.`
+              : 'Comes off your next booking automatically — or get it refunded whenever you like.'}</p>
+                        <button type="button" class="filter-clear" data-refund-credit="${c.id}">Refund to original payment</button> <span class="fee-credit-msg"></span>
           </div>
         </div>` : c.status === 'refunding' ? `<div class="fee-credit-card done"><div class="fee-credit-body">Your Aerva credit of ${fmtGuest(c.remaining)} is being refunded.</div></div>`
         : (c.refunded > 0 ? `<div class="fee-credit-card done"><div class="fee-credit-body">${fmtGuest(c.refunded)} of your Aerva credit was refunded on ${escapeMessageHtml(fmtDate(c.refundedAt))}. Your bank may take a few working days to show it.</div></div>` : '')).join('');
@@ -8140,10 +8159,23 @@
           if(d(b.arrival) <= t && d(b.departure) >= t && st === 'paid' && d(b.departure) !== d(b.arrival) && d(b.departure) > t) return 0;
           if(d(b.departure) <= t && d(b.arrival) < t) return 2;
           return d(b.arrival) > t ? 1 : (d(b.departure) > t ? 0 : 2); };
-        bookings.forEach(b => { b.__group = groupOf(b); });
+        // Which tab a booking belongs on (owner, 12 Nov 2026): Today ·
+        // Upcoming · Past. "Today" is any confirmed stay that touches today
+        // — arriving today, in the middle of it, or checking out today —
+        // which is how the host's own Today view reads it.
+        const tabOf = (b) => { const st = String(b.status || '');
+          if(st === 'cancelled' || st === 'refunded') return 'past';
+          if(b.pending_group || b.waiting_details) return 'upcoming';
+          const t = d(b.local_today) || todayStr;
+          if(st === 'paid' && d(b.arrival) <= t && d(b.departure) >= t) return 'today';
+          return d(b.arrival) > t ? 'upcoming' : 'past'; };
+        bookings.forEach(b => { b.__group = groupOf(b); b.__tab = tabOf(b); });
         bookings.sort((a, b) => a.__group - b.__group || (a.__group <= 1 ? d(a.arrival).localeCompare(d(b.arrival)) : d(b.arrival).localeCompare(d(a.arrival)))); }
       const MB_GROUPS = ['Staying now', 'Upcoming', 'Past stays', 'Cancelled'];
-      container.innerHTML = bookings.map((b, __i) => { const __head = (__i === 0 || bookings[__i - 1].__group !== b.__group) ? `<h3 class="mb-group">${MB_GROUPS[b.__group]}</h3>` : ''; return __head + ((b) => {
+      // Three tabs (owner, 12 Nov 2026): Today · Upcoming · Past. A tab name
+      // says enough on its own, so the only headings left are inside Past,
+      // where stays taken and bookings cancelled are worth keeping apart.
+      const cardHtml = (b) => ((b) => {
         // Gifts and group bookings shared with this account, and groups still
         // collecting: their own cards, never any price or change/cancel action.
         if(b.pending_group || b.shared) return aervaSharedBookingCard(b);
@@ -8239,7 +8271,43 @@
             </div>
           </div>
         `;
-      })(b); }).join('');
+      })(b);
+      // Inside Past, stays you took and bookings that were cancelled stay
+      // apart; the other two tabs need no headings.
+      const panel = (which) => {
+        const mine = bookings.filter(x => x.__tab === which);
+        if(which !== 'past') return mine.map(cardHtml).join('');
+        let last = null;
+        return mine.map(x => {
+          const head = x.__group !== last ? `<h3 class="mb-group">${MB_GROUPS[x.__group]}</h3>` : '';
+          last = x.__group;
+          return head + cardHtml(x);
+        }).join('');
+      };
+      const TABS = [
+        ['today', 'Today', 'Nothing today. A stay shows here on the day you arrive, while you are there, and on the day you leave.'],
+        ['upcoming', 'Upcoming', 'Nothing booked yet. When you book a stay or an experience, it shows here.'],
+        ['past', 'Past', 'Nothing here yet — stays you have taken, and anything cancelled, move here.']
+      ];
+      const count = {}; TABS.forEach(([id]) => { count[id] = bookings.filter(x => x.__tab === id).length; });
+      // Open on the tab that has something in it, in that order: whatever is
+      // happening today first, then what is next.
+      const wanted = (new URLSearchParams(location.search).get('tab') || '').toLowerCase();
+      const start = TABS.some(([id]) => id === wanted) ? wanted
+        : (count.today ? 'today' : count.upcoming ? 'upcoming' : count.past ? 'past' : 'upcoming');
+      container.innerHTML = `<div class="mb-tabs" role="tablist" aria-label="Your bookings">
+          ${TABS.map(([id, label]) => `<button type="button" class="mb-tab${start === id ? ' is-on' : ''}" data-mb-tab="${id}" role="tab" aria-selected="${start === id}">${label}${count[id] ? ` <span class="mb-tab-n">${count[id]}</span>` : ''}</button>`).join('')}
+        </div>
+        ${TABS.map(([id, , empty]) => `<div data-mb-panel="${id}"${start === id ? '' : ' hidden'}>${count[id] ? panel(id) : `<p class="suites-empty">${empty}</p>`}</div>`).join('')}`;
+      container.querySelectorAll('[data-mb-tab]').forEach(btn => btn.addEventListener('click', () => {
+        const want = btn.dataset.mbTab;
+        container.querySelectorAll('[data-mb-tab]').forEach(x => {
+          const on = x.dataset.mbTab === want;
+          x.classList.toggle('is-on', on); x.setAttribute('aria-selected', String(on));
+        });
+        container.querySelectorAll('[data-mb-panel]').forEach(x => { x.hidden = x.dataset.mbPanel !== want; });
+        try{ const u = new URL(location.href); u.searchParams.set('tab', want); history.replaceState(null, '', u); }catch(e){}
+      }));
       container.querySelectorAll('[data-order-id]').forEach(btn => {
         btn.addEventListener('click', () => openChatForOrder(Number(btn.dataset.orderId), btn.dataset.listingName));
       });
@@ -10885,7 +10953,7 @@
           <span>✓ ${maxPetsLine}</span>
           <span>✓ ${feeLine}</span>
         </div>
-        <p style="font-size:11.5px; opacity:0.6; margin-top:8px; line-height:1.5;">Service and emotional-support animals aren't counted toward the pet limit. The first one is free; each additional one is charged the pet fee. Young pets (under 1 year) traveling with an adult pet aren't counted either.</p>`;
+        ${more('How animals are counted', "<p>Service and emotional-support animals aren't counted toward the pet limit. The first one is free; each additional one is charged the pet fee. Young pets (under 1 year) travelling with an adult pet aren't counted either.</p>")}`;
     } else if(listing.pet_friendly === false){
       petPolicyHtml = `
         <div class="listing-modal-section-title">Pet Policy</div>
@@ -11879,7 +11947,8 @@
       `;
     }).join('');
 
-    const disclaimer = rowsHtml ? `<p style="font-size:11px; opacity:0.55; margin-top:8px; line-height:1.5;">Paid amenities are available on the dates shown only, and are subject to weather, local circumstances, national holidays, and other factors outside the host's control. If a selected amenity can't be fulfilled, the host will provide a refund for that amenity.</p>` : '';
+    // The small print opens when it is wanted (owner, 12 Nov 2026).
+    const disclaimer = rowsHtml ? more('About paid amenities', "<p>They are available on the dates shown only, and depend on weather, local circumstances, national holidays and other things outside the host's control. If one can't be provided, the host refunds that amenity.</p>") : '';
     container.innerHTML = rowsHtml ? `<div class="listing-modal-section-title">Add Paid Amenities</div>${rowsHtml}${disclaimer}` : '';
 
     container.querySelectorAll('input[type="checkbox"][data-lg-amenity-id]').forEach(cb => {
@@ -13469,7 +13538,7 @@
             const left = Math.max(0, Math.round(Number(paid) - back));
             const kinds = [refund ? 'refund' : '', Number(b.credit_back) > 0 ? 'credit' : '', Number(b.coupon_back) > 0 ? 'coupon' : ''].filter(Boolean);
             return `<div class="bk-row bk-adds-up"><span>${left === 0 ? 'Nothing outstanding' : 'Kept under the booking’s terms'}</span><span>${inr(left)}</span></div>`
-              + `<div class="bk-money-words">${kinds.map(k => `<p><strong>${k === 'refund' ? 'Refund' : k === 'credit' ? 'Aerva credit' : 'Aerva coupon'}:</strong> ${MONEY_WORDS[k]}</p>`).join('')}</div>`;
+              + more('What is the difference?', `<ul class="money-words">${kinds.map(k => `<li><strong>${k === 'refund' ? 'Refund' : k === 'credit' ? 'Aerva credit' : 'Aerva coupon'}</strong> — ${MONEY_WORDS[k]}</li>`).join('')}</ul>`);
           })()}
           ${b.group && b.group.payers && b.group.payers.length ? `<div class="bk-row bk-payers"><span>Who paid</span><span>${b.group.payers.map(p => `${esc(p.firstName || 'A friend')}${p.organiser ? ' (organiser)' : ''}${p.you ? ' — you' : ''} · ${p.places} place${p.places === 1 ? '' : 's'}`).join('<br>')}${Number(b.group.coveredByOrganiser) > 0 ? `<br>${esc((b.group.payers.find(p => p.organiser) || {}).firstName || 'The organiser')} covered ${b.group.coveredByOrganiser} more` : ''}</span></div>` : ''}
           ${currentCurrency !== 'INR' && fmtGuest(paid) !== inrExact(paid) ? `<p class="bk-fx-note" style="font-size:12px; opacity:0.65; margin:10px 0 0;">Charged in Indian Rupees: ${inrExact(paid)}${refund ? `; ${refund.pending ? 'being refunded' : 'refunded'}: ${inrExact(refund.amount)}` : ''}. Amounts above are shown in ${esc(currentCurrency)} at today's rate.</p>` : ''}
@@ -17991,7 +18060,8 @@ function agGroupHtml(g, note){
     const q = g.rest;
     decide = `<div class="ag-card ag-decide" id="agRestCard"><h3 class="ag-h3">Pay the remaining ${AG_INR(q.amount)} to confirm</h3>
       <p>${q.paidPlaces} of ${g.places} places were paid in 2 hours. As you agreed when you started the group, pay the remaining <strong>${AG_INR(q.amount)}</strong> within the time left to confirm the booking for all ${g.places} guests.</p>
-      <p class="ag-help">The place is not held meanwhile: if someone else books it first, everyone is refunded in full. If you don’t pay in time, nothing is booked, everyone is refunded in full, and the unpaid amount is recorded on your account.</p>
+      <p class="ag-help">The place is not held while you collect the money.</p>
+      ${more('What if it does not work out?', '<p>If someone else books it first, everyone is refunded in full. If you don’t pay in time, nothing is booked, everyone is refunded in full, and the unpaid amount is recorded on your account.</p>')}
       ${q.beingPaid ? '<p class="ag-help">Your payment is in progress.</p>' : `${agNonRefTick(g)}<div class="ag-actions"><button type="button" class="btn solid" id="agPayGap">Pay ${AG_INR(q.amount)} and confirm</button></div>`}
       ${atDecisionAdd ? `<p class="ag-help" style="margin-top:12px;"><strong>Or add guest(s)</strong> (once): the group reopens for 30 minutes, priced for the new number of guests. Anything still unpaid then is yours to pay.</p>
           ${addControls('Add and pay')}<p class="ag-error" id="agAddError" hidden></p>` : ''}
@@ -18291,8 +18361,11 @@ function aervaOpenGiftForm(b, opts){
   wrap.innerHTML = `<div class="ag-modal-box"><button type="button" class="ag-modal-x" aria-label="Close">×</button>
     <h3 class="ag-h3">${b.gift ? 'Change who this stay is for' : handover ? 'Someone else will go instead' : 'Send as a gift'}</h3>
     <p class="ag-help">${AG_ESC(b.suite_name || '')} · ${AG_ESC(AG_DAY(b.arrival))}. ${handover
-      ? 'The dates and the price do not change, and there is nothing more to pay. You keep managing the booking and any refund still goes to your payment, because you paid for it. Your host is told who is staying, and will check their government ID at check-in.'
-      : 'You keep managing the booking; refunds go to your payment. They get the stay details (never the price) and accept it with their name and phone.'}</p>
+      ? 'Nothing more to pay — the dates and the price stay as they are.'
+      : 'They get the stay details, never the price.'}</p>
+    ${more('How it works', handover
+      ? '<p>You keep managing the booking, and any refund still goes to your payment, because you paid for it. Your host is told who is staying and will check their government ID at check-in.</p>'
+      : '<p>You keep managing the booking; refunds go to your payment. They accept it with their name and phone, and your host is told who is staying.</p>')}
     <div class="ag-grid"><div class="field"><label for="agMFirst">Their first name</label><input id="agMFirst" value="${AG_ESC(b.gift ? gf : '')}"></div>
     <div class="field"><label for="agMLast">Their last name</label><input id="agMLast" value="${AG_ESC(b.gift ? gl.join(' ') : '')}"></div></div>
     <div class="field" style="margin-top:10px;"><label for="agMEmail">Their email</label><input id="agMEmail" type="email" value="${AG_ESC(g.recipientEmail || '')}"></div>
