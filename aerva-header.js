@@ -110,6 +110,9 @@
 
   function menuLinks(){
     return '<a href="index.html?view=profile">Profile</a>' +
+      // Wallet sits under Profile (owner, 12 Nov 2026): Aerva credit,
+      // Aerva coupons, and money on its way back to the card.
+      '<a href="index.html?view=wallet">Wallet</a>' +
       '<a href="index.html?view=wishlist">Wishlist</a>' +
       '<a href="index.html?view=my-bookings">My Bookings</a>' +
       // My Collection and My Earnings: hosts with a live listing, and active

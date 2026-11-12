@@ -609,7 +609,7 @@ async function remindQuarterly(sql, { deadlineMs = 4000, at } = {}) {
         <h2 style="font-family:Georgia,serif; font-weight:normal; margin:0 0 12px;">${amount} is ready when you are</h2>
         <p>Hi ${esc(String(who.name || '').split(' ')[0] || 'there')}, ${t.line(amount)}</p>
         <p style="margin:22px 0;"><a href="https://aerva.in/index.html" style="background:#1c1a17; color:#f4eadc; padding:12px 22px; text-decoration:none; display:inline-block;">Find a stay</a></p>
-        <p style="font-size:13px; color:#6e675d;">It is taken off your next booking automatically${g.ends && isFinite(new Date(g.ends)) ? `. Use it by <strong>${day(g.ends)}</strong> — anything left then is refunded to your original payment method` : ''}.${Number(g.cash) > 0 ? ` Prefer the money back? Have ${Number(g.cash) < Number(g.balance) ? inr(g.cash) + ' of it' : 'it'} refunded to your original payment method at any time from <a href="https://aerva.in/index.html?view=my-bookings" style="color:#8a6c39;">My Bookings</a>.` : ''}</p>
+        <p style="font-size:13px; color:#6e675d;">It is taken off your next booking automatically${g.ends && isFinite(new Date(g.ends)) ? `. Use it by <strong>${day(g.ends)}</strong> — anything left then is refunded to your original payment method` : ''}.${Number(g.cash) > 0 ? ` Prefer the money back? Have ${Number(g.cash) < Number(g.balance) ? inr(g.cash) + ' of it' : 'it'} refunded to your original payment method at any time from <a href="https://aerva.in/index.html?view=wallet" style="color:#8a6c39;">your Aerva wallet</a>.` : ''}</p>
       </div>`);
     out.emailed++;
     out.affected.push({ guestId: g.guest_id, email: who.email, balance: g.balance });
@@ -649,7 +649,7 @@ async function remindEnding(sql, { deadlineMs = 4000, at } = {}) {
         <h2 style="font-family:Georgia,serif; font-weight:normal; margin:0 0 12px;">${amount} — use it by ${day(g.ends)}</h2>
         <p>Hi ${esc(String(who.name || '').split(' ')[0] || 'there')}, your <strong>${amount}</strong> of Aerva credit ends on <strong>${day(g.ends)}</strong>. Book a stay or experience before then and it comes off the price automatically.</p>
         <p style="margin:22px 0;"><a href="https://aerva.in/index.html" style="background:#1c1a17; color:#f4eadc; padding:12px 22px; text-decoration:none; display:inline-block;">Find a stay</a></p>
-        <p style="font-size:13px; color:#6e675d;">Not booking? Anything left on that date is refunded to your original payment method automatically, or you can have it refunded now from <a href="https://aerva.in/index.html?view=my-bookings" style="color:#8a6c39;">My Bookings</a>.</p>
+        <p style="font-size:13px; color:#6e675d;">Not booking? Anything left on that date is refunded to your original payment method automatically, or you can have it refunded now from <a href="https://aerva.in/index.html?view=wallet" style="color:#8a6c39;">your Aerva wallet</a>.</p>
       </div>`);
     out.emailed++;
   }
@@ -708,12 +708,12 @@ async function bellNotice(sql, guestId) {
       out.push({ id: 'aerva-credit:' + r.balance, kind: 'action', title: `${a} of Aerva credit is waiting for you`,
                  body: (Number(r.cash) > 0 ? 'Your next getaway is partly paid for. It comes off your next booking automatically — or have it refunded any time.' + ends
                    : 'Your next getaway is partly paid for. It comes off your next booking automatically.'),
-                 href: 'index.html?view=my-bookings' });
+                 href: 'index.html?view=wallet' });
     }
     try {
       const cps = await sql`SELECT code, amount, expires_at FROM coupons WHERE guest_id = ${guestId} AND status = 'active' AND expires_at > now() ORDER BY expires_at LIMIT 3`;
       cps.forEach(c => out.push({ id: 'aerva-coupon:' + c.code, kind: 'action', title: `Your ${inr(c.amount)} Aerva coupon: ${c.code}`,
-        body: `Use it at checkout by ${day(c.expires_at)}. It covers the booking price and works with your Aerva credit.`, href: 'index.html?view=my-bookings' }));
+        body: `Use it at checkout by ${day(c.expires_at)}. It covers the booking price and works with your Aerva credit.`, href: 'index.html?view=wallet' }));
     } catch (e) { /* coupons table not there */ }
     // A refund on its way, and by when it should land (owner, 12 Nov 2026,
     // suggestion 16: the bell should carry the money too, not only the
@@ -724,7 +724,7 @@ async function bellNotice(sql, guestId) {
         id: 'refund-on-way:' + x.orderId + ':' + x.amount, kind: 'info',
         title: `${inr(x.amount)} is on its way back to your card`,
         body: `${x.what}${x.listing ? ' · ' + x.listing : ''} — your bank should show it by ${day(x.byDate)}. Nothing for you to do.`,
-        href: 'index.html?view=my-bookings' }));
+        href: 'index.html?view=wallet' }));
     } catch (e) { /* refunds table not there */ }
     return out;
   } catch (e) { return []; }
