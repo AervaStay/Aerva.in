@@ -6,7 +6,7 @@
     },
     "api/get-pending-listings.js": {
       "maxDuration": 60,
-      "includeFiles": "migrations/**"
+      "includeFiles": "{migrations/**,aerva-policies.js}"
     },
     "api/blob-upload.js": {
       "maxDuration": 60
@@ -19,6 +19,7 @@
       "includeFiles": "aerva-policies.js"
     },
     "api/host-listings.js": {
+      "maxDuration": 30,
       "includeFiles": "aerva-policies.js"
     },
     "api/submit-listing.js": {

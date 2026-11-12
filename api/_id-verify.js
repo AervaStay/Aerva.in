@@ -334,6 +334,19 @@ function aadhaarHash(value, shareCode, lastDigit) {
   return h;
 }
 
+// UIDAI writes the date of birth as DD-MM-YYYY (and sometimes just a year).
+// Returned as YYYY-MM-DD for the 18+ rule; never stored.
+function normalizeAadhaarDob(v) {
+  const t = String(v || '').trim();
+  let m = t.match(/^(\d{2})-(\d{2})-(\d{4})$/);
+  if (m) return `${m[3]}-${m[2]}-${m[1]}`;
+  m = t.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if (m) return t;
+  m = t.match(/^(\d{4})$/);
+  if (m) return `${m[1]}-01-01`;
+  return '';
+}
+
 function readAadhaarXml(signedXml) {
   const { DOMParser } = require('@xmldom/xmldom');
   const doc = new DOMParser().parseFromString(signedXml, 'text/xml');
@@ -442,6 +455,13 @@ async function status(sql, guestId) {
     suggestedName: fullName,
     docTypes: DOC_TYPES.map(d => ({ key: d.key, label: d.label, numberHint: d.numberHint })),
     aadhaarZip: aadhaarZipAvailable(),
+    // One verification page with every way in, not three pages with
+    // three names (owner, 12 Nov 2026, suggestion 15). DigiLocker is
+    // offered here too when it is set up.
+    digilocker: await (async () => {
+      try { return require('./_digilocker').ready() && await require('./_guest-verify').ready(sql) && !!(await require('./_digilocker').table(sql)); }
+      catch (e) { return false; }
+    })(),
     attemptsLeft: Math.max(0, ATTEMPTS_PER_DAY - await attemptsToday(sql, guestId))
   };
 }
@@ -523,7 +543,12 @@ async function verifyAadhaarZip(sql, logAudit, guestId, body) {
   };
   await logAttempt(sql, logAudit, guestId, true, { method: 'aadhaar_offline', phoneMatch, emailMatch });
   const hostVerified = await save(sql, logAudit, account, record, { phoneMatch, emailMatch });
-  return { verification: describe(record), hostVerified };
+  // The same proof counts for bookings, as a photo of an ID does
+  // (_guest-verify.js adoptFromIdVerify): signed by UIDAI, it is the
+  // strongest of the three. The date of birth is handed over for the 18+
+  // rule and is never stored or sent back to the browser.
+  return { verification: describe(record), hostVerified,
+           forBooking: { docType: 'aadhaar', name: record.name, last4: record.last4, dob: normalizeAadhaarDob(x.dob) } };
 }
 
 // For the profile others see: just whether, and with what kind of ID.

@@ -966,6 +966,26 @@ module.exports = async (req, res) => {
     const specialSaved = await special.saveSpecial(sql, listing.id, specialIn.values);
     if (specialSaved.saved) Object.assign(listing, specialIn.values);
 
+    // The refund policy when a guest cancels, chosen on the listing form
+    // (owner, 12 Nov 2026 — before this it could only be set weeks later in
+    // Manage listing, so every new listing was Flexible without being asked).
+    // Only 'flexible' or 'firm' (api/_cancellations.js POLICIES); a request
+    // that doesn't carry it leaves the listing as it is. Its own statement,
+    // so a database without migration_cancellation_policy.sql still saves
+    // the listing — everything is then read as Flexible.
+    {
+      const want = req.body && req.body.cancellationPolicy;
+      if (want === 'flexible' || want === 'firm') {
+        try {
+          await sql`UPDATE listings SET cancellation_policy = ${want} WHERE id = ${listing.id}`;
+          listing.cancellation_policy = want;
+        } catch (err) {
+          if (err.code !== '42703') throw err;
+          console.error('cancellation_policy not saved (apply migration_cancellation_policy.sql):', err.message);
+        }
+      }
+    }
+
     // "Offer free cancellation to guests" (owner, 10 Nov 2026) — the host's
     // own choice for a stay, drafts included, no Aerva review. Off unless
     // ticked; left as it is when the request doesn't carry it at all (an

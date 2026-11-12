@@ -78,6 +78,24 @@ function whyNotSent(r) {
   return 'Waiting for the next payout run (every 4 hours)';
 }
 
+// The same question, answered for the person waiting for the money
+// (owner, 12 Nov 2026, suggestion 3: a host should never have to guess
+// why a payout has not arrived). Plain, and never the bank's own words:
+// those can name internal codes. { why, fix } — `fix` names a page the
+// host can act on, or ''.
+function whyNotSentForPayee(r) {
+  const hold = /^on hold/i.test(String(r.failure_reason || ''));
+  if (r.status === 'sent') return { why: '', fix: '' };
+  if (hold) return { why: 'Aerva is holding this while it looks at something a guest reported on arrival. It goes out as soon as that is settled.', fix: '' };
+  if (Number(r.net) <= 0) return { why: 'There is nothing to pay out on this one.', fix: '' };
+  if (r.bank_not_ready) return { why: 'Your bank details are not approved yet — Aerva cannot send money until they are.', fix: 'bank' };
+  if (r.status === 'failed' || r.failure_reason) return { why: 'The last attempt did not go through at the bank. Aerva tries again by itself; if your account number or IFSC has changed, correct it and it goes on the next run.', fix: 'bank' };
+  if (r.arriving_by && String(r.arriving_by).slice(0, 10) > new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10)) {
+    return { why: 'On its way — with your bank by ' + String(r.arriving_by).slice(0, 10) + '.', fix: '' };
+  }
+  return { why: 'Waiting for the next payout run. Aerva sends payouts every few hours.', fix: '' };
+}
+
 function ready(sql) { return !!sql; }
 
 // ---------------------------------------------------------------------
@@ -381,4 +399,4 @@ async function totals(sql, { from, to, like }) {
            dueOut: Math.round(dueOut), net: Math.round(inPaid) - out };
 }
 
-module.exports = { ledger, totals, ready, refundFor };
+module.exports = { ledger, totals, ready, refundFor, whyNotSent, whyNotSentForPayee };

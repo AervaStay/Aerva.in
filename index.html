@@ -43,7 +43,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="aerva.css?v=2026-11-12c">
+<link rel="stylesheet" href="aerva.css?v=2026-11-12e">
 <script src="aerva-cohost.js?v=2026-11-11d"></script>
 </head>
 <body class="showing-hero">
@@ -646,7 +646,10 @@
     </div>
 
     <div class="profile-section" id="settingsIdSection">
-      <div class="profile-section-title">ID verification</div>
+      <!-- One verification page, whichever way the person came (owner,
+           12 Nov 2026): #verify is linked from the booking steps. -->
+      <a id="verify" tabindex="-1" aria-hidden="true"></a>
+      <div class="profile-section-title">Verify your ID</div>
       <div id="settingsIdBox"></div>
     </div>
 
@@ -848,6 +851,18 @@
         </div>
       </div>
       <p id="listCheckTimesHelp" style="font-size:11.5px; opacity:0.6; margin-top:-8px; margin-bottom:16px;">Guests see these before they book. Cancellation, payout and deposit times are counted from them. You can change them later in Manage listing → Guest Check-In Info.</p>
+      <!-- Refund policy when a guest cancels (owner, 12 Nov 2026): chosen
+           here, not weeks later in Manage listing. Wording must match the
+           tiers in api/_cancellations.js. -->
+      <div class="field">
+        <label for="listCancellationPolicy">Refund policy when a guest cancels <span class="required-mark">*</span></label>
+        <select id="listCancellationPolicy" aria-describedby="listCancellationPolicyNote">
+          <option value="flexible">Flexible</option>
+          <option value="firm">Firm</option>
+        </select>
+        <p id="listCancellationPolicyNote" aria-live="polite" style="font-size:12px; opacity:0.75; margin:6px 0 4px;"></p>
+        <p style="font-size:11.5px; opacity:0.6; margin:0 0 4px;">Every booking keeps the policy it was paid under. In every guest cancellation Aerva’s service fee is non-refundable and the security deposit is refunded in full. What the guest is not refunded is paid to you, less Aerva’s commission, on the usual payout day. You can change this later in Manage listing; it then applies to new bookings only.</p>
+      </div>
       <!-- The host's choice, off by default (api/submit-listing.js freeCancelOffered). -->
       <div class="field fc-optin" id="listFreeCancelField">
         <label class="fc-switch" for="listFreeCancelOffered">
@@ -1612,14 +1627,14 @@
 <script src="https://checkout.razorpay.com/v1/checkout.js"></script>
 <script async defer src="https://maps.googleapis.com/maps/api/js?key=AIzaSyAPqat5CU7udU2O3bJ_zmG-ZMH5wl7bEGU&libraries=places&language=en&callback=initGoogleMaps"></script>
 <script src="aerva-photo-location.js?v=2026-11-07a" defer></script>
-<script src="aerva-policies.js?v=2026-11-12c" defer></script>
-<script src="aerva-help.js?v=2026-11-11g" defer></script>
+<script src="aerva-policies.js?v=2026-11-12d" defer></script>
+<script src="aerva-help.js?v=2026-11-12a" defer></script>
 <script src="aerva-privacy.js?v=2026-10-10i" defer></script>
-<script src="aerva-id-verify.js?v=2026-11-11a" defer></script>
+<script src="aerva-id-verify.js?v=2026-11-12a" defer></script>
 <script src="aerva-bank-fields.js?v=2026-10-13a" defer></script>
 <script src="aerva-special.js?v=2026-11-10a" defer></script>
-<script src="aerva-guest-verify.js?v=2026-11-12a" defer></script>
-<script src="aerva.js?v=2026-11-12d" defer></script>
+<script src="aerva-guest-verify.js?v=2026-11-12b" defer></script>
+<script src="aerva.js?v=2026-11-12e" defer></script>
 
 </body>
 </html>

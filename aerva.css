@@ -1929,6 +1929,12 @@
 .bk-facts strong small{display:block; font-size:12px; opacity:0.6; font-weight:400; margin-top:2px;}
 .bk-meet{opacity:0.85; margin:-8px 0 20px;}
 .bk-cancelled{background:#fbefec; border:1px solid #efcfc8; color:#7a2e25; border-radius:12px; padding:12px 16px; font-size:14px; line-height:1.55; margin:0 0 20px;}
+/* "What is happening now", first on a booking page, with what happens
+   next under it (owner, 12 Nov 2026). */
+.bk-now{ margin:0 0 20px; padding:14px 16px; border-radius:12px; background:#f7f1e6;
+  border:1px solid #e4d6bb; border-left:3px solid #a9884f; }
+.bk-now strong{ display:block; font-size:16px; line-height:1.4; }
+.bk-now span{ display:block; margin-top:5px; font-size:13.5px; opacity:0.8; line-height:1.55; max-width:52em; }
 .bk-summary{display:grid; grid-template-columns:1fr 1fr; gap:22px; margin:0 0 34px;}
 .bk-card{background:#fff; border:1px solid var(--line-dark); border-radius:14px; padding:20px 22px;}
 .bk-card h3{font-family:'Bodoni Moda', serif; font-size:19px; font-weight:500; margin:0 0 12px;}
@@ -2555,6 +2561,9 @@ textarea.tpl-input{ resize:vertical; line-height:1.55; }
 
 /* My Bookings: cancellation request status */
 .booking-request-note{ display:inline-block; font-size:13px; opacity:0.75; margin-top:8px; }
+/* What happens when a wait ends: its own line under the note or button
+   it belongs to (owner, 12 Nov 2026). */
+.booking-request-then{ display:block; font-size:12.5px; opacity:0.68; line-height:1.5; max-width:46em; }
 
 /* ---------- Co-hosting page: Your co-hosts ---------- */
 .cohost-team-card{ border:1px solid var(--line-dark, #e6dccd); border-radius:14px; padding:16px 18px; margin-bottom:14px; }
@@ -3124,6 +3133,22 @@ footer .foot-bottom{ margin-top:0; }
 .hc-status-resolved{ background:#e9f2ea; color:var(--ok); }
 .hc-status-closed{ background:#eeeeec; color:#6b6b66; }
 .hc-status-note{ margin:16px 0 0; padding:12px 16px; border-radius:10px; background:var(--surface-2); font-size:15px; line-height:1.6; }
+
+/* Where a request stands, as one strip: received · with Aerva · your turn
+   · resolved (owner, 12 Nov 2026). The step it is on is filled in; the
+   ones behind it are ticked; the line under it says by when. */
+.hc-strip{ display:flex; flex-wrap:wrap; gap:6px; margin:14px 0 0; }
+.hc-strip-step{ flex:1 1 auto; min-width:0; padding:7px 10px; border-radius:999px; text-align:center;
+  font-size:12.5px; letter-spacing:0.03em; background:var(--surface-2); color:var(--ink); opacity:0.45; white-space:nowrap; }
+.hc-strip-step.is-done{ opacity:0.8; }
+.hc-strip-step.is-done::before{ content:'✓ '; }
+.hc-strip-step.is-now{ opacity:1; font-weight:600; background:#f4eadc; box-shadow:inset 0 0 0 1px #d8c6a4; }
+.hc-strip-by{ margin:8px 0 0; font-size:12.5px; opacity:0.7; }
+.hc-actions.hc-not-sorted{ margin-top:10px; }
+@media (max-width: 520px){
+  .hc-strip{ gap:4px; }
+  .hc-strip-step{ font-size:11.5px; padding:6px 8px; }
+}
 .hc-status-note-waiting_on_you{ background:#fbecea; }
 .hc-status-note-resolved{ background:#e9f2ea; }
 
@@ -3779,6 +3804,8 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 .ag-quote cite{display:block; font-style:normal; font-size:13px; opacity:0.7; margin-top:4px;}
 .ag-quote-sm{font-size:13.5px; margin:6px 0;}
 .ag-mb-note{margin:6px 0; font-size:13.5px;}
+/* A group payer's own figures, never the group's (owner, 12 Nov 2026). */
+.ag-my-share{ font-size:13px; opacity:0.85; line-height:1.55; }
 .ag-checkin{margin:8px 0; font-size:13.5px; line-height:1.55;}
 .ag-modal{position:fixed; inset:0; background:rgba(28,26,23,0.45); z-index:5000; display:flex; align-items:center; justify-content:center; padding:16px;}
 .ag-modal-box{background:#fff; border-radius:14px; padding:22px 20px; width:100%; max-width:460px; max-height:90vh; overflow:auto; position:relative;}
@@ -3912,3 +3939,37 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
   body.has-reserve-bar footer, body.has-reserve-bar .listing-modal{ padding-bottom:84px; }
   .listing-col-booking, #listingBookingAction{ scroll-margin-top:190px; }
 }
+
+/* A group booking: what came back to this payer, and what is left of their share. */
+.bk-row.bk-you-keep span:last-child{ font-weight:500; }
+
+/* The money rows add up on screen, and each kind of money back is named in
+   one line, in the same words as the emails (owner, 12 Nov 2026). */
+.bk-row.bk-adds-up{ border-top:1px solid var(--line-dark); margin-top:6px; padding-top:10px; font-weight:500; }
+.bk-money-words{ margin:10px 0 0; }
+.bk-money-words p{ margin:0 0 4px; font-size:12px; opacity:0.68; line-height:1.5; }
+
+/* "Someone has given you a stay": the first thing a guest sees at sign-in
+   when a gift is waiting (aerva.js aervaGiftPopup). */
+.gift-pop{position:fixed; inset:0; z-index:4000; background:rgba(28,26,23,0.55);
+  display:flex; align-items:center; justify-content:center; padding:20px;}
+.gift-pop-card{background:#fffdf9; border-radius:16px; max-width:430px; width:100%; padding:26px 26px 22px;
+  box-shadow:0 18px 60px rgba(0,0,0,0.26); text-align:center;}
+.gift-pop-eyebrow{font-size:12px; letter-spacing:0.14em; text-transform:uppercase; color:var(--gold-text, #8a6c39); margin:0 0 6px;}
+.gift-pop-card h2{font-family:Georgia, serif; font-size:23px; line-height:1.25; margin:0 0 12px;}
+.gift-pop-stay{font-size:15.5px; line-height:1.5; margin:0 0 10px;}
+.gift-pop-note{font-size:13.5px; opacity:0.75; margin:0 0 18px;}
+.gift-pop-row{display:flex; gap:10px; justify-content:center; flex-wrap:wrap;}
+.gift-pop-row .btn, .gift-pop-row .filter-clear{min-height:44px;}
+@media (max-width: 520px){ .gift-pop-card{padding:22px 18px 18px;} .gift-pop-card h2{font-size:20px;} }
+
+/* "Your money with Aerva" — one heading over refunds, credit and coupons,
+   each said in a line, because people mix the three up. */
+.money-head{margin:0 0 14px;}
+.money-head h3{font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:21px; margin:0 0 10px;}
+.money-figs{display:flex; flex-wrap:wrap; gap:10px;}
+.money-fig{flex:1 1 200px; min-width:190px; border:1px solid #e9e1d5; border-radius:12px; padding:13px 15px; background:#fdfbf7;}
+.money-fig-n{font-size:21px; font-weight:600; letter-spacing:-0.01em;}
+.money-fig-l{font-size:13.5px; margin-top:2px;}
+.money-fig-note{font-size:12px; opacity:0.68; margin-top:4px; line-height:1.45;}
+@media (max-width: 640px){ .money-fig{flex:1 1 100%;} }

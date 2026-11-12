@@ -117,6 +117,17 @@ async function sendEmail(to, subject, html, replyTo = null) {
     return r.ok;
   } catch (err) { console.error('support email failed:', err.message); return false; }
 }
+// One wording for the reference line, the closing step and the names of
+// the three kinds of money (api/_say.js, owner 12 Nov 2026).
+const SAY = require('./_say');
+// A request about a booking carries that booking's code too, so nobody is
+// asked for it twice. Never throws: no code, no line.
+async function bookingCode(sql, orderId) {
+  try {
+    const r = (await sql`SELECT to_jsonb(orders)->>'confirmation_code' AS code FROM orders WHERE id = ${Number(orderId) || 0}`)[0];
+    return (r && r.code) || null;
+  } catch (e) { return null; }
+}
 const requestLink = (ref) => `${SITE}/index.html?view=help&request=${encodeURIComponent(ref)}`;
 const button = (href, label) => `<p style="margin:20px 0;"><a href="${href}" style="background:#1c1a17; color:#f4eadc; padding:12px 22px; text-decoration:none; display:inline-block;">${esc(label)}</a></p>`;
 
@@ -231,10 +242,12 @@ async function createRequest(sql, { guestId, category, subject, description, ord
   // Rules ask for), and a heads-up to the support inbox.
   await sendEmail(me.email, `We have received your request ${ticket.ref}`,
     `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">We have received your request</h2>
+     ${SAY.refBlock({ code: oid ? await bookingCode(sql, oid) : null, ref: ticket.ref })}
      <p>Hi ${esc(String(me.name || '').split(' ')[0] || 'there')}, ${raisedBy ? 'as discussed with our support team, we have raised this request for you' : 'thank you for writing to Aerva'}. Your reference number is <strong>${esc(ticket.ref)}</strong>.</p>
      <p><strong>${esc(subj)}</strong><br><span style="color:#6e675d;">${esc(CATEGORIES[category].label)}</span></p>
      <p>A member of our support team will ${callbackPhone ? `call you on <strong>${esc(callbackPhone)}</strong> and ` : ''}reply within ${FIRST_RESPONSE_HOURS} hours, usually much sooner. You can follow your request and add to it at any time:</p>
      ${button(requestLink(ticket.ref), 'View your request')}
+     ${SAY.nextStep(SAY.steps.weAnswerBy(`${FIRST_RESPONSE_HOURS} hours from now`))}
      <p style="font-size:13px; color:#6e675d;">If anyone is in danger, call 112 first.</p>`);
   await sendEmail(SUPPORT_INBOX(), `New request ${ticket.ref}: ${CATEGORIES[category].label}`,
     `<p><strong>${esc(subj)}</strong> · ${esc(CATEGORIES[category].label)} · as ${esc(role)}</p>
@@ -330,6 +343,9 @@ async function getRequest(sql, guestId, ref) {
     // Resolved: the person is asked whether it is, and for a rating, before it closes.
     askFeedback: t.status === 'resolved',
     autoCloseAt: t.status === 'resolved' && t.resolved_at ? new Date(new Date(t.resolved_at).getTime() + FEEDBACK_HOURS * 3600e3).toISOString() : null,
+    // When Aerva's first answer is promised by — the status strip says it,
+    // so nobody has to count 48 hours themselves (owner, 12 Nov 2026).
+    firstReplyBy: t.first_response_at ? null : new Date(new Date(t.created_at).getTime() + FIRST_RESPONSE_HOURS * 3600e3).toISOString(),
     feedback: t.feedback_at ? { rating: t.feedback_rating, comment: t.feedback_comment, resolved: t.feedback_resolved, at: t.feedback_at } : null,
     autoClosed: t.auto_closed === true,
     messages: msgs.map(m => ({ id: m.id, from: m.sender === 'user' ? 'you' : m.sender === 'support' ? 'Aerva Support' : 'Aerva',
@@ -645,10 +661,16 @@ async function adminReply(sql, { id, text, status = null, internal = false, admi
     const what = replied ? 'Aerva Support has replied' : `Your request is now: ${STATUS_LABELS[next]}`;
     await sendEmail(t.person_email, `${what} — ${t.ref}`,
       `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">${esc(what)}</h2>
+       ${SAY.refBlock({ code: t.order_id ? await bookingCode(sql, t.order_id) : null, ref: t.ref })}
        <p><strong>${esc(t.subject)}</strong> · ${esc(t.ref)}</p>
        ${replied ? `<blockquote style="margin:12px 0; padding:10px 14px; background:#f6f1ea; border-left:3px solid #a9884f; white-space:pre-wrap;">${esc(body)}</blockquote>` : ''}
        ${next === 'resolved' ? `<p><strong>Is it sorted?</strong> Tell us on the request — confirm it is resolved and rate how we did, or say what is still not right and it opens again. If we do not hear from you, it closes by itself in ${FEEDBACK_HOURS} hours.</p>` : ''}
        ${button(requestLink(t.ref), next === 'closed' ? 'View your request' : next === 'resolved' ? 'Tell us how we did' : 'View and reply')}
+       ${SAY.nextStep(next === 'resolved'
+          ? `Your turn: confirm it is sorted, or say what is still wrong. If we do not hear from you it closes by itself in ${FEEDBACK_HOURS} hours.`
+          : next === 'closed' ? 'Nothing for you to do. If it comes back, raise a new request and mention this number.'
+          : replied ? 'Your turn: reply on the request page whenever you are ready — nothing closes while you are answering.'
+          : 'Nothing for you to do — Aerva comes back to you on the request page.')}
        <p style="font-size:13px; color:#6e675d;">Please reply on the request page rather than to this email, so everything stays in one place.</p>`);
   }
   const out = await adminGet(sql, t.id);
@@ -921,6 +943,7 @@ async function signedOutView(sql, { ref, key, ip }, t = null) {
     status: t.status, statusLabel: STATUS_LABELS[t.status] || t.status, createdAt: t.created_at, updatedAt: t.updated_at,
     phoneEnding: phone.length >= 4 ? phone.slice(-4) : null,
     signedOut: true, canReply: t.status !== 'closed', replyMax: SO_REPLY_MAX,
+    firstReplyBy: t.first_response_at ? null : new Date(new Date(t.created_at).getTime() + FIRST_RESPONSE_HOURS * 3600e3).toISOString(),
     autoCloseAt: t.status === 'resolved' && t.resolved_at ? new Date(new Date(t.resolved_at).getTime() + FEEDBACK_HOURS * 3600e3).toISOString() : null,
     linkEndsAt: ends ? ends.toISOString() : null,
     messages: msgs.map(m => ({ id: m.id, from: m.sender === 'user' ? 'you' : m.sender === 'support' ? 'Aerva Support' : 'Aerva',

@@ -740,9 +740,9 @@
 <link rel="stylesheet" href="aerva-header.css?v=2026-11-11y">
 <script src="aerva-cohost.js?v=2026-11-11d"></script>
 <script src="aerva-privacy.js?v=2026-10-10a"></script>
-<script src="aerva-id-verify.js?v=2026-11-11a"></script>
-<script src="aerva-policies.js?v=2026-11-12c"></script>
-<script src="aerva-guest-verify.js?v=2026-11-12a"></script>
+<script src="aerva-id-verify.js?v=2026-11-12a"></script>
+<script src="aerva-policies.js?v=2026-11-12d"></script>
+<script src="aerva-guest-verify.js?v=2026-11-12b"></script>
 </head>
 <body>
 
@@ -3310,6 +3310,21 @@
           <div class="settings-row-value">${escH(booking.guests)}</div>
         </div>
       </div>
+      ${booking.gift ? `
+      <div class="settings-row">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:14px;">Who is staying</div>
+          <div class="settings-row-value">${escH(booking.gift.name || 'The person it was given to')}${booking.gift.accepted ? '' : ' — not accepted yet, so this name may change'}</div>
+          ${booking.gift.idNote ? `<div class="settings-row-value" style="font-size:13px; opacity:0.75; margin-top:4px;${booking.gift.idChecked ? '' : ' color:#a3402f;'}">${escH(booking.gift.idNote)}</div>` : ''}
+        </div>
+      </div>` : ''}
+      ${!booking.gift && booking.idNote ? `
+      <div class="settings-row">
+        <div class="settings-row-main">
+          <div class="settings-row-label" style="font-size:14px;">Government ID</div>
+          <div class="settings-row-value" style="font-size:13.5px;${booking.idChecked ? '' : ' color:#a3402f;'}">${escH(booking.idNote)}</div>
+        </div>
+      </div>` : ''}
       ${isCohost ? `
       ${booking.subtotal !== undefined ? `
       <div class="settings-row">

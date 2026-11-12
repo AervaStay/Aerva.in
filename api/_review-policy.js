@@ -228,8 +228,61 @@ const REVIEW_POLICY = {
   ]
 };
 
+// ---------------------------------------------------------------------
+// The bell: a review whose window is about to close (owner, 12 Nov 2026,
+// suggestion 16). Both sides: the guest reviews the stay, the host
+// reviews the guest. Only inside the last few days, and only where that
+// side has not written one. Never throws.
+// ---------------------------------------------------------------------
+const CLOSING_SOON_DAYS = 4;
+async function bellNotifications(sql, { guestId, hostId = null } = {}) {
+  const out = [];
+  const left = (days) => days <= 0 ? 'today' : days === 1 ? 'tomorrow' : `in ${days} days`;
+  try {
+    const rows = await sql`
+      SELECT o.id, o.suite_name, o.departure,
+             (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date AS local_today
+      FROM orders o JOIN listings l ON l.id = o.listing_id
+      WHERE o.guest_id = ${guestId} AND o.status = 'paid'
+        AND NOT EXISTS (SELECT 1 FROM listing_reviews r WHERE r.order_id = o.id)
+      ORDER BY o.departure DESC LIMIT 20`;
+    rows.forEach(r => {
+      const used = daysSinceCheckout(r.departure, r.local_today);
+      if (used == null || used < 0 || used >= REVIEW_WINDOW_DAYS) return;
+      const days = REVIEW_WINDOW_DAYS - used;
+      if (days > CLOSING_SOON_DAYS) return;
+      out.push({ id: 'review-closing:' + r.id, kind: 'action',
+        title: `Your review of ${r.suite_name || 'your stay'} closes ${left(days)}`,
+        body: `Reviews close ${REVIEW_WINDOW_DAYS} days after check-out. After that the chance has gone, for both sides.`,
+        href: 'index.html?view=my-bookings' });
+    });
+  } catch (e) { /* reviews table not ready */ }
+  if (hostId) {
+    try {
+      const rows = await sql`
+        SELECT o.id, o.suite_name, o.departure,
+               (now() AT TIME ZONE COALESCE(NULLIF(btrim(l.timezone), ''), 'Asia/Kolkata'))::date AS local_today
+        FROM orders o JOIN listings l ON l.id = o.listing_id
+        WHERE l.host_id = ${hostId} AND o.status = 'paid'
+          AND NOT EXISTS (SELECT 1 FROM guest_reviews r WHERE r.order_id = o.id)
+        ORDER BY o.departure DESC LIMIT 20`;
+      rows.forEach(r => {
+        const used = daysSinceCheckout(r.departure, r.local_today);
+        if (used == null || used < 0 || used >= REVIEW_WINDOW_DAYS) return;
+        const days = REVIEW_WINDOW_DAYS - used;
+        if (days > CLOSING_SOON_DAYS) return;
+        out.push({ id: 'guest-review-closing:' + r.id, kind: 'action',
+          title: `Your review of the guest at ${r.suite_name || 'your listing'} closes ${left(days)}`,
+          body: `Reviews close ${REVIEW_WINDOW_DAYS} days after check-out. After that the chance has gone, for both sides.`,
+          href: 'host-dashboard.html' });
+      });
+    } catch (e) { /* reviews table not ready */ }
+  }
+  return out;
+}
+
 module.exports = {
   REVIEW_WINDOW_DAYS, CONFLICT_CHECKS, REVIEW_POLICY,
-  publicationState, submissionOpen, reviewWindowState, daysSinceCheckout,
+  publicationState, submissionOpen, reviewWindowState, daysSinceCheckout, bellNotifications,
   localToday, toDateStr, REVIEW_PHOTO_MAX, cleanReviewPhotos, reviewPhotosOut
 };

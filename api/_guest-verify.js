@@ -187,6 +187,52 @@ async function attemptsToday(sql, guestId) {
 }
 
 // What the Profile, the "waiting for your details" screen and My Bookings
+// Has this account's government ID been verified? (A gift's reminder for
+// the guest staying, _gifts.js — never a reason to cancel a booking.)
+async function idVerified(sql, guestId) {
+  if (!guestId || !(await ready(sql))) return false;
+  const g = await loadAccount(sql, guestId);
+  return idDone(g);
+}
+
+// ---------------------------------------------------------------------
+// One line for the host on EVERY booking: has Aerva checked the ID of
+// the person arriving? (Owner, 12 Nov 2026, suggestion 5.) Before this
+// only a gift carried it, so on an ordinary booking a host had no way
+// of knowing whether the name on the booking had been checked at all.
+//
+// The name only — never the document, the number or the last four
+// digits, exactly as the gift line does. Rows are mutated in place:
+//   row.id_checked  true / false
+//   row.id_note     what to do about it, in plain words
+// A row that already carries a gift line is left alone: that line
+// already says it, for the person who is actually arriving.
+// Never throws: on a database without the verification columns every
+// row simply goes without the line.
+// ---------------------------------------------------------------------
+async function idLineForHost(sql, rows, { idKey = 'id' } = {}) {
+  if (!Array.isArray(rows) || !rows.length) return rows;
+  const ids = [...new Set(rows.map(r => Number(r[idKey])).filter(Boolean))];
+  if (!ids.length) return rows;
+  try {
+    const seen = await sql`SELECT o.id AS order_id,
+                                  (to_jsonb(g)->>'guest_id_verified_at' IS NOT NULL) AS checked
+                           FROM orders o LEFT JOIN guests g ON g.id = o.guest_id
+                           WHERE o.id = ANY(${ids})`;
+    const by = new Map(seen.map(r => [Number(r.order_id), r.checked === true]));
+    rows.forEach(r => {
+      if (r.gift) return;                         // the gift line already says it
+      if (!by.has(Number(r[idKey]))) return;
+      const checked = by.get(Number(r[idKey]));
+      r.id_checked = checked;
+      r.id_note = checked
+        ? 'Aerva has checked their government ID in this name.'
+        : 'Aerva has not checked their ID — please check a government ID at check-in, in this name.';
+    });
+  } catch (err) { /* before the guest-verification update: no line */ }
+  return rows;
+}
+
 // show: the three steps and where each stands. Never the ID itself.
 async function profileStatus(sql, guestId) {
   const on = await ready(sql);
@@ -1265,9 +1311,19 @@ async function ownHoldFor(sql, guestId, stays) {
 //   • a verified guest books in the name their ID was verified for.
 // Throws a user-facing error with `needs`, or returns.
 async function assertBeforePayment(sql, guestId, { gift = false, group = false } = {}) {
-  if (!required() || !guestId || !(await ready(sql))) return;
+  if (!guestId || !(await ready(sql))) return;
   const g = await loadAccount(sql, guestId);
   if (!g) return;
+  // Sending a stay to someone else always asks for the sender's ID, whether
+  // or not verification is required of everyone (owner, 12 Nov 2026:
+  // "organiser should have ID verified and that should be the requirement
+  // before organiser send gift to anyone"). Only the ID — the phone step
+  // needs SMS, which is not set up everywhere, and a gift must not be
+  // blocked by that.
+  if (gift && !required() && !idDone(g)) {
+    throw userError('To send a stay as a gift, verify your government ID first. It takes a couple of minutes in your profile, and it is only ever asked of the person paying.', 400, { needs: ['id'] });
+  }
+  if (!required()) return;
   if ((gift || group) && !allDone(g)) {
     throw userError(`${gift ? 'To send a stay as a gift' : 'To split a payment with friends'}, verify your details first: ${missingText(g)}. It takes a few minutes in your profile.`, 400, { needs: ['verification'] });
   }
@@ -1345,7 +1401,7 @@ async function accountsBalances(sql, day) {
 }
 
 module.exports = {
-  required, ready, isVerified, profileStatus, profilePrompt, statusFor,
+  required, ready, isVerified, idVerified, idLineForHost, profileStatus, profilePrompt, statusFor,
   sendPhoneCode, confirmPhoneCode, markPhoneProved,
   checkGuestId, adoptFromIdVerify, sendForReview, adminList, adminDecide, startDigiLocker, finishDigiLocker,
   holdIfUnverified, confirmHoldsFor, confirmHold, expireHold, refundHold, tick, runJob, byOrder,

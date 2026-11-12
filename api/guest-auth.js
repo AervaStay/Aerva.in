@@ -598,6 +598,13 @@ module.exports = async (req, res) => {
         // A payment waiting for the guest's details to be verified (a new item at
         // each reminder), one that lapsed; for a host, a hold that went (_guest-verify.js).
         (await require('./_guest-verify').bellNotifications(sql, { guestId: guest.id, hostId: guest.host_id })).reverse().forEach(n => notifications.unshift(n));
+        // A cancellation request waiting on the other side, with its
+        // deadline — both sides (owner, 12 Nov 2026, suggestion 16).
+        (await require('./_cancellations').bellNotifications(sql, { guestId: guest.id, hostId: guest.host_id })).forEach(n => notifications.push(n));
+        // A review whose window is about to close, on either side.
+        (await require('./_review-policy').bellNotifications(sql, { guestId: guest.id, hostId: guest.host_id })).forEach(n => notifications.push(n));
+        // A stay someone has given them, first in the list (owner, 12 Nov 2026).
+        (await require('./_gifts').bellNotifications(sql, { guestId: guest.id, email: guest.email })).reverse().forEach(n => notifications.unshift(n));
       } catch (err) {
         console.error('notifications failed (non-fatal):', err);
       }
@@ -623,8 +630,13 @@ module.exports = async (req, res) => {
         const n = (await sql`SELECT to_jsonb(guests)->>'first_name' AS first_name, to_jsonb(guests)->>'last_name' AS last_name FROM guests WHERE id = ${guest.id}`)[0] || {};
         profilePrompt = require('./_guest-verify').profilePrompt({ ...guest, first_name: n.first_name, last_name: n.last_name });
       } catch (err) { /* no pop-up */ }
+      // A stay given to them and not accepted yet: it opens by itself at the
+      // next sign-in, before the profile steps (owner, 12 Nov 2026).
+      let giftWaiting = null;
+      try { giftWaiting = await require('./_gifts').popupForGuest(sql, { guestId: guest.id, email: guest.email }); }
+      catch (err) { /* never the reason a session check fails */ }
       return res.status(200).json({ guest: { ...safeGuest(guest), profile_photo_url: guest.profile_photo_url || null,
-        hasActiveListing, isCohost, tier, pendingReviews, notifications, wallet, profilePrompt } });
+        hasActiveListing, isCohost, tier, pendingReviews, notifications, wallet, profilePrompt, giftWaiting } });
     } catch (err) {
       console.error('guest-auth (GET) error:', err);
       return res.status(500).json({ error: 'Could not verify your session.' });

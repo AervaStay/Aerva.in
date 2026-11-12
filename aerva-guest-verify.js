@@ -25,6 +25,13 @@
   var API = function(){ return (window.AERVA_API || 'https://aerva-in.vercel.app') + '/api/'; };
   var HELD_TEXT = 'Your booking will be confirmed once your details are submitted and verified.';
   function token(){ try{ return localStorage.getItem('aerva_guest_session'); }catch(e){ return null; } }
+  // One page, one promise (owner, 12 Nov 2026, suggestion 15). The same
+  // words as aerva-id-verify.js and the help topics — Aerva says the same
+  // thing about an ID wherever it asks for one.
+  var PROMISE_TEXT = 'Verify once. Aerva keeps the type of ID, its last 4 characters and the name — <strong>never the document itself</strong>. It is checked in a few seconds and the image is not stored.';
+  // A third way in — the Aadhaar offline e-KYC file — lives on the one
+  // verification page in Account Settings, under the same name.
+  var ZIP_LINK = '<a href="index.html?view=settings#verify" style="color:#8a6c39;">Aadhaar offline e-KYC (ZIP file)</a>';
   function esc(t){ return String(t == null ? '' : t).replace(/[&<>"']/g, function(c){ return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]; }); }
   function store(k, v){ try{ if(v === undefined) return localStorage.getItem(k); localStorage.setItem(k, v); }catch(e){ return null; } }
 
@@ -36,6 +43,10 @@
       '.agv-overlay{position:fixed; inset:0; z-index:9500; background:rgba(28,26,23,0.5); display:flex; align-items:center; justify-content:center; padding:16px; overflow-y:auto; -webkit-overflow-scrolling:touch;}',
       '.agv-dialog{background:#fff; color:#1c1a17; border-radius:16px; width:100%; max-width:460px; padding:26px 24px 22px; box-shadow:0 18px 60px rgba(28,26,23,0.25); font-family:inherit; font-size:15px; line-height:1.55; margin:auto; box-sizing:border-box;}',
       '.agv-dialog.is-wide{max-width:560px;}',
+      '.agv-dl{margin:0 0 4px;}',
+      '.agv-dl .agv-msg:empty{display:none;}',
+      '.agv-or{font-size:12.5px; letter-spacing:0.08em; text-transform:uppercase; color:#8a6c39; opacity:0.8; margin:14px 0 10px; display:flex; align-items:center; gap:10px;}',
+      '.agv-or::before,.agv-or::after{content:""; flex:1; height:1px; background:rgba(28,26,23,0.14);}',
       '.agv-eyebrow{font-size:11.5px; letter-spacing:0.14em; text-transform:uppercase; color:#8a6c39; margin:0 0 6px;}',
       '.agv-dialog h2{font-family:"Bodoni Moda", Georgia, serif; font-weight:500; font-size:26px; line-height:1.2; margin:0 0 8px; color:#1c1a17;}',
       '.agv-lead{margin:0 0 16px; color:#3d3a35;}',
@@ -247,7 +258,7 @@
   function shrink(file){
     return new Promise(function(resolve, reject){
       if(file.type === 'application/pdf' || /\.pdf$/i.test(file.name)){
-        if(file.size > 4 * 1024 * 1024) return reject(new Error('That PDF is too large. Use a photo of the ID instead.'));
+        if(file.size > 3 * 1024 * 1024) return reject(new Error('That PDF is larger than 3 MB. Use a photo of the ID instead.'));
         var fr = new FileReader();
         fr.onload = function(){ resolve({ type: 'application/pdf', data: String(fr.result).split(',')[1] }); };
         fr.onerror = function(){ reject(new Error('That file could not be read.')); };
@@ -289,7 +300,7 @@
     try{ st = await call('GET', null, '?mode=verification'); }
     catch(e){ el.innerHTML = '<p class="agv-small">Could not load this right now. Please refresh.</p>'; return; }
     if(!st.available){ el.innerHTML = ''; if(typeof opts.onUnavailable === 'function') opts.onUnavailable(); return; }
-    var ui = { codeSent: false, changePhone: false, idError: '', idCanSend: false, sentTo: '' };
+    var ui = { codeSent: false, changePhone: false, idError: '', idCanSend: false, sentTo: '', dlError: '' };
     function after(d){
       if(d && d.status) st = d.status;
       render();
@@ -328,13 +339,21 @@
       var idBody;
       if(st.id.done) idBody = '<p class="agv-state">' + esc(st.id.label) + (st.id.last4 ? ' ending ' + esc(st.id.last4) : '') + ' · verified. The image was not kept.</p>';
       else if(st.id.withAerva) idBody = '<p class="agv-state">Sent to Aerva — we are checking it and will email you as soon as it is done. The image is deleted once it is checked.</p>';
-      else idBody = '<p class="agv-state">A photo of ONE of: Aadhaar, passport, driving licence or voter ID. Checked in a few seconds; the image is not kept.</p>'
+      else idBody = '<p class="agv-small">' + PROMISE_TEXT + '</p>'
+        + (st.id.digilocker
+          ? '<div class="agv-dl"><p class="agv-state"><strong>DigiLocker</strong> — the quickest: sign in to your own DigiLocker and approve sharing your Aadhaar. Nothing to photograph or upload.</p>'
+            + '<div class="agv-row"><button type="button" class="agv-btn" data-agv-digilocker' + (st.name.done ? '' : ' disabled') + '>Verify with DigiLocker</button></div>'
+            + '<p class="agv-msg' + (ui.dlError ? ' is-error' : '') + '" role="alert" data-agv-dlmsg>' + esc(ui.dlError || '') + '</p>'
+            + '<p class="agv-or">or use a photo of your ID</p></div>'
+          : '')
+        + '<p class="agv-state"><strong>Photo of your ID</strong> — ONE of: Aadhaar, passport, driving licence or voter ID (from outside India, your passport or national ID card).</p>'
         + (st.id.rejectedReason && !ui.idError ? '<p class="agv-msg is-error" style="margin-top:6px;">Aerva could not accept the ID you sent: ' + esc(st.id.rejectedReason) + ' You can try again.</p>' : '')
         + (!st.name.done ? '<p class="agv-small">Add your name first — the ID is checked against it.</p>' : '')
         + '<form data-agv-form="id" novalidate><input class="agv-file" type="file" name="file" accept="image/*,.pdf" aria-label="Photo of your ID"' + (st.name.done ? '' : ' disabled') + '>'
         + '<div class="agv-row"><button type="submit" class="agv-btn"' + (st.name.done && st.id.attemptsLeft > 0 ? '' : ' disabled') + '>Check my ID</button>'
         + '<button type="button" class="agv-link" data-agv-review' + (st.name.done ? '' : ' disabled') + '>Send it to Aerva to check instead</button></div>'
-        + '<p class="agv-msg' + (ui.idError ? ' is-error' : '') + '" role="alert">' + esc(ui.idError || (st.id.attemptsLeft > 0 ? '' : 'No more tries today. Send it to Aerva to check instead, or try again tomorrow.')) + '</p></form>';
+        + '<p class="agv-msg' + (ui.idError ? ' is-error' : '') + '" role="alert">' + esc(ui.idError || (st.id.attemptsLeft > 0 ? '' : 'No more tries today. Send it to Aerva to check instead, or try again tomorrow.')) + '</p></form>'
+        + '<p class="agv-small">Have your ' + ZIP_LINK + ' instead? That counts too.</p>';
       html += step(3, st.id.done ? 'done' : st.id.withAerva ? 'wait' : '', 'A government photo ID', idBody);
       el.innerHTML = '<div class="agv">' + html + '</div>';
       wire();
@@ -412,6 +431,24 @@
             if(st.id.attemptsLeft <= 0) b.disabled = true;
           }
         });
+        var dl = el.querySelector('[data-agv-digilocker]');
+        if(dl) dl.addEventListener('click', async function(){
+          var msg = el.querySelector('[data-agv-dlmsg]');
+          busy(dl, 'Opening DigiLocker…');
+          if(msg){ msg.className = 'agv-msg is-ok'; msg.textContent = 'Taking you to DigiLocker…'; }
+          try{
+            var d = await call('POST', { mode: 'startDigiLocker' });
+            if(d.verified){ after(d); return; }
+            if(!d.url) throw new Error('DigiLocker could not be opened right now.');
+            // The link is only good for about 10 minutes, so go straight there.
+            store('aerva_digilocker_id', d.verificationId || '');
+            window.location.href = d.url;
+          }catch(err){
+            ui.dlError = err.message || 'DigiLocker could not be opened right now.';
+            idle(dl);
+            if(msg){ msg.className = 'agv-msg is-error'; msg.textContent = ui.dlError; }
+          }
+        });
         var review = idForm.querySelector('[data-agv-review]');
         if(review) review.addEventListener('click', async function(){
           var file = idForm.elements['file'].files && idForm.elements['file'].files[0];
@@ -434,7 +471,39 @@
     }
     render();
     if(typeof opts.onChange === 'function') opts.onChange(st);
+    if(!st.id.done && !st.id.withAerva) backFromDigiLocker();
     return { reload: reload, status: function(){ return st; } };
+
+    // The guest comes back from DigiLocker at ?digilocker=<id>. Read what
+    // they approved, then take the id out of the address bar.
+    async function backFromDigiLocker(){
+      var id = '';
+      try{ id = new URLSearchParams(window.location.search).get('digilocker') || ''; }catch(e){}
+      if(!id) id = store('aerva_digilocker_id') || '';
+      if(!id) return;
+      store('aerva_digilocker_id', '');
+      try{
+        var u = new URL(window.location.href);
+        if(u.searchParams.get('digilocker')){ u.searchParams.delete('digilocker'); window.history.replaceState({}, '', u.toString()); }
+      }catch(e){}
+      ui.dlError = ''; render();
+      var msg = el.querySelector('[data-agv-dlmsg]');
+      if(msg){ msg.className = 'agv-msg is-ok'; msg.textContent = 'Checking what you shared from DigiLocker…'; }
+      var btn = el.querySelector('[data-agv-digilocker]'); if(btn) busy(btn, 'Checking…');
+      try{
+        var d = await call('POST', { mode: 'finishDigiLocker', verificationId: id });
+        if(d.waiting){
+          ui.dlError = 'DigiLocker has not sent anything back yet. If you approved it, try again in a moment.';
+          render();
+          return;
+        }
+        ui.dlError = ''; after(d);
+      }catch(err){
+        ui.dlError = err.message || 'We could not finish the DigiLocker check. Use a photo of your ID instead.';
+        if(!st.id.digilocker) ui.idError = ui.dlError;      // the button is gone: say it on the photo form
+        render();
+      }
+    }
   }
 
   // ------------------------------------------------------------ 3. a payment waiting for the details

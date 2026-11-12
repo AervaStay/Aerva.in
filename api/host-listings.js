@@ -89,7 +89,7 @@ const { safeRefund, refundAcrossPayments, hasChangePayments, groupPaymentsOf } =
 const { respondChange } = require('./_booking-changes');
 const { respondDispute } = require('./_stay-disputes');
 const { hoursUntilCheckIn, hoursUntilCheckInTime, paidByOrderRow, dateStr } = require('./_booking-rules');
-const { executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, HOST_CANCELLATIONS_PER_YEAR, claimForCancellation, releaseClaim, claimRequest, unclaimRequest, hostOption, postThreadMessage, REASON_LABELS, depositStillHeld, guestGetsBackFor, clearUnsentPayouts } = require('./_cancellations');
+const { executePolicyCancellation, returnCouponValue, hostCancellationsLastYear, HOST_CANCELLATIONS_PER_YEAR, HOST_DECISION_TIMEOUT_HOURS, claimForCancellation, releaseClaim, claimRequest, unclaimRequest, hostOption, postThreadMessage, REASON_LABELS, depositStillHeld, guestGetsBackFor, clearUnsentPayouts } = require('./_cancellations');
 const { validatePhoneNumber, normalizeToE164 } = require('./_phone-validation');
 const { countRecentAttempts, getClientIp } = require('./_rate-limit');
 const crypto = require('crypto');
@@ -1635,16 +1635,39 @@ module.exports = async (req, res) => {
       let rows = [];
       try {
         rows = await sql`
-          SELECT p.id, p.net, p.sent_at, p.arriving_by, p.payee_type, p.payee_guest_id, p.host_id, o.suite_name, o.arrival, o.departure,
-                 COALESCE(to_jsonb(p)->>'kind', 'booking') AS kind,
+          SELECT p.id, p.net, p.status, p.sent_at, p.arriving_by, p.payee_type, p.payee_guest_id, p.host_id, o.suite_name, o.arrival, o.departure,
+                 COALESCE(to_jsonb(p)->>'kind', 'booking') AS kind, p.created_at,
+                 to_jsonb(p)->>'failure_reason' AS failure_reason,
+                 -- Why it has not arrived, for the person waiting for it
+                 -- (owner, 12 Nov 2026): the bank details this payout is
+                 -- going to, host's or co-host's.
+                 CASE WHEN p.payee_type = 'host' THEN COALESCE(h.bank_status, '') <> 'verified'
+                      ELSE COALESCE(cp.status, '') <> 'approved' END AS bank_not_ready,
                  CASE WHEN p.payee_type = 'host' THEN h.name ELSE pg.name END AS payee_name
           FROM payouts p JOIN orders o ON o.id = p.order_id JOIN hosts h ON h.id = p.host_id LEFT JOIN guests pg ON pg.id = p.payee_guest_id
-          WHERE p.status = 'sent' AND (p.host_id = ${me.host_id || 0}
+          LEFT JOIN cohost_payout_profiles cp ON cp.guest_id = p.payee_guest_id
+          WHERE p.status IN ('sent', 'due', 'processing', 'failed') AND (p.host_id = ${me.host_id || 0}
              OR (p.payee_type = 'cohost' AND p.payee_guest_id = ${accountId}))
-          ORDER BY p.sent_at DESC LIMIT 200
+          ORDER BY (p.status = 'sent'), COALESCE(p.sent_at, p.created_at) DESC LIMIT 200
         `;
-      } catch (err) { /* migration_payouts.sql not run yet */ }
+      } catch (err) {
+        // Older deployments: no cohost_payout_profiles, or payouts not made yet.
+        try {
+          rows = await sql`
+            SELECT p.id, p.net, p.status, p.sent_at, p.arriving_by, p.payee_type, p.payee_guest_id, p.host_id, o.suite_name, o.arrival, o.departure,
+                   COALESCE(to_jsonb(p)->>'kind', 'booking') AS kind, p.created_at,
+                   CASE WHEN p.payee_type = 'host' THEN h.name ELSE pg.name END AS payee_name
+            FROM payouts p JOIN orders o ON o.id = p.order_id JOIN hosts h ON h.id = p.host_id LEFT JOIN guests pg ON pg.id = p.payee_guest_id
+            WHERE p.status = 'sent' AND (p.host_id = ${me.host_id || 0}
+               OR (p.payee_type = 'cohost' AND p.payee_guest_id = ${accountId}))
+            ORDER BY p.sent_at DESC LIMIT 200`;
+        } catch (e2) { /* migration_payouts.sql not run yet */ }
+      }
+      const { whyNotSentForPayee } = require('./_money-ledger');
       return res.status(200).json({ payouts: rows.map(r => ({ id: r.id, amount: Number(r.net), sentAt: r.sent_at, arrivingBy: r.arriving_by, as: r.payee_type,
+        // Not sent yet: say so, and say why (owner, 12 Nov 2026).
+        state: r.status === 'sent' ? 'sent' : 'waiting',
+        ...(r.status === 'sent' ? {} : whyNotSentForPayee(r)),
         payeeName: r.payee_name || '', mine: r.payee_type === 'host' ? (me.host_id != null && r.host_id === me.host_id) : r.payee_guest_id === accountId,
         listing: r.suite_name, arrival: r.arrival, departure: r.departure,
         // A deposit dispute paid to the host is its own payout (payouts.kind,
@@ -3282,6 +3305,10 @@ module.exports = async (req, res) => {
     // The property's host cancellation rate (not for a same-day booking
     // cancelled within 1 hour of being made).
     if (auditAction === 'booking_cancelled_by_host' && !terms.sameDayGrace) await require('./_cancellations').markCancelledByHost(sql, orderId);
+    // A cancellation request the guest was still waiting on is closed with
+    // the booking, so neither side is left looking at a dead card and the
+    // nightly job does not keep trying to settle it (12 Nov 2026).
+    await require('./_cancellations').closeOpenRequests(sql, orderId, 'The host cancelled this booking, so the request was closed.');
     await logAudit(sql, {
       action: terms.sameDayGrace && auditAction === 'booking_cancelled_by_host' ? 'booking_cancelled_by_host_grace' : auditAction,
       success: true, actorType: 'host', actorIdentifier: String(hostId),
@@ -3384,8 +3411,17 @@ module.exports = async (req, res) => {
       const terms = await cancelTerms(loaded.order, orderId);
       // A co-host paying the coupon may ask the host to cover it (_cohost-coupon.js).
       const canAskHost = !!cohostActor && terms.couponNeeded !== false && couponAmount > 0 && (!held || Number(held.paid_by) === Number(accountId)) && await cohostCoupon.ready(sql);
+      // What it costs, in money, before the host presses anything (owner,
+      // 12 Nov 2026, suggestion 18): everything the guest paid goes back to
+      // them, and the payout for this booking does not happen.
+      const sums = (await sql`SELECT COALESCE(total, 0)::int AS total, COALESCE(deposit_amount, 0)::int AS deposit,
+                                     COALESCE(payout_amount, 0)::int AS payout FROM orders WHERE id = ${orderId}`)[0] || { total: 0, deposit: 0, payout: 0 };
       return res.status(200).json({
         late: terms.late, asCredit: terms.asCredit, couponNeeded: terms.couponNeeded, pairExperience: terms.pairExperience, sameDayGrace: terms.sameDayGrace,
+        guestGetsBack: Math.max(0, Number(sums.total) || 0),
+        depositRefunded: Math.max(0, Number(sums.deposit) || 0),
+        payoutLost: Math.max(0, Number(sums.payout) || 0),
+        countsAgainstLimit: !terms.sameDayGrace,
         canCancel: used < HOST_CANCELLATIONS_PER_YEAR || terms.sameDayGrace,
         message: used >= HOST_CANCELLATIONS_PER_YEAR && !terms.sameDayGrace ? HOST_LIMIT_MESSAGE : null,
         cancellationsUsed: used, cancellationsLimit: HOST_CANCELLATIONS_PER_YEAR,
@@ -3638,6 +3674,22 @@ module.exports = async (req, res) => {
     }
   }
 
+  // When a request answers itself, and what it does then. The scheduler
+  // settles 'change_of_plans' and 'late_cancellation' 24 hours after they
+  // were sent (_cancellations.js settleUnansweredRequests): at the bracket
+  // the guest was quoted, or — where the host chooses — with the booking
+  // cancelled and nothing refunded. Owner, 12 Nov 2026: every wait says
+  // what happens when it ends, on both sides.
+  function answerBy(r) {
+    if (!['change_of_plans', 'late_cancellation'].includes(r.reason_code)) return {};
+    const opt = hostOption(r);
+    const pct = opt.type === 'fixed' ? Number(opt.percent) : 0;
+    return { answerBy: new Date(new Date(r.created_at).getTime() + HOST_DECISION_TIMEOUT_HOURS * 3600e3).toISOString(),
+      ifNoAnswer: pct > 0
+        ? `If you do not answer by then, this is cancelled for you at ${pct}% back to the guest — the same as choosing it now.`
+        : 'If you do not answer by then, this is cancelled for you with nothing refunded to the guest. Your dates go back on sale.' };
+  }
+
   // ---- Guest cancellation requests (change of plans; a natural disaster is shown, Aerva decides) ----
   // GET ?cancellationRequests=1 → open requests on my listings.
   // POST { respondCancellationRequest: { requestId, accept, note } }
@@ -3673,7 +3725,9 @@ module.exports = async (req, res) => {
         reason: REASON_LABELS[r.reason_code] || (r.reason_code === 'late_cancellation' ? 'Cancellation' : r.reason_code),
         daysBefore: r.days_before,
         // Only this booking's own choice — never the other brackets.
-        option: hostOption(r), guestGetsBack: r.guest_gets_back, disaster: r.disaster || null, aervaDecides: hostOption(r).type === 'disaster' })) });
+        option: hostOption(r), guestGetsBack: r.guest_gets_back, disaster: r.disaster || null, aervaDecides: hostOption(r).type === 'disaster',
+        // When the waiting ends and what happens then (owner, 12 Nov 2026).
+        ...answerBy(r) })) });
     } catch (err) {
       console.error('cancellationRequests failed:', err);
       return res.status(500).json({ error: 'Could not load cancellation requests right now.' });
@@ -4281,6 +4335,9 @@ module.exports = async (req, res) => {
              experience_available_from, experience_available_until,
              -- read by "Clone listing" (aerva.js) to copy the pet policy and deposit
              pet_friendly, max_pets_allowed, allowed_pet_types, pet_fee, security_deposit,
+             -- the refund policy when a guest cancels: resuming a draft or
+             -- cloning keeps the host's choice (owner, 12 Nov 2026)
+             to_jsonb(listings)->>'cancellation_policy' AS cancellation_policy,
              -- "Offer free cancellation to guests": resuming a draft or cloning keeps it
              COALESCE((to_jsonb(listings)->>'free_cancel_offered')::boolean, false) AS free_cancel_offered,
              (to_jsonb(listings)->>'free_cancel_fee')::int AS free_cancel_fee,
@@ -4370,6 +4427,9 @@ module.exports = async (req, res) => {
     `;
     // A gift: the guest staying, marked "Gift — booked by …" (_gifts.js).
     await require('./_gifts').decorateHostRows(sql, bookings, { phoneKey: '__none' });
+    // Has Aerva checked the ID of the person arriving? One line on every
+    // booking, not only a gift (owner, 12 Nov 2026).
+    await require('./_guest-verify').idLineForHost(sql, bookings);
     // The host may still report damage (same rule as raiseDispute): until
     // 24 hours after check-out, on the listing's own clock.
     bookings.forEach(b => {
@@ -4653,8 +4713,15 @@ module.exports = async (req, res) => {
         ORDER BY o.arrival ASC, o.id ASC
       `;
       await require('./_gifts').decorateHostRows(sql, rows, { phoneKey: '__none' });
+      // And on every other booking, whether Aerva has checked the guest's
+      // ID (owner, 12 Nov 2026) — the name only, never the document.
+      await require('./_guest-verify').idLineForHost(sql, rows);
       const shape = (r) => ({
         orderId: r.id,
+        // A gift: who is actually arriving, and whether Aerva has checked
+        // their ID (owner, 12 Nov 2026). Never the document itself.
+        gift: r.gift || null,
+        idChecked: r.id_checked == null ? null : r.id_checked, idNote: r.id_note || '',
         guestName: String(r.guest_name || '').trim() || (r.guest_email || 'Guest').split('@')[0],
         // For a co-host who sees only the stay (trimForCohost): never
         // built from the email address.

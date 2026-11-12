@@ -36,6 +36,8 @@ const { dateStr, checkInMomentMs } = require('./_booking-rules');
 
 const MESSAGE_MAX = 300;
 const userError = (message, status = 400, extra = {}) => Object.assign(new Error(message), { isUserFacing: true, status }, extra);
+// A query that must never be the reason a page fails (the bell, the sign-in).
+const soft = async (q, fb = []) => { try { return await q; } catch (e) { return fb; } };
 const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const hashToken = (t) => crypto.createHash('sha256').update(String(t)).digest('hex');
 const newToken = () => crypto.randomBytes(24).toString('base64url');
@@ -133,18 +135,23 @@ function stayBlock(s, { address = true, code = true } = {}) {
   </div>`;
 }
 
-async function sendRecipientEmail(g, s, token, { changed = false } = {}) {
+// handover: the same machinery, said plainly — "my plans changed, my
+// brother will go" is not a present (owner, 12 Nov 2026, suggestion 20).
+async function sendRecipientEmail(g, s, token, { changed = false, handover = false } = {}) {
   const who = g.buyer_first_name || 'Someone';
-  const html = frame(`${esc(who)} sent you a stay on Aerva`, `
+  const head = handover ? `${esc(who)} has passed a booking to you` : `${esc(who)} sent you a stay on Aerva`;
+  const html = frame(head, `
     <p>Hello ${esc(g.recipient_first_name)},</p>
-    <p><strong>${esc(who)}</strong> has booked a stay for you${changed ? ' (the booking was just passed to you)' : ''}.</p>
+    <p>${handover
+      ? `<strong>${esc(who)}</strong> cannot go, so they have passed this booking to you. It is paid for; there is nothing for you to pay.`
+      : `<strong>${esc(who)}</strong> has booked a stay for you${changed ? ' (the booking was just passed to you)' : ''}.`}</p>
     ${stayBlock(s)}
     ${g.message ? `<p style="border-left:3px solid #A9885A; padding-left:10px; font-style:italic;">“${esc(g.message)}”<br><span style="font-style:normal; font-size:13px;">— ${esc(who)}</span></p>` : ''}
-    <p><strong>Please accept the gift</strong> so your host knows you are the guest and has a number to reach you. Sign in or create an Aerva account, add your name as on your government ID and your mobile number, then accept.</p>
-    <p><a href="${giftLink(token)}" style="display:inline-block; background:#1C1B19; color:#fff; padding:12px 20px; border-radius:8px; text-decoration:none;">Accept the gift</a></p>
-    <p style="font-size:13px;">Your host checks a government photo ID at check-in: please carry yours. ${esc(who)} manages the booking (dates, changes and cancellations).</p>
+    <p><strong>Please accept it</strong> so your host knows you are the guest and has a number to reach you. Sign in or create an Aerva account, add your name as on your government ID and your mobile number, then accept.</p>
+    <p><a href="${giftLink(token)}" style="display:inline-block; background:#1C1B19; color:#fff; padding:12px 20px; border-radius:8px; text-decoration:none;">${handover ? 'Accept the booking' : 'Accept the gift'}</a></p>
+    <p style="font-size:13px;">Your host checks a government photo ID at check-in: please carry yours. ${esc(who)} still manages the booking (dates, changes and cancellations), and any refund goes back to them, because they paid for it.</p>
     <p style="font-size:12px; opacity:0.7;">This link works once and only for this booking, until check-out.</p>`);
-  return sendMail(g.recipient_email, `${who} sent you a stay at ${s.property_name || s.suite_name}`, html);
+  return sendMail(g.recipient_email, handover ? `${who} has passed you their booking at ${s.property_name || s.suite_name}` : `${who} sent you a stay at ${s.property_name || s.suite_name}`, html);
 }
 
 // ---- Which gift covers a booking row (any row of the same purchase) ----
@@ -167,7 +174,7 @@ async function setStayingName(sql, orderId, first, last) {
 
 // ---- Creating a gift: at checkout (from _confirm-booking.js, after the
 // booking is paid) or later from My Bookings (sendGift). ----
-async function createGift(sql, { orderId, buyerGuestId, buyerFirst, recipient, source = 'checkout' }) {
+async function createGift(sql, { orderId, buyerGuestId, buyerFirst, recipient, source = 'checkout', handover = false }) {
   const token = newToken();
   const row = (await sql`
     INSERT INTO booking_gifts (order_id, buyer_guest_id, buyer_first_name, recipient_first_name, recipient_last_name, recipient_email, recipient_phone, message, token_hash)
@@ -176,9 +183,23 @@ async function createGift(sql, { orderId, buyerGuestId, buyerFirst, recipient, s
   if (!row) throw userError('This booking is already a gift. Change the recipient instead.', 409);
   await setStayingName(sql, orderId, recipient.first, recipient.last);
   const s = await stayFor(sql, orderId);
-  const sent = s ? await sendRecipientEmail(row, s, token) : false;
+  const sent = s ? await sendRecipientEmail(row, s, token, { handover }) : false;
+  // A booking already paid for and now handed to someone else: the host is
+  // told at once who is staying, and that Aerva has not checked that
+  // person's ID (owner, 12 Nov 2026 — the host checks one at the door).
+  if (s && source === 'my_bookings') {
+    await tellHost(sql, s,
+      `${esc(recipient.first)} ${esc(recipient.last)} will be staying instead of ${esc(buyerFirst || 'the guest who booked it')}, who has passed the booking to them. `
+      + 'Aerva has not checked their government ID — please check one at check-in, in that name. The dates, the price and your payout are unchanged. '
+      + 'They have not accepted yet, so there is no phone number for them for now.',
+      handover ? 'The guest for this booking has changed' : 'This booking was sent as a gift');
+    await require('./_cancellations').postThreadMessage(sql, s.id,
+      'system',
+      `${recipient.first} ${recipient.last} will be staying on this booking instead. Aerva has not checked their government ID — please check one at check-in, in that name. The dates and your payout do not change.`,
+      { audience: 'host' }).catch(() => {});
+  }
   await logAudit(sql, { action: 'gift_created', success: true, actorType: 'guest', actorIdentifier: String(buyerGuestId), targetType: 'order', targetId: orderId,
-    metadata: { giftId: row.id, source, recipientEmail: recipient.email, emailed: sent } });
+    metadata: { giftId: row.id, source, handover: !!handover, recipientEmail: recipient.email, emailed: sent } });
   return { gift: row, token };
 }
 
@@ -200,7 +221,13 @@ async function sendGift(sql, { orderId, guestId, input }) {
   if (s.listing_type !== 'stay') throw userError('Only stays can be sent as a gift.');
   if (s.group_booking_id) throw userError('A group booking cannot be sent as a gift.');
   if (!beforeCheckin(s)) throw userError('A booking can be sent as a gift only before check-in.');
+  // The person sending it must have verified their own ID first
+  // (owner, 12 Nov 2026) — the same rule as sending one at checkout.
+  await require('./_guest-verify').assertBeforePayment(sql, guestId, { gift: true });
   const recipient = parseRecipient(input);
+  // "Someone else will go instead" — the same thing said plainly, for a
+  // change of plans rather than a present (owner, 12 Nov 2026).
+  const handover = !!(input && input.handover);
   const me = (await sql`SELECT email FROM guests WHERE id = ${guestId}`)[0] || {};
   if (String(me.email || '').toLowerCase() === recipient.email) throw userError('That is your own email. A gift goes to someone else.');
   const current = await giftForOrder(sql, orderId);
@@ -211,8 +238,8 @@ async function sendGift(sql, { orderId, guestId, input }) {
   if (!current) {
     // As My Bookings shows (can_gift): a booking split by a transfer cannot be made a gift.
     if (s.transfer_change_id) throw userError('A transferred booking cannot be sent as a gift.');
-    const out = await createGift(sql, { orderId: s.id, buyerGuestId: guestId, buyerFirst, recipient, source: 'my_bookings' });
-    return { gift: buyerView(out.gift) };
+    const out = await createGift(sql, { orderId: s.id, buyerGuestId: guestId, buyerFirst, recipient, source: 'my_bookings', handover });
+    return { gift: buyerView(out.gift), handover };
   }
   // Changing the recipient: a new link (the old one stops working), and any
   // acceptance is undone — the new person accepts for themselves.
@@ -226,7 +253,7 @@ async function sendGift(sql, { orderId, guestId, input }) {
     WHERE id = ${current.id} AND version = ${current.version} AND status <> 'withdrawn' RETURNING *`)[0];
   if (!upd) throw userError('This gift was just changed. Please refresh and try again.', 409);
   await setStayingName(sql, current.order_id, recipient.first, recipient.last);
-  await sendRecipientEmail(upd, s, token);
+  await sendRecipientEmail(upd, s, token, { changed: true, handover });
   if (current.recipient_email !== recipient.email) {
     await sendMail(current.recipient_email, `Update about your stay at ${s.property_name}`, frame('A change to your gift',
       `<p>Hello ${esc(current.recipient_first_name)},</p><p>${esc(current.buyer_first_name || 'The person who booked it')} has passed the stay at <strong>${esc(s.property_name)}</strong> (${esc(niceDate(s.arrival))}) to someone else, so it is no longer gifted to you. Your link no longer works.</p>`));
@@ -305,6 +332,75 @@ async function publicView(sql, token) {
 function maskEmail(e) {
   const [u, d] = String(e || '').split('@');
   return u && d ? (u.slice(0, 2) + '•••@' + d) : '';
+}
+
+// ---- What the person who was given a stay is told (owner, 12 Nov 2026) ----
+// "When a gift is sent, notification to the receiver should be shown… once
+// he logged in, notification should pop up as first thing… then the profile
+// pending steps… if not done, send notification that the booking will
+// require ID verification. If the person doesn't do ID verification, the
+// booking shouldn't be cancelled as it was a gift."
+//
+// Two notices, both for the bell, and the first one also opens by itself at
+// the next sign-in (aerva.js, before the profile steps):
+//   • a gift waiting to be accepted;
+//   • an accepted gift whose guest has not verified their ID yet — a
+//     reminder for check-in, never a threat to the booking. A gift is never
+//     cancelled for want of the guest's ID: the buyer is the one who was
+//     verified before paying.
+async function waitingForGuest(sql, { guestId, email }) {
+  if (!guestId || !(await ready(sql))) return [];
+  const clean = String(email || '').trim().toLowerCase();
+  return await soft(sql`
+    SELECT g.id, g.order_id, g.buyer_first_name, g.recipient_first_name, g.created_at,
+           l.property_name, o.arrival, o.departure
+      FROM booking_gifts g
+      JOIN orders o ON o.id = g.order_id
+      LEFT JOIN listings l ON l.id = o.listing_id
+     WHERE g.status = 'sent' AND o.status = 'paid' AND o.departure >= current_date
+       AND lower(g.recipient_email) = ${clean} AND o.guest_id <> ${guestId}
+     ORDER BY g.id DESC LIMIT 3`);
+}
+async function bellNotifications(sql, { guestId, email }) {
+  const out = [];
+  try {
+    const niceDay = (d) => require('./_booking-rules').niceDay(d);
+    for (const g of await waitingForGuest(sql, { guestId, email })) {
+      out.push({ id: 'gift-waiting:' + g.id, kind: 'action',
+        title: `${g.buyer_first_name || 'Someone'} has given you a stay${g.property_name ? ' at ' + g.property_name : ''}`,
+        body: `${niceDay(g.arrival)} to ${niceDay(g.departure)}. Accept it to see the address and your confirmation code — it is already paid for.`,
+        href: 'index.html?view=my-bookings&gift=' + g.id });
+    }
+    // Accepted, but this account's ID is not verified yet.
+    const mine = await soft(sql`
+      SELECT g.id, g.order_id, l.property_name, o.arrival
+        FROM booking_gifts g JOIN orders o ON o.id = g.order_id LEFT JOIN listings l ON l.id = o.listing_id
+       WHERE g.status = 'accepted' AND g.accepted_guest_id = ${guestId} AND o.status = 'paid' AND o.arrival >= current_date
+       ORDER BY o.arrival LIMIT 3`);
+    if (mine.length) {
+      const V = require('./_guest-verify');
+      const done = await V.idVerified(sql, guestId).catch(() => true);
+      if (!done) {
+        for (const g of mine) {
+          out.push({ id: 'gift-id:' + g.id, kind: 'action',
+            title: `Verify your ID for your stay${g.property_name ? ' at ' + g.property_name : ''}`,
+            body: 'Your host checks a government ID at check-in, so it is worth doing now — it takes two minutes. Your stay is safe either way: a gift is never cancelled for this.',
+            href: 'index.html?view=profile' });
+        }
+      }
+    }
+  } catch (err) { /* the bell must never be why a session check fails */ }
+  return out;
+}
+// The one gift to open by itself at the next sign-in, if there is one.
+async function popupForGuest(sql, { guestId, email }) {
+  const list = await waitingForGuest(sql, { guestId, email });
+  if (!list.length) return null;
+  const g = list[0];
+  const niceDay = (d) => require('./_booking-rules').niceDay(d);
+  return { giftId: g.id, from: g.buyer_first_name || 'Someone', stay: g.property_name || 'a stay',
+           arrival: dateStr(g.arrival), departure: dateStr(g.departure),
+           dates: `${niceDay(g.arrival)} to ${niceDay(g.departure)}` };
 }
 
 // Signed in: may this account accept, and what is prefilled.
@@ -494,12 +590,30 @@ async function hostLabels(sql, orderIds) {
     const rows = await sql`SELECT b.id AS row_id, g.* FROM booking_gifts g JOIN orders a ON a.id = g.order_id
                            JOIN orders b ON b.razorpay_order_id = a.razorpay_order_id
                            WHERE b.id = ANY(${ids}) AND g.status <> 'withdrawn'`;
+    // Whether Aerva has already checked the ID of the person who will
+    // actually arrive (owner, 12 Nov 2026: "to whom gift was sent should be
+    // shared with the host, so it can check for id verification when the
+    // recipient arrives"). Yes or no, and the name to check it against —
+    // never the document, the number or anything else.
+    const checked = new Set();
+    try {
+      const ids = rows.map(g => Number(g.accepted_guest_id)).filter(Boolean);
+      if (ids.length) {
+        (await sql`SELECT id FROM guests WHERE id = ANY(${ids})
+                    AND to_jsonb(guests)->>'guest_id_verified_at' IS NOT NULL`).forEach(r => checked.add(Number(r.id)));
+      }
+    } catch (err) { /* before the guest-verification update: nothing claimed */ }
     rows.forEach(g => {
       const accepted = g.status === 'accepted';
       const name = accepted ? `${g.accepted_first_name} ${g.accepted_last_name}` : `${g.recipient_first_name} ${g.recipient_last_name}`;
       const tag = `Gift — booked by ${g.buyer_first_name || 'another guest'}`;
-      out.set(Number(g.row_id), { name, phone: accepted ? g.accepted_phone : null, accepted,
-        note: accepted ? tag : `${tag} · Gift, not yet accepted`, label: `${name} (${accepted ? tag : tag + ' · Gift, not yet accepted'})` });
+      const idChecked = accepted ? checked.has(Number(g.accepted_guest_id)) : false;
+      const idNote = !accepted ? '' : idChecked
+        ? 'Aerva has checked their government ID in this name.'
+        : 'Aerva has not checked their ID — please check a government ID at check-in, in this name.';
+      out.set(Number(g.row_id), { name, phone: accepted ? g.accepted_phone : null, accepted, idChecked, idNote,
+        note: accepted ? `${tag} · ${idNote}` : `${tag} · Gift, not yet accepted`,
+        label: `${name} (${accepted ? tag : tag + ' · Gift, not yet accepted'})` });
     });
   } catch (err) { /* before the database update */ }
   return out;
@@ -512,7 +626,7 @@ async function decorateHostRows(sql, rows, { idKey = 'id', nameKey = 'guest_name
     const l = labels.get(Number(r[idKey]));
     if (!l) return;
     r[nameKey] = l.label;
-    r.gift = { name: l.name, accepted: l.accepted, note: l.note };
+    r.gift = { name: l.name, accepted: l.accepted, note: l.note, idChecked: l.idChecked, idNote: l.idNote };
     if (phoneKey in r) r[phoneKey] = l.phone || null;
   });
   return rows;
@@ -571,4 +685,5 @@ async function runReminders(sql, { deadlineMs = 4000 } = {}) {
 }
 
 module.exports = { ready, parseRecipient, cleanName, nameProblem, cleanMessage, createGift, sendGift, withdrawGift, giftForOrder, publicView, viewForAccount,
+  bellNotifications, popupForGuest, waitingForGuest,
   acceptGift, decorateBookings, sharedRole, sharedOrderIds, hostLabels, decorateHostRows, buyerView, runReminders, hashToken, NOT_ON, MESSAGE_MAX };

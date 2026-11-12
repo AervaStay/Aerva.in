@@ -48,7 +48,7 @@
   function shrink(file){
     return new Promise(function(resolve, reject){
       if(file.type === 'application/pdf' || /\.pdf$/i.test(file.name)){
-        if(file.size > 4 * 1024 * 1024) return reject(new Error('That PDF is too large. Use a photo of the ID instead.'));
+        if(file.size > 3 * 1024 * 1024) return reject(new Error('That PDF is larger than 3 MB. Use a photo of the ID instead.'));
         var fr = new FileReader();
         fr.onload = function(){ resolve({ type: 'application/pdf', data: String(fr.result).split(',')[1] }); };
         fr.onerror = function(){ reject(new Error('That file could not be read.')); };
@@ -88,7 +88,17 @@
     return d;
   }
 
-  var PRIVACY_NOTE = 'Your ID is checked automatically in a few seconds and is <strong>never stored</strong>. Aerva keeps only the result: the type of ID, your name as on it and its last 4 characters.';
+  // One page, one promise (owner, 12 Nov 2026, suggestion 15). These exact
+  // words are used wherever verification is offered — here, in the booking
+  // steps (aerva-guest-verify.js) and in the help topics.
+  var PROMISE = 'Verify once. Aerva keeps the type of ID, its last 4 characters and the name — <strong>never the document itself</strong>. It is checked in a few seconds and the image is not stored.';
+  var PRIVACY_NOTE = PROMISE;
+  // The three ways in, under the same names in every place.
+  var WAYS = {
+    digilocker: { label: 'DigiLocker', note: 'The quickest: sign in to your own DigiLocker and approve sharing your Aadhaar. Nothing to photograph or upload.' },
+    doc: { label: 'Photo of your ID', note: 'Aadhaar, passport, driving licence or voter ID — from outside India, your passport or national ID card.' },
+    zip: { label: 'Aadhaar offline e-KYC (ZIP file)', note: 'The file you download from myaadhaar.uidai.gov.in, with its share code. Signed by UIDAI.' }
+  };
 
   async function mount(el, opts){
     if(!el) return;
@@ -124,10 +134,16 @@
           ? 'Verify your identity and address in under a minute with your Aadhaar, passport, driving licence or voter ID. '
           : 'Verify your identity in under a minute with any government photo ID: Aadhaar, passport, driving licence or voter ID (from outside India: your passport or national ID card). Hosts see that your ID is verified. ')
       + PRIVACY_NOTE + '</p>'
-      + (s.aadhaarZip ? '<div class="aiv-tabs" role="tablist">'
-          + '<button type="button" class="aiv-tab" role="tab" aria-selected="true" data-aiv-tab="doc">Photo of your ID</button>'
-          + '<button type="button" class="aiv-tab" role="tab" aria-selected="false" data-aiv-tab="zip">Aadhaar offline e-KYC (ZIP)</button></div>' : '')
+      + ((s.aadhaarZip || s.digilocker) ? '<div class="aiv-tabs" role="tablist">'
+          + (s.digilocker ? '<button type="button" class="aiv-tab" role="tab" aria-selected="false" data-aiv-tab="dl">' + esc(WAYS.digilocker.label) + '</button>' : '')
+          + '<button type="button" class="aiv-tab" role="tab" aria-selected="true" data-aiv-tab="doc">' + esc(WAYS.doc.label) + '</button>'
+          + (s.aadhaarZip ? '<button type="button" class="aiv-tab" role="tab" aria-selected="false" data-aiv-tab="zip">' + esc(WAYS.zip.label) + '</button>' : '')
+          + '</div>' : '')
+      + (s.digilocker ? '<div data-aiv-form="dl" hidden><p class="aiv-note">' + esc(WAYS.digilocker.note) + '</p>'
+          + '<button type="button" class="aiv-btn" data-aiv-dl>Verify with DigiLocker</button>'
+          + '<p class="aiv-msg" aria-live="polite"></p></div>' : '')
       + '<form data-aiv-form="doc" novalidate>'
+      + ((s.aadhaarZip || s.digilocker) ? '<p class="aiv-note">' + esc(WAYS.doc.note) + '</p>' : '')
       + '<label class="aiv-field"><span>Type of ID</span><select name="docType">' + types.map(function(t){ return '<option value="' + esc(t.key) + '">' + esc(t.label) + '</option>'; }).join('') + '</select></label>'
       + '<label class="aiv-field"><span>Full name, exactly as on the ID</span><input name="name" autocomplete="name" value="' + esc(s.suggestedName || '') + '"></label>'
       + '<div class="aiv-two">'
@@ -152,6 +168,18 @@
 
     var docForm = el.querySelector('[data-aiv-form="doc"]');
     var zipForm = el.querySelector('[data-aiv-form="zip"]');
+    var dlBox = el.querySelector('[data-aiv-form="dl"]');
+    // DigiLocker, on the same page as the other two ways.
+    var dlBtn = el.querySelector('[data-aiv-dl]');
+    if(dlBtn) dlBtn.addEventListener('click', async function(){
+      var msg = dlBox.querySelector('.aiv-msg');
+      dlBtn.disabled = true; msg.className = 'aiv-msg'; msg.textContent = 'Taking you to DigiLocker…';
+      try{
+        var d = await post({ mode: 'startDigiLocker' });
+        if(!d || !d.url) throw new Error('DigiLocker could not be opened right now. Use a photo of your ID instead.');
+        window.location.href = d.url;
+      }catch(err){ msg.className = 'aiv-msg is-error'; msg.textContent = err.message; dlBtn.disabled = false; }
+    });
     var sel = docForm.querySelector('[name=docType]');
     var numLabel = docForm.querySelector('[data-aiv-numlabel]');
     function syncType(){
@@ -167,6 +195,7 @@
         el.querySelectorAll('[data-aiv-tab]').forEach(function(x){ x.setAttribute('aria-selected', x === b ? 'true' : 'false'); });
         docForm.hidden = which !== 'doc';
         if(zipForm) zipForm.hidden = which !== 'zip';
+        if(dlBox) dlBox.hidden = which !== 'dl';
       });
     });
 
