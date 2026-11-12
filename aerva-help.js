@@ -196,6 +196,31 @@
     return '<span class="hc-status hc-status-' + esc(status) + '">' + esc(label || status) + '</span>';
   }
 
+  // The four states of a request, as one strip (owner, 12 Nov 2026,
+  // suggestion 10): a thread shows the conversation; what people want to
+  // know at a glance is where it stands and whose turn it is.
+  //   received → with Aerva → your turn → resolved
+  // 'done' is behind it, 'now' is where it is, and the step it is on says
+  // by when something happens.
+  function statusStrip(r){
+    var st = r.status;
+    var at = st === 'open' ? 1 : st === 'in_progress' ? 1 : st === 'waiting_on_you' ? 2 : 3;
+    var byWhen = st === 'open' || st === 'in_progress'
+      ? (r.firstReplyBy ? 'Aerva replies by ' + fmtDateTime(r.firstReplyBy) : 'Aerva replies within 48 hours')
+      : st === 'waiting_on_you' ? 'Your turn — reply below whenever you are ready'
+      : st === 'resolved' ? (r.autoCloseAt ? 'Closes by itself on ' + fmtDateTime(r.autoCloseAt) + ' unless you say otherwise' : 'Tell us if it is not sorted')
+      : 'Closed';
+    var steps = ['Received', 'With Aerva', 'Your turn', st === 'closed' ? 'Closed' : 'Resolved'];
+    // "Your turn" is skipped where it never happened, rather than shown as done.
+    return '<div class="hc-strip" aria-label="Where this request stands">'
+      + steps.map(function(label, i){
+          var cls = i < at ? 'is-done' : i === at ? 'is-now' : '';
+          if(i === 2 && st !== 'waiting_on_you' && at < 2) cls = '';
+          return '<span class="hc-strip-step ' + cls + '">' + esc(label) + '</span>';
+        }).join('')
+      + '</div><p class="hc-strip-by">' + esc(byWhen) + '</p>';
+  }
+
   // -------------------------------------------------------------- page frame
   function frame(active, inner){
     var signedIn = !!token();
@@ -712,7 +737,9 @@
       + '<p class="hc-muted">' + (about ? about + ' · ' : '') + 'Raised ' + esc(fmtDate(r.createdAt))
       + (r.callbackPhone ? ' · We will call you on ' + esc(r.callbackPhone) : '') + '</p></div>'
       + statusChip(r.status, r.statusLabel) + '</div>'
+      + statusStrip(r)
       + (statusNote ? '<p class="hc-status-note hc-status-note-' + esc(r.status) + '">' + esc(statusNote) + '</p>' : '')
+      + (r.status === 'resolved' ? '<div class="hc-actions hc-not-sorted"><button type="button" class="btn" id="hcNotSorted">No — this isn’t resolved</button></div>' : '')
       + hostCancelCard
       + feedbackDone
       + feedbackCard
@@ -721,6 +748,16 @@
       + (!r.canReply ? '<div class="hc-actions">' + hlink('new=1', 'Raise a new request', 'btn solid') + '</div>' : '');
     root.innerHTML = frame('mine', html);
     wireLinks(root);
+    // "This isn't resolved", one tap from the banner (owner, 12 Nov 2026,
+    // suggestion 11): the same thing the feedback card does, or the reply
+    // box where there is no card.
+    var notSorted = document.getElementById('hcNotSorted');
+    if(notSorted) notSorted.addEventListener('click', function(){
+      var no = document.querySelector('[data-fb="no"]');
+      if(no){ no.click(); var w = document.getElementById('hcFbWhat'); if(w){ w.focus(); w.scrollIntoView({ block: 'center' }); } return; }
+      var ta = document.getElementById('hcReply');
+      if(ta){ ta.value = ta.value || 'This is not resolved: '; ta.focus(); ta.scrollIntoView({ block: 'center' }); }
+    });
     [['hcHostCancelYes', true], ['hcHostCancelNo', false]].forEach(function(p){
       var b = document.getElementById(p[0]); if(!b) return;
       b.addEventListener('click', async function(){
@@ -988,6 +1025,7 @@
       + '<p class="hc-muted">Raised ' + esc(fmtDate(r.createdAt)) + ' without signing in'
       + (r.phoneEnding ? ' · We may call you on the number ending ' + esc(r.phoneEnding) : '') + '</p></div>'
       + statusChip(r.status, r.statusLabel) + '</div>'
+      + statusStrip(r)
       + (statusNote ? '<p class="hc-status-note hc-status-note-' + esc(r.status) + '">' + esc(statusNote) + '</p>' : '')
       + '<h2 class="hc-timeline-title">Conversation</h2><ol class="hc-thread">' + thread + '</ol>'
       + reply

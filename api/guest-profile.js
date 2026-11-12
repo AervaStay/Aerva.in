@@ -290,6 +290,15 @@ module.exports = async (req, res) => {
       const out = req.body.mode === 'verifyId'
         ? await idVerify.verifyDocument(sql, logAudit, guestId, req.body)
         : await idVerify.verifyAadhaarZip(sql, logAudit, guestId, req.body);
+      // The Aadhaar ZIP counts for bookings too (12 Nov 2026): it is signed
+      // by UIDAI, so it is at least as good as a photo of an ID. What it
+      // hands over for the age rule is used here and never stored.
+      if (out.forBooking) {
+        const fb = out.forBooking;
+        delete out.forBooking;
+        out.bookingVerified = await require('./_guest-verify').adoptFromIdVerify(sql, razorpayClient(), guestId,
+          { docType: fb.docType, dob: fb.dob, verification: { name: fb.name, last4: fb.last4 } });
+      }
       // The same proof counts for bookings when it meets the same rules: an
       // accepted type, in the profile's name, 18 or over (_guest-verify.js).
       if (req.body.mode === 'verifyId') {
@@ -1043,9 +1052,22 @@ module.exports = async (req, res) => {
       try {
         const ids = bookings.map(b => b.id);
         if (ids.length) {
-          const chs = await sql`SELECT DISTINCT ON (order_id) order_id, id, status, summary, difference FROM booking_changes
+          const chs = await sql`SELECT DISTINCT ON (order_id) order_id, id, status, summary, difference, accepted_at FROM booking_changes
                                 WHERE order_id = ANY(${ids}) AND status IN ('pending', 'awaiting_payment') ORDER BY order_id, id DESC`;
-          const byOrder = {}; chs.forEach(c => { byOrder[c.order_id] = { id: c.id, status: c.status, summary: c.summary, difference: c.difference }; });
+          const { AWAITING_PAYMENT_HOURS } = require('./_booking-changes');
+          const byOrder = {}; chs.forEach(c => {
+            const o = { id: c.id, status: c.status, summary: c.summary, difference: c.difference };
+            // Owner, 12 Nov 2026: a wait says when it ends and what happens then.
+            if (c.status === 'awaiting_payment' && c.accepted_at) {
+              o.ends_at = new Date(new Date(c.accepted_at).getTime() + AWAITING_PAYMENT_HOURS * 3600e3).toISOString();
+              o.then = Number(c.difference) > 0
+                ? 'If you do not pay by then, the change closes and your booking stays exactly as it is — the dates you have now.'
+                : 'If you do not confirm by then, the change closes and your booking stays exactly as it is.';
+            } else if (c.status === 'pending') {
+              o.then = 'Until your host answers, your booking stays exactly as it is. Nothing is charged and nothing is refunded while you wait.';
+            }
+            byOrder[c.order_id] = o;
+          });
           bookings.forEach(b => { b.open_change = byOrder[b.id] || null; });
         }
       } catch (err) { /* booking_changes not created yet */ }
@@ -1079,6 +1101,23 @@ module.exports = async (req, res) => {
             b.cancel_request_id = r ? r.id : null;
             b.cancel_request_reason = r ? (C.REASON_LABELS[r.reason_code] || null) : null;
             b.cancel_request_disaster = !!(r && C.isDisaster(r));
+            // What happens when the waiting ends, and when that is
+            // (owner, 12 Nov 2026 — every wait should say how it finishes).
+            // An unanswered request is settled 24 hours after it was sent
+            // (_cancellations.js settleUnansweredRequests): at the bracket
+            // the guest was quoted, or — where the host decides — with the
+            // booking cancelled and nothing refunded.
+            if (r && r.status === 'pending' && ['change_of_plans', 'late_cancellation'].includes(r.reason_code)) {
+              const endsMs = new Date(r.created_at).getTime() + 24 * 3600e3;
+              b.cancel_request_ends_at = new Date(endsMs).toISOString();
+              // The same reading the scheduler uses (hostOption): a fixed
+              // bracket goes through, anything the host decides does not.
+              const fixed = r.reason_code !== 'late_cancellation' && r.policy_percent != null;
+              const pct = fixed ? Number(r.policy_percent) : null;
+              b.cancel_request_then = pct == null || pct <= 0
+                ? 'If your host does not answer by then, the booking is cancelled and nothing is refunded — your security deposit still comes back.'
+                : `If your host does not answer by then, your cancellation goes through automatically at ${pct}%.`;
+            }
             // An old review of a host's decline (asked before 10 Nov 2026): where it stands.
             if (r && r.status === 'declined') {
               if (r.review_requested_at && !r.review_decided_at) b.cancel_review_state = 'Aerva is reviewing your emergency request (its decision is final)';
@@ -1244,7 +1283,12 @@ module.exports = async (req, res) => {
                                ORDER BY c.expires_at NULLS LAST, c.id LIMIT 20`)
             .map(c => ({ code: c.status === 'active' ? c.code : null, amount: Number(c.amount), status: c.status, expiresAt: c.expires_at, releaseAt: c.release_at, from: c.suite_name || '' }));
         } catch (e) { coupons = []; }
-        return res.status(200).json({ credits: await FC.forGuest(sql, guestId), coupons, days: FC.FEE_CREDIT_DAYS });
+        // Money on its way back to the card belongs on the same page as
+        // the credit and the coupons: one place that answers "where is my
+        // money?" (owner, 12 Nov 2026).
+        let refunds = [], refundsTotal = 0;
+        try { const w = await FC.wallet(sql, guestId); refunds = w.refunds || []; refundsTotal = Number(w.refundsTotal) || 0; } catch (e) { refunds = []; refundsTotal = 0; }
+        return res.status(200).json({ credits: await FC.forGuest(sql, guestId), coupons, refunds, refundsTotal, days: FC.FEE_CREDIT_DAYS });
       }
 
       // ---- Their own profile ----

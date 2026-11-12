@@ -1427,7 +1427,43 @@ window.AERVA_POLICIES = {
           { title: 'If you are not satisfied', points: [
             'Reply on the request and say why. You may also contact the National Consumer Helpline (1915) or the consumer commission.'
           ]}
-        ], docs: ['terms'] }
+        ], docs: ['terms'] },
+      // Owner, 12 Nov 2026 (suggestion 12): the grounds Aerva uses when it
+      // turns a request down are plain English already — they belong here,
+      // in the same words, so the answer a person gets matches the policy
+      // they could read beforehand. Keep in step with GROUNDS in
+      // api/_support-actions.js. Suggestion 9 lives here too: credit,
+      // coupon and refund are three different things.
+      { id: 'request-outcomes', group: 'everyone', title: 'How Aerva decides a request', category: 'other',
+        summary: 'What Aerva can and cannot change, the grounds on which a request is turned down, and the difference between a refund, Aerva credit and a coupon.',
+        sections: [
+          { title: 'What you are always told', points: [
+            'Every request gets an answer in writing on the request page, with the reason, and an email with the same words.',
+            'Where money moves, the amount and where it goes are said in the answer. Where nothing moves, that is said too, with the ground for it.',
+            'A decision about money is always checked by a second person at Aerva before it is sent.'
+          ]},
+          { title: 'The grounds for turning a request down', points: [
+            'The booking’s policy does not allow it — the refund policy the booking was paid under (Flexible or Firm) decides what comes back, and Aerva does not change it afterwards.',
+            'Asked for after the time allowed — some things have a window: a problem on arrival, a damage claim, a change to a stay. Once it has passed, the answer is no.',
+            'The host’s decision stands — where the policy gives the host the choice, that choice is theirs, not Aerva’s.',
+            'Nothing was found to be wrong — Aerva looked at the booking, the listing and what both sides sent, and the stay matched what was promised.',
+            'Not something Aerva decides — a bank, a card issuer or a government body decides it, and Aerva says who to go to.',
+            'Already settled on an earlier request — the same thing was decided before; a new request does not reopen it.',
+            'Not enough to go on — without photos, documents or dates Aerva cannot tell what happened. Send them and it is looked at again.',
+            'Something else — written out in full in the answer, never left as a label.'
+          ]},
+          { title: 'If you disagree with the answer', points: [
+            'Say so on the request: there is a “No — this isn’t resolved” button beside the banner, and it opens the request again.',
+            'Send anything new that bears on it. A request is looked at again on new information, not on being asked twice.',
+            'Still not satisfied? Raise a formal grievance — see “Complaints and grievances”.'
+          ]},
+          { title: 'Refund, Aerva credit, coupon — three different things', points: [
+            'Refund — Goes back to the card or account you paid with. Banks usually show it within 5 to 7 working days.',
+            'Aerva credit — Spend it on any Aerva stay or experience — or ask for it back to your original payment at any time.',
+            'Aerva coupon — Comes off one booking at checkout. It cannot be cashed and it has a last day to use it.',
+            'Your security deposit is separate from all three: it is refunded in full unless the host reports damage within 24 hours of check-out.'
+          ]}
+        ], docs: ['cancellation-stays', 'service-fees', 'terms'] }
     ],
 
     // What each badge means, and what it generally rests on. Meanings and

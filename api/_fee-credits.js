@@ -672,6 +672,25 @@ async function wallet(sql, guestId) {
     out.coupons = cps.map(c => ({ code: c.code, amount: Number(c.amount), expiresAt: c.expires_at,
       daysLeft: Math.max(0, Math.ceil((new Date(c.expires_at).getTime() - Date.now()) / 86400e3)) }));
   } catch (e) { /* not there yet */ }
+  // Money on its way back to the card. A guest should not have to open each
+  // booking to find out what is coming (owner, 12 Nov 2026 — one place that
+  // answers "where is my money?").
+  try {
+    const rs = await sql`
+      SELECT r.id, r.amount, r.status, r.created_at, r.kind,
+             o.id AS order_id, o.confirmation_code, o.suite_name
+        FROM refunds r JOIN orders o ON o.id = r.order_id
+       WHERE o.guest_id = ${guestId} AND r.status IN ('new', 'creating', 'pending')
+       ORDER BY r.created_at DESC LIMIT 10`;
+    out.refunds = rs.map(r => ({
+      orderId: Number(r.order_id), code: r.confirmation_code || null, listing: r.suite_name || '',
+      amount: Math.round(Number(r.amount) / 100),
+      what: /^deposit/.test(String(r.kind || '')) ? 'Security deposit' : /^change/.test(String(r.kind || '')) ? 'Booking changed' : 'Cancellation refund',
+      // Razorpay's own guidance: 5 to 7 working days once it is made.
+      byDate: new Date(new Date(r.created_at).getTime() + 7 * 86400e3).toISOString().slice(0, 10)
+    }));
+    out.refundsTotal = out.refunds.reduce((t, x) => t + x.amount, 0);
+  } catch (e) { out.refunds = []; out.refundsTotal = 0; }
   return out;
 }
 
@@ -696,6 +715,17 @@ async function bellNotice(sql, guestId) {
       cps.forEach(c => out.push({ id: 'aerva-coupon:' + c.code, kind: 'action', title: `Your ${inr(c.amount)} Aerva coupon: ${c.code}`,
         body: `Use it at checkout by ${day(c.expires_at)}. It covers the booking price and works with your Aerva credit.`, href: 'index.html?view=my-bookings' }));
     } catch (e) { /* coupons table not there */ }
+    // A refund on its way, and by when it should land (owner, 12 Nov 2026,
+    // suggestion 16: the bell should carry the money too, not only the
+    // credit). The same figures the money panel shows.
+    try {
+      const w = await wallet(sql, guestId);
+      (w.refunds || []).slice(0, 3).forEach(x => out.push({
+        id: 'refund-on-way:' + x.orderId + ':' + x.amount, kind: 'info',
+        title: `${inr(x.amount)} is on its way back to your card`,
+        body: `${x.what}${x.listing ? ' · ' + x.listing : ''} — your bank should show it by ${day(x.byDate)}. Nothing for you to do.`,
+        href: 'index.html?view=my-bookings' }));
+    } catch (e) { /* refunds table not there */ }
     return out;
   } catch (e) { return []; }
 }

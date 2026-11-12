@@ -1601,9 +1601,20 @@ async function loadMyPayouts(){
     const day = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', timeZone: 'UTC' }); };
     const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     box.innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500; font-size:22px; margin:0 0 8px;">Payouts</h2>'
-      + list.map(p => `<a href="index.html?payout=${Number(p.id)}" style="display:flex; justify-content:space-between; gap:12px; padding:12px 0; border-top:1px solid #f0e9df; color:inherit; text-decoration:none; font-size:14.5px;">
-          <span><strong>${inr(p.amount)}</strong>${p.mine ? (p.as === 'cohost' ? ' · to you, as co-host' : ' · to you') : ' · to ' + esc(p.payeeName || (p.as === 'cohost' ? 'co-host' : 'host'))}<br><span style="opacity:0.7;">${p.kind === 'deposit' ? 'Security deposit compensation · ' : p.kind === 'cohost-coupon' ? 'Coupon reimbursed by host · ' : ''}${esc(p.listing || '')} · ${esc(day(p.arrival))} – ${esc(day(p.departure))}</span></span>
-          <span style="opacity:0.7; text-align:right;">Sent ${esc(day(p.sentAt))}${p.arrivingBy ? '<br>Arriving by ' + esc(day(p.arrivingBy)) : ''}</span></a>`).join('');
+      // A payout that has not arrived says plainly why, and where to fix it
+      // if that is on the host (owner, 12 Nov 2026).
+      + list.map(p => {
+          const line = `<span><strong>${inr(p.amount)}</strong>${p.mine ? (p.as === 'cohost' ? ' · to you, as co-host' : ' · to you') : ' · to ' + esc(p.payeeName || (p.as === 'cohost' ? 'co-host' : 'host'))}<br><span style="opacity:0.7;">${p.kind === 'deposit' ? 'Security deposit compensation · ' : p.kind === 'cohost-coupon' ? 'Coupon reimbursed by host · ' : ''}${esc(p.listing || '')} · ${esc(day(p.arrival))} – ${esc(day(p.departure))}</span></span>`;
+          if(p.state === 'waiting'){
+            const fix = p.fix === 'bank' ? ' <a href="host-payouts.html" style="color:#8a6c39;">Check your bank details</a>' : '';
+            return `<div style="display:flex; justify-content:space-between; gap:12px; padding:12px 0; border-top:1px solid #f0e9df; font-size:14.5px;">
+              ${line}
+              <span style="text-align:right; max-width:22em;"><strong style="color:#8a6c39;">Not arrived yet</strong><br><span style="opacity:0.75; font-size:13px; line-height:1.5;">${esc(p.why || '')}${fix}</span></span></div>`;
+          }
+          return `<a href="index.html?payout=${Number(p.id)}" style="display:flex; justify-content:space-between; gap:12px; padding:12px 0; border-top:1px solid #f0e9df; color:inherit; text-decoration:none; font-size:14.5px;">
+          ${line}
+          <span style="opacity:0.7; text-align:right;">Sent ${esc(day(p.sentAt))}${p.arrivingBy ? '<br>Arriving by ' + esc(day(p.arrivingBy)) : ''}</span></a>`;
+        }).join('');
   }catch(err){ /* leave the page as it is */ }
 }
 if(document.readyState === 'loading') document.addEventListener('DOMContentLoaded', loadMyPayouts); else loadMyPayouts();
@@ -1693,6 +1704,16 @@ async function loadCancellationRequests(){
     }
     const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
     const day = (v) => { const d = new Date(String(v).slice(0, 10) + 'T00:00:00Z'); return isNaN(d) ? '' : d.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }); };
+    // "today at 7:00 pm" / "tomorrow at 7:00 pm" / "Fri 14 Nov at 7:00 pm" —
+    // a deadline a host can picture (owner, 12 Nov 2026).
+    const when = (iso) => { const d = new Date(iso); if(isNaN(d)) return '';
+      const t = d.toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' }), k = (x) => x.toLocaleDateString('en-CA');
+      if(k(d) === k(new Date())) return 'today at ' + t;
+      if(k(d) === k(new Date(Date.now() + 86400e3))) return 'tomorrow at ' + t;
+      return d.toLocaleDateString('en-IN', { weekday: 'short', day: 'numeric', month: 'short' }) + ' at ' + t; };
+    const deadline = (r) => r.answerBy
+      ? `<p style="font-size:13px; line-height:1.55; margin:8px 0 0; opacity:0.8;">Please answer by <strong>${esc(when(r.answerBy))}</strong>. ${esc(r.ifNoAnswer || '')}</p>`
+      : '';
     box.innerHTML = '<h2 style="font-family:\'Bodoni Moda\', Georgia, serif; font-weight:500; font-size:22px; margin:0 0 6px;">Cancellation requests</h2>'
       + list.map(r => `<div style="padding:12px 0; border-top:1px solid #f0e9df; font-size:14.5px;" data-req="${Number(r.id)}">
           <strong>${esc(r.guestName)}</strong> · ${esc(r.listing)} · ${esc(day(r.arrival))} – ${esc(day(r.departure))}${r.daysBefore != null ? ' · ' + (r.daysBefore === 0 ? 'check-in today' : r.daysBefore === 1 ? 'check-in tomorrow' : r.daysBefore + ' days before check-in') : ''}<br>
@@ -1710,6 +1731,7 @@ async function loadCancellationRequests(){
                  <button type="button" class="btn-small" data-accept="${Number(r.id)}">Accept</button>
                  <button type="button" class="dispute-btn" data-decline="${Number(r.id)}">Reject</button>
                </div>`}
+          ${deadline(r)}
           </div>`).join('');
     const answer = async (id, accept, refundPercent) => {
       if(!confirm(accept ? 'Confirm your answer? This cannot be undone.' : 'Reject this request?')) return;
