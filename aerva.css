@@ -3973,3 +3973,15 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 .money-fig-l{font-size:13.5px; margin-top:2px;}
 .money-fig-note{font-size:12px; opacity:0.68; margin-top:4px; line-height:1.45;}
 @media (max-width: 640px){ .money-fig{flex:1 1 100%;} }
+
+/* Wallet (?view=wallet, under Profile): the page itself, and the one line
+   that points to it from My Bookings (owner, 12 Nov 2026). */
+.wallet-line{display:flex; justify-content:space-between; align-items:center; gap:12px; flex-wrap:wrap;
+  margin:0 0 18px; padding:13px 16px; border:1px solid #e4d6bb; border-radius:12px; background:#f7f1e6;
+  color:var(--ink); text-decoration:none; font-size:14px; line-height:1.5;}
+.wallet-line:hover{background:#f3ead9;}
+.wallet-line-go{font-size:13px; color:var(--gold-text); white-space:nowrap;}
+.wallet-empty{border:1px solid var(--line-dark); border-radius:14px; padding:22px 20px; background:#fff; font-size:14.5px; line-height:1.6;}
+.wallet-empty p{margin:0 0 10px;}
+.wallet-what{margin:12px 0 0; padding-left:18px;}
+.wallet-what li{margin:0 0 6px; font-size:13px; opacity:0.78; line-height:1.55;}

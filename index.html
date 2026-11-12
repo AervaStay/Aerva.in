@@ -43,7 +43,7 @@
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Bodoni+Moda:ital,wght@0,400;0,500;0,600;1,400&family=Jost:wght@300;400;500&display=swap" rel="stylesheet">
-<link rel="stylesheet" href="aerva.css?v=2026-11-12e">
+<link rel="stylesheet" href="aerva.css?v=2026-11-12f">
 <script src="aerva-cohost.js?v=2026-11-11d"></script>
 </head>
 <body class="showing-hero">
@@ -128,6 +128,9 @@
         </button>
         <div class="nav-account-menu" id="navAccountMenu">
           <a href="index.html?view=profile" id="navProfileLink">Profile</a>
+          <!-- Wallet, under Profile (owner, 12 Nov 2026): Aerva credit and
+               Aerva coupons, and money on its way back. -->
+          <a href="index.html?view=wallet" id="navWalletLink">Wallet</a>
           <a href="index.html?view=wishlist" id="navWishlistLink">Wishlist</a>
           <a href="index.html?view=my-bookings">My Bookings</a>
           <a href="host-dashboard.html" id="myListingsLink" style="display:none;">My Collection</a>
@@ -162,6 +165,7 @@
       <span id="guestNameDisplayMobile" style="font-size:13px; letter-spacing:0.08em; text-transform:uppercase; opacity:0.72;"></span>
     </span>
     <a href="index.html?view=profile">Profile</a>
+    <a href="index.html?view=wallet">Wallet</a>
     <a href="index.html?view=wishlist">Wishlist</a>
     <a href="index.html?view=my-bookings">My Bookings</a>
     <!-- Notifications on a phone: the same list as the header bell. -->
@@ -1238,6 +1242,22 @@
   </div>
 </section>
 
+<!-- Wallet: Aerva credit, Aerva coupons and money on its way back to the
+     card — one place for a guest's money (aerva.js showWalletView). -->
+<section class="pad" id="walletView" style="background:var(--band); display:none;">
+  <div class="wrap">
+    <a href="index.html" class="link" style="margin-bottom:22px; display:inline-flex;">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" style="transform:rotate(180deg);"><path d="M5 12h14M13 6l6 6-6 6"/></svg>
+      Back to all homes
+    </a>
+    <div class="section-head center-head reveal">
+      <div class="eyebrow">Your money</div>
+      <h2 aria-level="1">Wallet</h2>
+    </div>
+    <div id="walletBox" style="max-width:720px; margin:0 auto;"><p class="loading">Loading your wallet…</p></div>
+  </div>
+</section>
+
 <!-- Wishlist: every home the guest has hearted (aerva.js showWishlistView). -->
 <section class="pad" id="wishlistView" style="background:var(--band); display:none;">
   <div class="wrap">
@@ -1634,7 +1654,7 @@
 <script src="aerva-bank-fields.js?v=2026-10-13a" defer></script>
 <script src="aerva-special.js?v=2026-11-10a" defer></script>
 <script src="aerva-guest-verify.js?v=2026-11-12b" defer></script>
-<script src="aerva.js?v=2026-11-12e" defer></script>
+<script src="aerva.js?v=2026-11-12f" defer></script>
 
 </body>
 </html>

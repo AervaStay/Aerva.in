@@ -7980,17 +7980,39 @@
   // Service-fee credits: when a host cancels, Aerva's service fee is held
   // for the guest — used on their next booking, or refunded on request or
   // when the credit period ends (_fee-credits.js).
-  async function loadFeeCredits(){
-    const box = document.getElementById('feeCreditsBox');
+  // The guest's money: Aerva credit, Aerva coupons, and refunds on their
+  // way back to the card. It lives on its own page — Wallet, under Profile
+  // in the menu (owner, 12 Nov 2026). My Bookings keeps one summary line
+  // that opens it, so there is still one place and one set of figures.
+  //   loadWallet(box, { full: true })  the Wallet page
+  //   loadWallet(box, { full: false }) the line on My Bookings
+  async function loadWallet(box, { full = false } = {}){
     const token = guestAuthToken();
-    if(!box || !token) return;
+    if(!box) return;
+    if(!token){
+      box.innerHTML = full
+        ? '<div class="wallet-empty"><p>Log in to see your Aerva credit and coupons.</p><a class="btn" href="guest-login.html?next=index.html%3Fview%3Dwallet">Log in</a></div>'
+        : '';
+      return;
+    }
     try{
       const r = await fetch(SUITES_API_BASE + '/api/guest-profile?mode=feeCredits', { headers: { 'Authorization': 'Bearer ' + token } });
       const d = await r.json();
       const list = (r.ok && d.credits) || [];
       const coupons = (r.ok && d.coupons) || [];
       const refunds = (r.ok && d.refunds) || [];
-      if(!list.length && !coupons.length && !refunds.length){ box.innerHTML = ''; return; }
+      if(!list.length && !coupons.length && !refunds.length){
+        box.innerHTML = full
+          ? `<div class="wallet-empty"><p><strong>Your wallet is empty.</strong></p>
+               <p>Aerva credit and coupons show here when there is something to show — after a cancellation, for example. So does a refund on its way back to your card.</p>
+               <ul class="wallet-what">
+                 <li><strong>Refund</strong> — ${MONEY_WORDS.refund}</li>
+                 <li><strong>Aerva credit</strong> — ${MONEY_WORDS.credit}</li>
+                 <li><strong>Aerva coupon</strong> — ${MONEY_WORDS.coupon}</li>
+               </ul></div>`
+          : '';
+        return;
+      }
       const fmtDate = (v) => new Date(v).toLocaleDateString('en-IN', { day: 'numeric', month: 'long', year: 'numeric' });
       // Coupons: the code to enter at checkout, its value and its last day.
       const couponHtml = coupons.map(c => `
@@ -8030,6 +8052,18 @@
             <p>Aerva has made this refund${x.code ? ` on booking ${escapeMessageHtml(x.code)}` : ''}. It goes back to the card you paid with — banks usually show it by <strong>${escapeMessageHtml(fmtDate(x.byDate))}</strong>. There is nothing for you to do.</p>
           </div>
         </div>`).join('');
+      // On My Bookings: one line with the figures and a way to the Wallet.
+      if(!full){
+        const bits = [
+          coming ? `${fmtGuest(coming)} on its way back` : '',
+          creditLeft ? `${fmtGuest(creditLeft)} Aerva credit` : '',
+          couponLeft ? `${fmtGuest(couponLeft)} in coupons` : ''
+        ].filter(Boolean);
+        box.innerHTML = bits.length
+          ? `<a class="wallet-line" href="index.html?view=wallet"><span><strong>Your money with Aerva:</strong> ${bits.join(' · ')}</span><span class="wallet-line-go">Open wallet →</span></a>`
+          : '';
+        return;
+      }
       box.innerHTML = head + refundHtml + couponHtml + list.map(c => c.status === 'active' && c.remaining > 0 ? `
         <div class="fee-credit-card">
           <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
@@ -8052,9 +8086,28 @@
           body: JSON.stringify({ mode: 'refundFeeCredit', id: Number(btn.dataset.refundCredit) }) });
         const j = await rr.json().catch(() => ({}));
         if(!rr.ok){ msg.textContent = j.error || 'Could not refund it right now.'; btn.disabled = false; return; }
-        loadFeeCredits();
+        loadWallet(box, { full });
       }));
-    }catch(e){ box.innerHTML = ''; }
+    }catch(e){ box.innerHTML = full ? '<p class="suites-empty">Could not load your wallet right now. Please refresh.</p>' : ''; }
+  }
+
+  // My Bookings' own line (kept under its old name: it is called from the
+  // bookings loader and after a credit is refunded).
+  function loadFeeCredits(){ return loadWallet(document.getElementById('feeCreditsBox'), { full: false }); }
+
+  // ---- Wallet (?view=wallet, under Profile in the menu) ----
+  function showWalletView(){
+    document.body.classList.remove('showing-hero');
+    hideMainViews();
+    const v = document.getElementById('walletView');
+    if(v) v.style.display = 'block';
+    document.title = 'Wallet — Aerva';
+    BROWSE_TABS.concat(['catToday']).forEach(id => {
+      const el = document.getElementById(id);
+      if(el) el.classList.remove('active');
+    });
+    window.scrollTo({ top: 0 });
+    loadWallet(document.getElementById('walletBox'), { full: true });
   }
 
   async function loadMyBookings(){
@@ -13388,7 +13441,7 @@
       <p class="bk-eyebrow">Booking summary</p>
       <h2 class="bk-title">${esc(b.suite_name || 'Your booking')}</h2>
       <p class="bk-sub"><span class="bk-status is-${esc(isCompleted ? 'completed' : b.status)}">${esc(statusWordGuest(isCompleted ? 'completed' : b.status))}</span>${place ? `<span class="bk-place">${esc(place)}</span>` : ''}</p>
-      ${b.status === 'cancelled' || b.status === 'refunded' ? `<div class="bk-cancelled">This booking was cancelled${b.cancelled_at ? ` on ${esc(new Date(b.cancelled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}.${b.cancellation_reason ? ` Reason: ${esc(b.cancellation_reason)}.` : ''}${refund ? ` ${inr(refund.amount)} ${refund.pending ? 'is being refunded' : 'was refunded'} ${b.group ? 'to the people who paid, each to their own payment method' : 'to your original payment method'}.` : ''}${Number(b.credit_back) > 0 ? ` ${inr(Number(b.credit_back))} is held for you as Aerva credit — use it on another booking, or have it refunded to your payment method any time from My Bookings.` : ''}${Number(b.coupon_back) > 0 ? ` ${inr(Number(b.coupon_back))} came back to you as an Aerva coupon.` : ''}</div>` : ''}
+      ${b.status === 'cancelled' || b.status === 'refunded' ? `<div class="bk-cancelled">This booking was cancelled${b.cancelled_at ? ` on ${esc(new Date(b.cancelled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}.${b.cancellation_reason ? ` Reason: ${esc(b.cancellation_reason)}.` : ''}${refund ? ` ${inr(refund.amount)} ${refund.pending ? 'is being refunded' : 'was refunded'} ${b.group ? 'to the people who paid, each to their own payment method' : 'to your original payment method'}.` : ''}${Number(b.credit_back) > 0 ? ` ${inr(Number(b.credit_back))} is held for you as Aerva credit — use it on another booking, or have it refunded to your payment method any time from your Aerva wallet.` : ''}${Number(b.coupon_back) > 0 ? ` ${inr(Number(b.coupon_back))} came back to you as an Aerva coupon.` : ''}</div>` : ''}
       ${bookingNowHtml(b, refund, inr)}
       ${b.confirmation_code && b.status === 'paid' ? `<div class="confirm-code bk-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${esc(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" id="bkCopyCode">Copy</button><span class="bk-code-hint">Show this to your host at ${isExp ? 'the start' : 'check-in'}</span></div>` : ''}
       <div class="bk-facts">${facts.filter(Boolean).map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`).join('')}</div>
@@ -13480,7 +13533,7 @@
   // Today's had left out the profile, so Today "did nothing" when clicked
   // from the profile (it opened underneath it, out of sight).
   const MAIN_VIEW_IDS = ['suites', 'bookingView', 'profileView', 'todayView', 'listingFullView',
-    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'wishlistView', 'settingsView', 'policiesView', 'privacyView', 'termsView', 'helpView', 'groupGiftView'];
+    'experienceFullView', 'add-listing', 'list-experience', 'my-bookings', 'walletView', 'wishlistView', 'settingsView', 'policiesView', 'privacyView', 'termsView', 'helpView', 'groupGiftView'];
 
   // ---- Agreements shown before payment and before listing ----
   // The guest booking agreement sits directly above every Book button; the
@@ -15372,6 +15425,8 @@
       document.getElementById('my-bookings').style.display = 'block';
       document.title = 'My Bookings — Aerva';
       loadMyBookings();
+    } else if(requestedView === 'wallet'){
+      showWalletView();
     } else if(requestedView === 'wishlist'){
       showWishlistView();
     } else if(requestedView === 'suites'){
@@ -16911,7 +16966,7 @@ function aervaTransferForm(body, o, orderId, { esc, inr, field, auth }){
         ${line('Current total', inr(q.oldTotal))}
         ${line('New total', '<strong>' + inr(q.newTotal) + '</strong>')}
         <div class="sum-row" style="font-weight:600; font-size:18px; padding-top:10px;"><span>${diffText}</span><span></span></div>
-        <p class="pay-note" style="text-align:left;">Your host is asked first. Once they accept, you complete the transfer in My Bookings within 24 hours: ${q.difference > 0 ? 'by paying the difference.' : q.difference < 0 ? `by accepting the difference as Aerva credit${kept > 0 ? ` (except ${inr(kept)} that was paid by coupon)` : ''} — use it on another booking, or have it refunded to your original payment method at any time from My Bookings.` : 'by confirming it.'} Aerva’s transfer fee is ${inr(q.transfer.transferFee)} and is not refundable once the transfer is complete. If your host declines, or you do not complete it, nothing changes and nothing is charged.</p>
+        <p class="pay-note" style="text-align:left;">Your host is asked first. Once they accept, you complete the transfer in My Bookings within 24 hours: ${q.difference > 0 ? 'by paying the difference.' : q.difference < 0 ? `by accepting the difference as Aerva credit${kept > 0 ? ` (except ${inr(kept)} that was paid by coupon)` : ''} — use it on another booking, or have it refunded to your original payment method at any time from your Aerva wallet.` : 'by confirming it.'} Aerva’s transfer fee is ${inr(q.transfer.transferFee)} and is not refundable once the transfer is complete. If your host declines, or you do not complete it, nothing changes and nothing is charged.</p>
         <div style="margin-top:12px; padding:12px 14px; border:1px solid #c9a96a; border-radius:10px; background:#fbf6ec;">
           <p style="margin:0 0 6px; font-weight:600;">Before you send this, please read</p>
           <ul style="margin:0; padding-left:18px; font-size:14px; line-height:1.55;">
@@ -16919,7 +16974,7 @@ function aervaTransferForm(body, o, orderId, { esc, inr, field, auth }){
             <li><strong>If your host declines</strong>, or you do not complete it within 24 hours of their acceptance: nothing changes and nothing is charged.</li>
             <li><strong>Once completed, it is final.</strong> The transfer cannot be undone, and no part of the booking can be changed, moved, split again, shortened <strong>or cancelled</strong> — even if your plans change.</li>
             <li>Each part gets its own confirmation code. Your check-in and check-out dates stay the same.</li>
-            ${q.difference < 0 ? '<li>Aerva credit can be used on any booking, or refunded to your original payment method at any time from My Bookings; whatever is left when it ends is refunded automatically.</li>' : ''}
+            ${q.difference < 0 ? '<li>Aerva credit can be used on any booking, or refunded to your original payment method at any time from your Aerva wallet; whatever is left when it ends is refunded automatically.</li>' : ''}
             <li>If something is not working after the transfer, raise a request in the Resolution Center. Aerva will look at it and make the final decision.</li>
           </ul>
           <label style="display:flex; gap:8px; align-items:flex-start; margin-top:10px; font-size:14px;"><input type="checkbox" id="trAgree" style="margin-top:3px;"> I understand: once completed, this transfer is final and the booking cannot be changed or cancelled.</label>
@@ -17367,7 +17422,7 @@ function aervaLoadSuggestedExperiences(root){
 
 // ---- Guest: complete an accepted transfer that costs the same or less ----
 async function aervaConfirmTransfer(changeId, btn){
-  if(!confirm('Complete this transfer? Your booking will be split as shown and this is final: no part can be changed, moved, split again, shortened or cancelled afterwards. For any problem, raise a request in the Resolution Center; Aerva decides. Any difference (after Aerva’s transfer fee) is held for you as Aerva credit, which you can have refunded to your original payment at any time from My Bookings.')) return;
+  if(!confirm('Complete this transfer? Your booking will be split as shown and this is final: no part can be changed, moved, split again, shortened or cancelled afterwards. For any problem, raise a request in the Resolution Center; Aerva decides. Any difference (after Aerva’s transfer fee) is held for you as Aerva credit, which you can have refunded to your original payment at any time from your Aerva wallet.')) return;
   const label = btn ? btn.textContent : '';
   if(btn){ btn.disabled = true; btn.textContent = 'Confirming…'; }
   const note = document.createElement('p');
@@ -17537,7 +17592,7 @@ async function openPolicyCancel(orderId, listingName){
     if(reason !== 'change_of_plans'){
       // A natural disaster or government order: Aerva decides (owner, 10 Nov 2026).
       const nd = q.naturalDisaster || {};
-      return '<p class="payout-muted" style="margin:8px 0;">Aerva checks your proof and decides \u2014 your host can\u2019t decline it. If Aerva approves, what you paid (booking price, GST and Aerva\u2019s service fee' + (q.freeCancel ? ', and the free cancellation add-on' : '') + ') becomes <strong>Aerva credit</strong>, and any security deposit is refunded to your original payment: use it for new dates, or have it refunded to your original payment any time from My Bookings. If not, nothing changes and your booking stands. Aerva\u2019s decision is final.</p>'
+      return '<p class="payout-muted" style="margin:8px 0;">Aerva checks your proof and decides \u2014 your host can\u2019t decline it. If Aerva approves, what you paid (booking price, GST and Aerva\u2019s service fee' + (q.freeCancel ? ', and the free cancellation add-on' : '') + ') becomes <strong>Aerva credit</strong>, and any security deposit is refunded to your original payment: use it for new dates, or have it refunded to your original payment any time from your Aerva wallet. If not, nothing changes and your booking stands. Aerva\u2019s decision is final.</p>'
         + (nd.credit ? line('Aerva credit if approved', '<strong>' + inr(nd.credit) + '</strong>') : '') + (nd.coupon ? line('Back as a coupon (the part paid by coupon)', inr(nd.coupon)) : '') + (nd.cash ? line(q.groupNoRefund ? 'Security deposit, refunded to the organiser' : 'Security deposit, refunded to your original payment', inr(nd.cash)) : '');
     }
     if(!q.allowed) return `<p class="payout-muted" style="margin:8px 0;">${esc(q.error || '')}</p>`;
