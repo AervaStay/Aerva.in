@@ -1506,12 +1506,17 @@ module.exports = async (req, res) => {
           return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now. Please try again.', needs: err.needs || undefined, maxGuests: err.maxGuests || undefined });
         }
       }
-      if (mode === 'acceptRebook' || mode === 'declineRebook' || mode === 'confirmStay') {
+      // POST { mode: 'reportDifference', orderId, what, photos } → "It's here,
+      //      but something's different": confirms the place and files a
+      //      correction against the listing (_listing-corrections.js). No
+      //      money, no payout hold, nothing held against the host.
+      if (mode === 'acceptRebook' || mode === 'declineRebook' || mode === 'confirmStay' || mode === 'reportDifference') {
         try {
           const b = req.body || {};
           const CP = require('./_checkin-promise');
           const orderId = Number(b.orderId) || 0;
           if (mode === 'confirmStay') return res.status(200).json(await CP.confirmStay(sql, { orderId, guestId }));
+          if (mode === 'reportDifference') return res.status(200).json(await CP.reportDifference(sql, { orderId, guestId, what: b.what, photos: b.photos }));
           if (mode === 'declineRebook') return res.status(200).json(await CP.declineOffers(sql, razorpayClient(), { orderId, guestId }));
           return res.status(200).json(await CP.acceptOffer(sql, razorpayClient(), { orderId, guestId, option: Number(b.option) }));
         } catch (err) {

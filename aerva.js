@@ -17189,10 +17189,27 @@ function aervaCheckinPromiseHtml(b){
     if(c.canDecline) html += `<p style="margin:8px 0 0;"><button type="button" class="filter-clear" data-cp-decline="${b.id}">${c.offers && c.offers.length ? 'None of these — refund me in full' : 'Refund me in full instead'}</button> <span style="font-size:12.5px; opacity:0.75;">Everything you paid comes back, including Aerva’s service fee.</span></p>`;
     html += '<p class="cp-msg" style="color:#a3402f; margin:6px 0 0;"></p></div>';
   }
-  if(b.can_confirm_real){
-    html += `<div class="cp-box" style="${box}" onclick="event.stopPropagation()"><strong>Is this place real and as listed?</strong>
-      <p style="margin:4px 0 8px;">Help other guests: confirm it, or use Report a problem (with a photo) if it does not exist, or is not as listed or not available.</p>
-      <button type="button" class="btn solid" data-cp-real="${b.id}" style="min-height:44px; padding:10px 18px;">This place is real and as listed</button><p class="cp-msg" style="color:#a3402f; margin:6px 0 0;"></p></div>`;
+  // Three answers, not one (owner, 13 Nov 2026). A guest standing in the
+  // right house with the wrong colour wall could not truthfully press
+  // "real and as listed", so they went to Report a problem — the check-in
+  // promise, which holds the host's payout and can cost them the whole
+  // booking. The question that sorts them is not "is anything different?"
+  // but "can you still stay?".
+  if(b.correction){
+    html += `<p style="font-size:13px; opacity:0.75; margin:8px 0 0;">You told Aerva something here is not as listed${b.correction.status === 'open' ? '. Aerva is looking at it' : b.correction.status === 'advised' ? ', and Aerva has asked your host to put the listing right' : ''}. Thank you.</p>`;
+  } else if(b.can_confirm_real){
+    html += `<div class="cp-box" style="${box}" onclick="event.stopPropagation()"><strong>Is this place as listed?</strong>
+      <p style="margin:4px 0 8px;">Help the next guest: tell Aerva what you found.</p>
+      <div class="cp-answers">
+        <button type="button" class="btn solid" data-cp-real="${b.id}" style="min-height:44px; padding:10px 18px;">Yes, it's as listed</button>
+        <button type="button" class="filter-clear" data-cp-diff="${b.id}" style="min-height:44px;">It's here, but something's different</button>
+      </div>
+      <p style="font-size:12.5px; opacity:0.75; margin:8px 0 0;">Can't stay here at all — the place does not exist, is not available, or is not what you booked? Use <strong>Report a problem</strong> instead.</p>
+      <div class="cp-diff-form" hidden></div><p class="cp-msg" style="color:#a3402f; margin:6px 0 0;"></p></div>`;
+  } else if(b.can_report_difference && b.status === 'paid'){
+    // The listing has already been checked by an earlier guest, so this is
+    // a quiet line rather than a card — but it is still open to them.
+    html += `<p style="font-size:13px; margin:8px 0 0;">${b.confirmed_real ? 'You confirmed this place is real and as listed. Thank you. ' : ''}<button type="button" class="filter-clear" data-cp-diff="${b.id}" style="font-size:13px;">Something not as listed?</button></p><div class="cp-diff-form" hidden></div><p class="cp-msg" style="color:#a3402f; margin:6px 0 0;"></p>`;
   } else if(b.confirmed_real && b.status === 'paid'){
     html += '<p style="font-size:13px; opacity:0.75; margin:8px 0 0;">You confirmed this place is real and as listed. Thank you.</p>';
   }
@@ -17272,6 +17289,42 @@ function aervaBindCheckinPromise(container, bookings){
     btn.disabled = true;
     try{ await post({ mode: 'confirmStay', orderId: Number(btn.dataset.cpReal) }); loadMyBookings(); }
     catch(err){ say(btn, err.message); btn.disabled = false; }
+  }));
+  // "It's here, but something's different" (owner, 13 Nov 2026). The form
+  // opens in place rather than in an overlay: this is a small thing, and
+  // it should feel like one. It says plainly what it does and does not do,
+  // because a guest who thinks they are claiming money back will be
+  // disappointed, and a host who thinks they are being accused will fight.
+  container.querySelectorAll('[data-cp-diff]').forEach(btn => btn.addEventListener('click', (e) => {
+    e.stopPropagation();
+    const id = Number(btn.dataset.cpDiff);
+    const wrap = btn.closest('.cp-box') || btn.parentElement.parentElement;
+    const slot = wrap.querySelector('.cp-diff-form') || (btn.parentElement.nextElementSibling && btn.parentElement.nextElementSibling.classList.contains('cp-diff-form') ? btn.parentElement.nextElementSibling : null);
+    if(!slot) return;
+    if(!slot.hidden){ slot.hidden = true; return; }
+    slot.hidden = false;
+    slot.innerHTML = `<div class="cp-diff" style="margin-top:10px; border-top:1px solid #eadfcf; padding-top:10px;">
+        <label class="payout-label" for="cpd${id}">What's different?</label>
+        <textarea id="cpd${id}" class="cpd-text" rows="3" maxlength="1200" placeholder="The bedroom wall is green, not white like the photos." style="width:100%; font-size:15px; padding:8px 10px;"></textarea>
+        <label class="payout-label" for="cpf${id}" style="margin-top:8px;">A photo helps (up to 8, not required)</label>
+        <input id="cpf${id}" class="cpd-files" type="file" multiple accept="image/jpeg,image/png,image/webp" style="margin:6px 0 10px; font-size:15px;">
+        <p style="font-size:12.5px; opacity:0.8; margin:0 0 10px;">You can still stay, so nothing happens to your booking and nothing happens to your host's money. Aerva checks it and asks them to put the listing right, so the next guest sees the real thing.</p>
+        <button type="button" class="btn solid cpd-send" style="min-height:44px; padding:10px 18px;">Tell Aerva</button>
+        <p class="cpd-msg" style="color:#a3402f; margin:6px 0 0;"></p>
+      </div>`;
+    const send = slot.querySelector('.cpd-send'), msg = slot.querySelector('.cpd-msg');
+    send.addEventListener('click', async (ev) => {
+      ev.stopPropagation();
+      const what = slot.querySelector('.cpd-text').value.trim();
+      if(what.length < 10){ msg.textContent = 'Please say in a line or two what is different.'; return; }
+      send.disabled = true; msg.textContent = '';
+      try{
+        const files = [...slot.querySelector('.cpd-files').files].slice(0, 8);
+        const photos = files.length ? await aervaUploadFiles(files, 'listing-correction') : [];
+        await post({ mode: 'reportDifference', orderId: id, what, photos });
+        loadMyBookings();
+      }catch(err){ msg.textContent = err.message; send.disabled = false; }
+    });
   }));
 }
 // The booking summary page: one amount for a booking Aerva moved.

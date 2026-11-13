@@ -863,6 +863,10 @@ module.exports = async (req, res) => {
   //     as fake, blocked listings, and what hosts owe Aerva.
   // GET ?checkinCandidates=<reportId> — places the guest could move to.
   // POST { checkinDecide: { reportId, upheld, note } }       confirm / clear
+  //      { checkinDecide: { reportId, outcome: 'corrected', note } }
+  //        real, and the guest can stay, but the listing is wrong: the
+  //        payout hold lifts, the host keeps everything and has nothing
+  //        held against them, and a correction is filed instead.
   //      { checkinSendOffers: { reportId, options: [{ listingId, roomId }] } }  up to 3
   //      { checkinRefund: { reportId, note } }               refund in full
   //      { checkinListingReview: { orderId, note } }         a blocked listing's booking: move or refund its guest
@@ -882,7 +886,7 @@ module.exports = async (req, res) => {
     try {
       const CP = require('./_checkin-promise');
       const b = req.body;
-      if (b.checkinDecide) return res.status(200).json({ success: true, ...(await CP.decideReport(sql, { reportId: Number(b.checkinDecide.reportId) || 0, upheld: b.checkinDecide.upheld === true, note: b.checkinDecide.note, adminLabel: ADMIN_ACTOR })) });
+      if (b.checkinDecide) return res.status(200).json({ success: true, ...(await CP.decideReport(sql, { reportId: Number(b.checkinDecide.reportId) || 0, upheld: b.checkinDecide.upheld === true, outcome: b.checkinDecide.outcome, note: b.checkinDecide.note, adminLabel: ADMIN_ACTOR })) });
       if (b.checkinSendOffers) return res.status(200).json({ success: true, ...(await CP.sendOffers(sql, { reportId: Number(b.checkinSendOffers.reportId) || 0, options: b.checkinSendOffers.options, adminLabel: ADMIN_ACTOR })) });
       if (b.checkinRefund) return res.status(200).json({ success: true, ...(await CP.refundInFull(sql, razorpay, { reportId: Number(b.checkinRefund.reportId) || 0, note: b.checkinRefund.note, adminLabel: ADMIN_ACTOR })) });
       if (b.checkinListingReview) return res.status(200).json({ success: true, ...(await CP.startListingReview(sql, { orderId: Number(b.checkinListingReview.orderId) || 0, note: b.checkinListingReview.note, adminLabel: ADMIN_ACTOR })) });
@@ -898,7 +902,25 @@ module.exports = async (req, res) => {
   // evidence stands and the host cannot justify (_stay-disputes.js).
   if (req.method === 'GET' && req.query.stayDisputes === '1') {
     const rows = await disputesForAdmin(sql, { status: req.query.status === 'all' ? 'all' : 'open' });
-    return res.status(200).json({ reasons: DISPUTE_REASONS, disputes: rows });
+    // Listing corrections ride along with Guest Safety: same page, but no
+    // money and no penalty, so they are a separate list on it.
+    let corrections = { ready: false, rows: [] };
+    try { corrections = await require('./_listing-corrections').forAdmin(sql, { status: req.query.status === 'all' ? null : 'open' }); } catch (err) { /* before its database update */ }
+    return res.status(200).json({ reasons: DISPUTE_REASONS, disputes: rows, corrections: corrections.rows, correctionsReady: corrections.ready });
+  }
+  // POST { decideCorrection: { id, action: 'advised'|'dropped'|'escalated', note } }
+  // Advising a host costs them nothing and has no deadline (owner,
+  // 13 Nov 2026) — 'escalated' is only a note that Aerva has opened the
+  // heavier report by hand.
+  if (req.method === 'POST' && req.body && req.body.decideCorrection) {
+    try {
+      const b = req.body.decideCorrection;
+      const out = await require('./_listing-corrections').decide(sql, { id: Number(b.id) || 0, action: String(b.action || ''), note: b.note, adminLabel: ADMIN_ACTOR });
+      return res.status(200).json({ success: true, status: out.status });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('decideCorrection failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
+    }
   }
   if (req.method === 'POST' && req.body && req.body.decideStayDispute) {
     try {
@@ -1076,6 +1098,11 @@ module.exports = async (req, res) => {
       count('payouts', sql`SELECT (SELECT count(*) FROM payouts WHERE status = 'failed') + (SELECT count(*) FROM refunds WHERE status = 'failed') AS n`),
       // Reports made on arrival are decided in Approvals → Check-in promise (counted there, below), not in Guest Safety.
       count('trust', sql`SELECT count(*)::int AS n FROM stay_disputes WHERE status IN ('open', 'host_responded') AND reason NOT IN ('arrival_fake', 'arrival_failed')`),
+      // Listings a guest found wrong on some small point, while still being
+      // able to stay (_listing-corrections.js, 13 Nov 2026). No money and
+      // no penalty ride on these, so they sit with Trust rather than take a
+      // queue of their own.
+      require('./_listing-corrections').openCount(sql).then(n => { if (n) counts.trust = (counts.trust || 0) + n; }).catch(() => {}),
       count('support', sql`SELECT count(*)::int AS n FROM support_tickets WHERE status IN ('open', 'in_progress')
                              AND last_user_message_at IS NOT NULL AND (last_support_message_at IS NULL OR last_user_message_at > last_support_message_at)`),
       count('batch', sql`SELECT count(*)::int AS n FROM job_runs WHERE last_ok IS FALSE`),

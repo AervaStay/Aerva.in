@@ -603,6 +603,10 @@ module.exports = async (req, res) => {
         (await require('./_cancellations').bellNotifications(sql, { guestId: guest.id, hostId: guest.host_id })).forEach(n => notifications.push(n));
         // A review whose window is about to close, on either side.
         (await require('./_review-policy').bellNotifications(sql, { guestId: guest.id, hostId: guest.host_id })).forEach(n => notifications.push(n));
+        // A listing of theirs with one thing to update — on the listing and
+        // never on a booking, so no guest can be picked out as the one who
+        // mentioned it (owner, 14 Nov 2026; _listing-corrections.js).
+        if (guest.host_id) (await require('./_listing-corrections').bellNotifications(sql, { hostId: guest.host_id })).forEach(n => notifications.push(n));
         // A stay someone has given them, first in the list (owner, 12 Nov 2026).
         (await require('./_gifts').bellNotifications(sql, { guestId: guest.id, email: guest.email })).reverse().forEach(n => notifications.unshift(n));
       } catch (err) {
