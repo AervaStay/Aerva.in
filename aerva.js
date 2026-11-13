@@ -8041,7 +8041,11 @@
       // said in one line, because people mix them up (owner, 12 Nov 2026).
       const sum = (xs, f) => xs.reduce((t, x) => t + (Number(f(x)) || 0), 0);
       const coming = sum(refunds, x => x.amount);
-      const creditLeft = sum(list.filter(c => c.status === 'active'), c => c.remaining);
+      // Credit that has ended is NOT counted here: checkout will not take
+      // it, and a figure that included it would be money the guest cannot
+      // spend (audit, 13 Nov 2026). It still gets a line of its own below,
+      // so nobody is left wondering where it went.
+      const creditLeft = sum(list.filter(c => c.status === 'active' && !c.ended), c => c.remaining);
       const couponLeft = sum(coupons.filter(c => c.status === 'active'), c => c.amount);
       const fig = (label, amount) => amount > 0
         ? `<div class="money-fig"><div class="money-fig-n">${fmtGuest(amount)}</div><div class="money-fig-l">${label}</div></div>` : '';
@@ -8081,7 +8085,18 @@
           : '';
         return;
       }
-      box.innerHTML = head + refundHtml + couponHtml + list.map(c => c.status === 'active' && c.remaining > 0 ? `
+      // Credit still in hand first, credit that has ended underneath it —
+      // newest first within each, as before.
+      const byLife = list.slice().sort((a, b) => (a.ended ? 1 : 0) - (b.ended ? 1 : 0));
+      box.innerHTML = head + refundHtml + couponHtml + byLife.map(c => c.ended && c.remaining > 0 ? `
+        <div class="fee-credit-card done">
+          <div class="fee-credit-body">
+            <strong>Aerva credit of ${fmtGuest(c.remaining)} ended${c.expiresAt ? ' on ' + escapeMessageHtml(fmtDate(c.expiresAt)) : ''}.</strong>
+            <p class="fee-credit-lead">${c.refundable
+              ? 'It is going back to the card or account you paid with — nothing for you to do. Banks usually take 5 to 7 working days to show it.'
+              : 'It can no longer be used on a booking.'}</p>
+          </div>
+        </div>` : c.status === 'active' && c.remaining > 0 ? `
         <div class="fee-credit-card">
           <div class="fee-credit-amount">${fmtGuest(c.remaining)}</div>
           <div class="fee-credit-body">

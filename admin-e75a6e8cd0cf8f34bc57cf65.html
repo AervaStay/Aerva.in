@@ -2088,16 +2088,22 @@
   window.mnDownload = function(){
     if(!mnState.rows.length) return;
     const cell = (v) => '"' + String(v == null ? '' : v).replace(/"/g, '""') + '"';
-    const head = ['Date', 'In or out', 'Payment or payout', 'Who', 'Who they are', 'Email', 'Booking', 'Listing', 'Amount in (INR)', 'Amount out (INR)', 'Razorpay payment id', 'Razorpay refund id', 'RazorpayX payout id', 'Status', 'Why', 'Note'];
+    // Indian time, like the screen and like the from/to filter — not UTC.
+    // Exported in UTC, a payment at 00:33 IST read as the previous day in
+    // the spreadsheet, so the file disagreed with the day it was filtered
+    // by (audit, 13 Nov 2026). A spreadsheet reads "2026-11-13 00:33" as a
+    // date and time; the heading says which clock it is on.
+    const mnIst = (v) => { if(!v) return ''; const d = new Date(new Date(v).getTime() + 5.5 * 3600e3).toISOString(); return d.slice(0, 10) + ' ' + d.slice(11, 16); };
+    const head = ['Date and time (IST)', 'In or out', 'Payment or payout', 'Who', 'Who they are', 'Email', 'Booking', 'Listing', 'Amount in (INR)', 'Amount out (INR)', 'Razorpay payment id', 'Razorpay refund id', 'RazorpayX payout id', 'Status', 'Why', 'Note'];
     const lines = [head.map(cell).join(',')].concat(mnState.rows.map(r => [
-      r.at ? new Date(r.at).toISOString() : '', r.direction === 'in' ? 'In' : 'Out', r.what, r.who, r.whoIs, r.whoEmail,
+      mnIst(r.at), r.direction === 'in' ? 'In' : 'Out', r.what, r.who, r.whoIs, r.whoEmail,
       r.booking, r.listing, r.direction === 'in' ? Math.round(r.amount) : '', r.direction === 'out' ? Math.round(r.amount) : '',
       r.paymentId, r.refundId, r.payoutId, r.status, r.why || '', r.note
     ].map(cell).join(',')));
     const blob = new Blob(['﻿' + lines.join('\r\n')], { type: 'text/csv;charset=utf-8;' });
     const a = document.createElement('a');
     a.href = URL.createObjectURL(blob);
-    a.download = 'aerva-transactions-' + new Date().toISOString().slice(0, 10) + '.csv';
+    a.download = 'aerva-transactions-' + new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10) + '.csv';
     document.body.appendChild(a); a.click();
     setTimeout(() => { URL.revokeObjectURL(a.href); a.remove(); }, 0);
   };
