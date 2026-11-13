@@ -8174,8 +8174,8 @@
           if(d(b.arrival) <= t && d(b.departure) >= t && st === 'paid' && d(b.departure) !== d(b.arrival) && d(b.departure) > t) return 0;
           if(d(b.departure) <= t && d(b.arrival) < t) return 2;
           return d(b.arrival) > t ? 1 : (d(b.departure) > t ? 0 : 2); };
-        // Which tab a booking belongs on (owner, 12 Nov 2026): Today ·
-        // Upcoming · Past. "Today" is any confirmed stay that touches today
+        // Which tab a booking belongs on (owner, 12 Nov 2026): Ongoing ·
+        // Upcoming · Past. "Ongoing" is any confirmed stay that touches today
         // — arriving today, in the middle of it, or checking out today —
         // which is how the host's own Today view reads it.
         const tabOf = (b) => { const st = String(b.status || '');
@@ -8187,7 +8187,7 @@
         bookings.forEach(b => { b.__group = groupOf(b); b.__tab = tabOf(b); });
         bookings.sort((a, b) => a.__group - b.__group || (a.__group <= 1 ? d(a.arrival).localeCompare(d(b.arrival)) : d(b.arrival).localeCompare(d(a.arrival)))); }
       const MB_GROUPS = ['Staying now', 'Upcoming', 'Past stays', 'Cancelled'];
-      // Three tabs (owner, 12 Nov 2026): Today · Upcoming · Past. A tab name
+      // Three tabs (owner, 12 Nov 2026): Ongoing · Upcoming · Past. A tab name
       // says enough on its own, so the only headings left are inside Past,
       // where stays taken and bookings cancelled are worth keeping apart.
       const cardHtml = (b) => ((b) => {
@@ -8300,7 +8300,12 @@
         }).join('');
       };
       const TABS = [
-        ['today', 'Today', 'Nothing today. A stay shows here on the day you arrive, while you are there, and on the day you leave.'],
+        // The id stays 'today' — it is what __tab and the ?tab= link are
+        // keyed on, so an ?tab=today link someone already has keeps working.
+        // Only the words the guest reads changed (owner, 13 Nov 2026).
+        // Nothing to do with the host's own Today page (?view=today), which
+        // is still called Today.
+        ['today', 'Ongoing', 'Nothing on right now. A stay shows here on the day you arrive, while you are there, and on the day you leave.'],
         ['upcoming', 'Upcoming', 'Nothing booked yet. When you book a stay or an experience, it shows here.'],
         ['past', 'Past', 'Nothing here yet — stays you have taken, and anything cancelled, move here.']
       ];
