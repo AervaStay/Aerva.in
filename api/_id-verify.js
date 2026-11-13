@@ -102,7 +102,12 @@ function sameBirthDate(typed, onId) {
   return a.y === b.y && a.m === b.m && a.d === b.d;
 }
 const last4Of = (s) => String(s || '').toUpperCase().replace(/[^A-Z0-9]/g, '').slice(-4);
-const today = () => new Date().toISOString().slice(0, 10);
+// "Today" on Indian time, not UTC. Read in UTC, the five and a half hours
+// after midnight in India still count as yesterday — an ID that ran out
+// yesterday would pass the expiry check below, and someone whose 18th
+// birthday is today would be refused as under 18. _guest-verify.js works
+// out its own "today" the same way.
+const today = () => new Date(Date.now() + 5.5 * 3600e3).toISOString().slice(0, 10);
 
 function mediaTypeOf(declared, bytes) {
   const b = bytes;

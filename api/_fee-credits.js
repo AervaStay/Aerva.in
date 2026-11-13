@@ -67,6 +67,11 @@ function creditEnd(paidAt, now = new Date()) {
   return full.toISOString();
 }
 const MIN_LEFT_MINUTES = 10;           // not applied at checkout when about to end
+                                       // — and so the cut-off for every figure
+                                       // shown to the guest (the Wallet, the
+                                       // bell, the reminder emails): a balance
+                                       // offered must be a balance checkout
+                                       // will take (audit, 13 Nov 2026).
 const REFUND_GRACE_MINUTES = 15;       // a payment begun just before the end can still claim it
 const esc = (s) => String(s == null ? '' : s).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
 const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
@@ -545,6 +550,7 @@ const TAGLINES = [
 async function remindOnSignIn(sql, guestId) {
   try {
     const open = await sql`SELECT id FROM fee_credits WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0
+                             AND expires_at > now() + make_interval(mins => ${MIN_LEFT_MINUTES})
                            ORDER BY created_at DESC, id DESC`;
     if (!open.length) return false;
     const secs = REMINDER_PERIOD_DAYS * 86400;
@@ -589,6 +595,7 @@ async function remindQuarterly(sql, { deadlineMs = 4000, at } = {}) {
                            COALESCE(sum(f.remaining) FILTER (WHERE COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true)), 0)::int AS cash
                     FROM fee_credits f JOIN guests g ON g.id = f.guest_id
                     WHERE f.status = 'active' AND f.remaining > 0 AND g.deleted_at IS NULL AND COALESCE(g.email, '') <> ''
+                      AND f.expires_at > now() + make_interval(mins => ${MIN_LEFT_MINUTES})
                     GROUP BY f.guest_id
                     HAVING bool_and(f.last_email_at IS NULL OR f.last_email_at < ${since})
                     LIMIT 50`;
@@ -663,7 +670,8 @@ async function wallet(sql, guestId) {
   try {
     const r = (await sql`SELECT COALESCE(sum(remaining), 0)::int AS balance,
                                 min(expires_at) FILTER (WHERE COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true)) AS ends
-                         FROM fee_credits f WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0`)[0];
+                         FROM fee_credits f WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0
+                           AND expires_at > now() + make_interval(mins => ${MIN_LEFT_MINUTES})`)[0];
     out.credit = r ? r.balance : 0;
     out.creditEndsAt = r && r.ends && isFinite(new Date(r.ends)) ? new Date(r.ends).toISOString() : null;
   } catch (e) { /* not there yet */ }
@@ -701,7 +709,8 @@ async function bellNotice(sql, guestId) {
     const r = (await sql`SELECT COALESCE(sum(remaining), 0)::int AS balance, max(created_at) AS at,
                                 min(expires_at) FILTER (WHERE COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true)) AS ends,
                                 COALESCE(sum(remaining) FILTER (WHERE COALESCE((to_jsonb(f)->>'cash_refundable')::boolean, true)), 0)::int AS cash
-                         FROM fee_credits f WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0`)[0];
+                         FROM fee_credits f WHERE guest_id = ${guestId} AND status = 'active' AND remaining > 0
+                           AND expires_at > now() + make_interval(mins => ${MIN_LEFT_MINUTES})`)[0];
     if (r && r.balance > 0) {
       const a = inr(r.balance);
       const ends = r.ends && isFinite(new Date(r.ends)) ? ` Use it by ${day(r.ends)}; anything left then is refunded automatically.` : '';
@@ -738,12 +747,23 @@ async function forGuest(sql, guestId) {
                            FROM fee_credits f LEFT JOIN orders o ON o.id = COALESCE(f.source_order_id, (to_jsonb(f)->>'group_order_id')::int)
                            WHERE f.guest_id = ${guestId} AND (f.status IN ('active', 'refunding') OR f.refunded_at > now() - interval '60 days')
                            ORDER BY f.created_at DESC LIMIT 20`;
+    // ended: still 'active' in the database, but past the point where
+    // checkout will spend it — available() above wants MIN_LEFT_MINUTES
+    // still on the clock. Until runExpired comes round (hourly, and never
+    // at all for a credit whose card refund keeps failing) the row sits
+    // here looking like money. Without this flag the Wallet counted it and
+    // checkout then refused it, with nothing on the page to explain why
+    // (audit, 13 Nov 2026).
+    const deadMs = Date.now() + MIN_LEFT_MINUTES * 60000;
+    const isEnded = (r) => r.status === 'active' && r.expires_at != null && new Date(r.expires_at).getTime() <= deadMs;
     // canRefund: the guest may have it refunded to the original payment now
-    // (every open credit, natural-disaster credit included).
+    // (every open credit, natural-disaster credit included). Not once it has
+    // ended — then it goes back on its own and a button would only confuse.
     return rows.map(r => Object.assign({ id: r.id, amount: r.amount, remaining: r.remaining, status: r.status, expiresAt: r.expires_at,
       refunded: r.refunded_amount, refundedAt: r.refunded_at, from: r.suite_name || '', reason: r.reason },
       r.reason === 'natural_disaster' ? { disaster: true } : {},
-      refundableNow(r) && r.status === 'active' && r.remaining > 0 ? { canRefund: true } : {}));
+      isEnded(r) ? { ended: true, refundable: refundableNow(r) } : {},
+      refundableNow(r) && r.status === 'active' && r.remaining > 0 && !isEnded(r) ? { canRefund: true } : {}));
   } catch (e) { return []; }
 }
 

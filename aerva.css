@@ -3868,6 +3868,19 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 
 /* My Bookings: group headings. */
 .mb-group{ font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:20px; margin:28px 0 12px; }
+/* My Bookings: two tabs — what is still to come, and what is behind you
+   (owner, 12 Nov 2026). */
+.mb-tabs{ display:flex; gap:4px; margin:0 0 20px; border-bottom:1px solid var(--line-dark); }
+.mb-tab{ appearance:none; background:none; border:none; cursor:pointer; font:inherit; color:var(--ink);
+  padding:10px 16px 11px; margin-bottom:-1px; border-bottom:2px solid transparent; opacity:0.6;
+  font-size:14.5px; letter-spacing:0.01em; display:inline-flex; align-items:center; gap:7px; }
+.mb-tab:hover{ opacity:0.85; }
+.mb-tab.is-on{ opacity:1; font-weight:500; border-bottom-color:var(--gold-deep); }
+.mb-tab-n{ font-size:11.5px; min-width:19px; height:19px; padding:0 5px; border-radius:999px;
+  background:var(--surface-2); display:inline-flex; align-items:center; justify-content:center; opacity:0.75; }
+.mb-tab.is-on .mb-tab-n{ background:#f4eadc; opacity:1; }
+.mb-tabs + [data-mb-panel] .mb-group:first-child{ margin-top:0; }
+@media (max-width: 520px){ .mb-tab{ flex:1 1 0; justify-content:center; padding:10px 8px 11px; font-size:14px; } }
 .mb-group:first-child{ margin-top:0; }
 /* The review reminder: one compact row on a phone, and not on a listing page while booking. */
 @media (max-width: 600px){
@@ -3946,8 +3959,7 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 /* The money rows add up on screen, and each kind of money back is named in
    one line, in the same words as the emails (owner, 12 Nov 2026). */
 .bk-row.bk-adds-up{ border-top:1px solid var(--line-dark); margin-top:6px; padding-top:10px; font-weight:500; }
-.bk-money-words{ margin:10px 0 0; }
-.bk-money-words p{ margin:0 0 4px; font-size:12px; opacity:0.68; line-height:1.5; }
+
 
 /* "Someone has given you a stay": the first thing a guest sees at sign-in
    when a gift is waiting (aerva.js aervaGiftPopup). */
@@ -3983,5 +3995,21 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 .wallet-line-go{font-size:13px; color:var(--gold-text); white-space:nowrap;}
 .wallet-empty{border:1px solid var(--line-dark); border-radius:14px; padding:22px 20px; background:#fff; font-size:14.5px; line-height:1.6;}
 .wallet-empty p{margin:0 0 10px;}
-.wallet-what{margin:12px 0 0; padding-left:18px;}
-.wallet-what li{margin:0 0 6px; font-size:13px; opacity:0.78; line-height:1.55;}
+
+/* Explanation lives behind a toggle, not on the screen (owner, 12 Nov
+   2026: "why so much explanation on UI?"). The figures and the one thing
+   to do stay visible; the reasoning opens when it is wanted. */
+.say-more{margin:8px 0 0;}
+.say-more > summary{display:inline-flex; align-items:center; gap:5px; cursor:pointer; list-style:none;
+  font-size:12.5px; letter-spacing:0.02em; color:var(--gold-text); padding:2px 0;}
+.say-more > summary::-webkit-details-marker{display:none;}
+.say-more > summary::after{content:'›'; display:inline-block; transform:rotate(90deg); font-size:14px; line-height:1; opacity:0.7;}
+.say-more[open] > summary::after{transform:rotate(-90deg);}
+.say-more > summary:hover{text-decoration:underline;}
+.say-more-body{margin:7px 0 0; font-size:13px; line-height:1.6; opacity:0.78; max-width:48em;}
+.say-more-body p{margin:0 0 7px;}
+.say-more-body p:last-child{margin-bottom:0;}
+.money-words{margin:0; padding-left:17px;}
+.money-words li{margin:0 0 5px; line-height:1.55;}
+.fee-credit-lead{margin:4px 0 0; font-size:14px; line-height:1.55;}
+.coupon-code{font-size:15px; letter-spacing:0.04em; background:#f4eadc; padding:2px 8px; border-radius:6px;}

@@ -136,8 +136,8 @@ async function ledger(sql, opts = {}) {
         FROM orders o
        WHERE o.razorpay_payment_id IS NOT NULL
          AND o.group_booking_id IS NULL
-         AND (${from}::timestamptz IS NULL OR o.created_at >= ${from}::timestamptz)
-         AND (${to}::timestamptz IS NULL OR o.created_at < ${to}::timestamptz)
+         AND (${from}::text IS NULL OR (o.created_at AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+         AND (${to}::text IS NULL OR (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${before}::timestamptz IS NULL OR o.created_at < ${before}::timestamptz)
          AND (${like}::text IS NULL OR lower(o.guest_email) LIKE ${like} OR lower(o.suite_name) LIKE ${like}
               OR lower(coalesce(o.confirmation_code, '')) LIKE ${like} OR lower(o.razorpay_payment_id) LIKE ${like}
@@ -172,8 +172,8 @@ async function ledger(sql, opts = {}) {
         LEFT JOIN orders o ON o.id = g.order_id
         LEFT JOIN listings l ON l.id = g.listing_id
        WHERE c.status = 'paid' AND c.razorpay_payment_id IS NOT NULL
-         AND (${from}::timestamptz IS NULL OR c.paid_at >= ${from}::timestamptz)
-         AND (${to}::timestamptz IS NULL OR c.paid_at < ${to}::timestamptz)
+         AND (${from}::text IS NULL OR (c.paid_at AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+         AND (${to}::text IS NULL OR (c.paid_at AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${before}::timestamptz IS NULL OR c.paid_at < ${before}::timestamptz)
          AND (${like}::text IS NULL OR lower(coalesce(c.email, '')) LIKE ${like} OR lower(coalesce(l.property_name, '')) LIKE ${like}
               OR lower(c.razorpay_payment_id) LIKE ${like} OR lower(coalesce(c.razorpay_order_id, '')) LIKE ${like}
@@ -204,8 +204,8 @@ async function ledger(sql, opts = {}) {
         FROM booking_changes ch
         JOIN orders o ON o.id = ch.order_id
        WHERE ch.razorpay_payment_id IS NOT NULL AND ch.difference > 0
-         AND (${from}::timestamptz IS NULL OR COALESCE(ch.applied_at, ch.accepted_at, ch.created_at) >= ${from}::timestamptz)
-         AND (${to}::timestamptz IS NULL OR COALESCE(ch.applied_at, ch.accepted_at, ch.created_at) < ${to}::timestamptz)
+         AND (${from}::text IS NULL OR (COALESCE(ch.applied_at, ch.accepted_at, ch.created_at) AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+         AND (${to}::text IS NULL OR (COALESCE(ch.applied_at, ch.accepted_at, ch.created_at) AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${before}::timestamptz IS NULL OR COALESCE(ch.applied_at, ch.accepted_at, ch.created_at) < ${before}::timestamptz)
          AND (${like}::text IS NULL OR lower(o.guest_email) LIKE ${like} OR lower(o.suite_name) LIKE ${like}
               OR lower(ch.razorpay_payment_id) LIKE ${like} OR lower(coalesce(o.confirmation_code, '')) LIKE ${like})
@@ -232,8 +232,8 @@ async function ledger(sql, opts = {}) {
         FROM refunds r
         JOIN orders o ON o.id = r.order_id
         LEFT JOIN group_claims c ON c.razorpay_payment_id = r.razorpay_payment_id AND c.status = 'paid'
-       WHERE (${from}::timestamptz IS NULL OR r.created_at >= ${from}::timestamptz)
-         AND (${to}::timestamptz IS NULL OR r.created_at < ${to}::timestamptz)
+       WHERE (${from}::text IS NULL OR (r.created_at AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+         AND (${to}::text IS NULL OR (r.created_at AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${before}::timestamptz IS NULL OR r.created_at < ${before}::timestamptz)
          AND (${like}::text IS NULL OR lower(o.guest_email) LIKE ${like} OR lower(o.suite_name) LIKE ${like}
               OR lower(coalesce(r.razorpay_refund_id, '')) LIKE ${like} OR lower(r.razorpay_payment_id) LIKE ${like}
@@ -265,8 +265,8 @@ async function ledger(sql, opts = {}) {
         LEFT JOIN listings l ON l.id = g.listing_id
        WHERE c.refund_amount > 0 AND c.refund_status IS NOT NULL AND c.refund_status <> 'failed'
          AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.razorpay_payment_id = c.razorpay_payment_id)
-         AND (${from}::timestamptz IS NULL OR COALESCE(c.refunded_at, c.refund_claimed_at) >= ${from}::timestamptz)
-         AND (${to}::timestamptz IS NULL OR COALESCE(c.refunded_at, c.refund_claimed_at) < ${to}::timestamptz)
+         AND (${from}::text IS NULL OR (COALESCE(c.refunded_at, c.refund_claimed_at) AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+         AND (${to}::text IS NULL OR (COALESCE(c.refunded_at, c.refund_claimed_at) AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${before}::timestamptz IS NULL OR COALESCE(c.refunded_at, c.refund_claimed_at) < ${before}::timestamptz)
          AND (${like}::text IS NULL OR lower(coalesce(c.email, '')) LIKE ${like} OR lower(coalesce(l.property_name, '')) LIKE ${like}
               OR lower(coalesce(c.razorpay_refund_id, '')) LIKE ${like} OR lower(coalesce(c.razorpay_payment_id, '')) LIKE ${like})
@@ -298,8 +298,8 @@ async function ledger(sql, opts = {}) {
         LEFT JOIN orders o ON o.id = p.order_id
         LEFT JOIN hosts h ON h.id = p.host_id
         LEFT JOIN guests gu ON gu.id = p.payee_guest_id
-       WHERE (${from}::timestamptz IS NULL OR COALESCE(p.sent_at, p.created_at) >= ${from}::timestamptz)
-         AND (${to}::timestamptz IS NULL OR COALESCE(p.sent_at, p.created_at) < ${to}::timestamptz)
+       WHERE (${from}::text IS NULL OR (COALESCE(p.sent_at, p.created_at) AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+         AND (${to}::text IS NULL OR (COALESCE(p.sent_at, p.created_at) AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${before}::timestamptz IS NULL OR COALESCE(p.sent_at, p.created_at) < ${before}::timestamptz)
          AND (${like}::text IS NULL OR lower(coalesce(h.email, '')) LIKE ${like} OR lower(coalesce(h.name, '')) LIKE ${like}
               OR lower(coalesce(gu.email, '')) LIKE ${like} OR lower(coalesce(o.suite_name, '')) LIKE ${like}
@@ -348,28 +348,28 @@ async function totals(sql, { from, to, like }) {
     SELECT COALESCE(sum(t.n), 0) AS n FROM (
       SELECT sum(o.total - o.fee_credit_used)::numeric AS n FROM orders o
        WHERE o.razorpay_payment_id IS NOT NULL AND o.group_booking_id IS NULL
-         AND (${from}::timestamptz IS NULL OR o.created_at >= ${from}::timestamptz)
-         AND (${to}::timestamptz IS NULL OR o.created_at < ${to}::timestamptz)
+         AND (${from}::text IS NULL OR (o.created_at AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+         AND (${to}::text IS NULL OR (o.created_at AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${like}::text IS NULL OR lower(o.guest_email) LIKE ${like} OR lower(o.suite_name) LIKE ${like}
               OR lower(coalesce(o.confirmation_code, '')) LIKE ${like} OR lower(o.razorpay_payment_id) LIKE ${like})
       UNION ALL
       SELECT sum(c.amount)::numeric FROM group_claims c
        WHERE c.status = 'paid' AND c.razorpay_payment_id IS NOT NULL
-         AND (${from}::timestamptz IS NULL OR c.paid_at >= ${from}::timestamptz)
-         AND (${to}::timestamptz IS NULL OR c.paid_at < ${to}::timestamptz)
+         AND (${from}::text IS NULL OR (c.paid_at AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+         AND (${to}::text IS NULL OR (c.paid_at AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${like}::text IS NULL OR lower(coalesce(c.email, '')) LIKE ${like} OR lower(c.razorpay_payment_id) LIKE ${like})
       UNION ALL
       SELECT sum(ch.difference)::numeric FROM booking_changes ch JOIN orders o2 ON o2.id = ch.order_id
        WHERE ch.razorpay_payment_id IS NOT NULL AND ch.difference > 0
-         AND (${from}::timestamptz IS NULL OR COALESCE(ch.applied_at, ch.accepted_at, ch.created_at) >= ${from}::timestamptz)
-         AND (${to}::timestamptz IS NULL OR COALESCE(ch.applied_at, ch.accepted_at, ch.created_at) < ${to}::timestamptz)
+         AND (${from}::text IS NULL OR (COALESCE(ch.applied_at, ch.accepted_at, ch.created_at) AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+         AND (${to}::text IS NULL OR (COALESCE(ch.applied_at, ch.accepted_at, ch.created_at) AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${like}::text IS NULL OR lower(o2.guest_email) LIKE ${like} OR lower(ch.razorpay_payment_id) LIKE ${like})
     ) t`);
   const refunded = await one(() => sql`
     SELECT COALESCE(sum(r.amount), 0) / 100 AS n FROM refunds r JOIN orders o ON o.id = r.order_id
      WHERE r.status IN ('new', 'creating', 'pending', 'processed')
-       AND (${from}::timestamptz IS NULL OR r.created_at >= ${from}::timestamptz)
-       AND (${to}::timestamptz IS NULL OR r.created_at < ${to}::timestamptz)
+       AND (${from}::text IS NULL OR (r.created_at AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+       AND (${to}::text IS NULL OR (r.created_at AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
        AND (${like}::text IS NULL OR lower(o.guest_email) LIKE ${like} OR lower(o.suite_name) LIKE ${like}
             OR lower(coalesce(r.razorpay_refund_id, '')) LIKE ${like} OR lower(r.razorpay_payment_id) LIKE ${like}
             OR lower(coalesce(o.confirmation_code, '')) LIKE ${like})`);
@@ -377,21 +377,21 @@ async function totals(sql, { from, to, like }) {
     SELECT COALESCE(sum(c.refund_amount), 0) / 100 AS n FROM group_claims c
      WHERE c.refund_amount > 0 AND c.refund_status IS NOT NULL AND c.refund_status <> 'failed'
        AND NOT EXISTS (SELECT 1 FROM refunds r WHERE r.razorpay_payment_id = c.razorpay_payment_id)
-       AND (${from}::timestamptz IS NULL OR COALESCE(c.refunded_at, c.refund_claimed_at) >= ${from}::timestamptz)
-       AND (${to}::timestamptz IS NULL OR COALESCE(c.refunded_at, c.refund_claimed_at) < ${to}::timestamptz)
+       AND (${from}::text IS NULL OR (COALESCE(c.refunded_at, c.refund_claimed_at) AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+       AND (${to}::text IS NULL OR (COALESCE(c.refunded_at, c.refund_claimed_at) AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
        AND (${like}::text IS NULL OR lower(coalesce(c.email, '')) LIKE ${like} OR lower(coalesce(c.razorpay_refund_id, '')) LIKE ${like})`);
   const paidOut = await one(() => sql`
     SELECT COALESCE(sum(p.net), 0) AS n FROM payouts p LEFT JOIN orders o ON o.id = p.order_id LEFT JOIN hosts h ON h.id = p.host_id
      WHERE p.status = 'sent'
-       AND (${from}::timestamptz IS NULL OR COALESCE(p.sent_at, p.created_at) >= ${from}::timestamptz)
-       AND (${to}::timestamptz IS NULL OR COALESCE(p.sent_at, p.created_at) < ${to}::timestamptz)
+       AND (${from}::text IS NULL OR (COALESCE(p.sent_at, p.created_at) AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+       AND (${to}::text IS NULL OR (COALESCE(p.sent_at, p.created_at) AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
        AND (${like}::text IS NULL OR lower(coalesce(h.email, '')) LIKE ${like} OR lower(coalesce(h.name, '')) LIKE ${like}
             OR lower(coalesce(o.suite_name, '')) LIKE ${like} OR lower(coalesce(p.razorpayx_payout_id, '')) LIKE ${like})`);
   const dueOut = await one(() => sql`
     SELECT COALESCE(sum(p.net), 0) AS n FROM payouts p LEFT JOIN orders o ON o.id = p.order_id LEFT JOIN hosts h ON h.id = p.host_id
      WHERE p.status = 'due'
-       AND (${from}::timestamptz IS NULL OR COALESCE(p.sent_at, p.created_at) >= ${from}::timestamptz)
-       AND (${to}::timestamptz IS NULL OR COALESCE(p.sent_at, p.created_at) < ${to}::timestamptz)
+       AND (${from}::text IS NULL OR (COALESCE(p.sent_at, p.created_at) AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
+       AND (${to}::text IS NULL OR (COALESCE(p.sent_at, p.created_at) AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
        AND (${like}::text IS NULL OR lower(coalesce(h.email, '')) LIKE ${like} OR lower(coalesce(h.name, '')) LIKE ${like}
             OR lower(coalesce(o.suite_name, '')) LIKE ${like} OR lower(coalesce(p.razorpayx_payout_id, '')) LIKE ${like})`);
   const out = Math.round(refunded + groupRefunded + paidOut);
