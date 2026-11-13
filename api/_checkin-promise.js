@@ -265,14 +265,29 @@ async function openReport(sql, { dispute, order }) {
 }
 
 // ---------------------------------------------------------------------
-// 2. AERVA DECIDES. upheld: true → confirmed (rebook or refund follows);
-// false → cleared.
-async function decideReport(sql, { reportId, upheld, note = '', adminLabel = 'admin' }) {
+// 2. AERVA DECIDES. Three ways out (the third added by the owner on
+// 13 Nov 2026):
+//   'confirmed' — the report stands; rebook or refund follows.
+//   'cleared'   — it does not stand; the booking is unchanged.
+//   'corrected' — the place is real and the guest can stay, but the
+//                 listing was wrong on some point. The payout hold lifts
+//                 (this status is not in ACTIVE), the host keeps every
+//                 rupee and has nothing held against them, and a
+//                 correction is filed so they are asked to put the
+//                 listing right. No money moves.
+// 'corrected' exists for the guest who reached for the heavy option over
+// something small — which will happen however carefully the card is
+// worded. Clearing the report would tell a truthful guest they were
+// wrong; confirming it would cost the host the whole booking over paint.
+// `upheld` is still accepted on its own, and still means confirmed.
+async function decideReport(sql, { reportId, upheld, outcome, note = '', adminLabel = 'admin' }) {
   await assertReady(sql);
   const text = String(note || '').trim().slice(0, 1000);
-  if (!upheld && text.length < 5) throw userError('Write why the report is not upheld — the guest is told.');
-  const got = await sql`UPDATE checkin_reports SET status = ${upheld ? 'confirmed' : 'cleared'}, decided_at = now(), decided_by = ${adminLabel}, decision_note = ${text || null},
-                          closed_at = ${upheld ? null : new Date().toISOString()}
+  const how = ['confirmed', 'cleared', 'corrected'].includes(String(outcome || '')) ? String(outcome) : (upheld ? 'confirmed' : 'cleared');
+  if (how === 'cleared' && text.length < 5) throw userError('Write why the report is not upheld — the guest is told.');
+  if (how === 'corrected' && text.length < 5) throw userError('Write what the listing has wrong — the guest and the host are both told.');
+  const got = await sql`UPDATE checkin_reports SET status = ${how}, decided_at = now(), decided_by = ${adminLabel}, decision_note = ${text || null},
+                          closed_at = ${how === 'confirmed' ? null : new Date().toISOString()}
                         WHERE id = ${Number(reportId) || 0} AND status = 'open' RETURNING *`;
   if (!got.length) throw userError('This report has already been decided.', 409);
   const r = got[0];
@@ -281,10 +296,55 @@ async function decideReport(sql, { reportId, upheld, note = '', adminLabel = 'ad
   const { postThreadMessage } = require('./_cancellations');
   const host = await hostAccount(sql, r.host_id);
   if (r.dispute_id) {
-    try { await sql`UPDATE stay_disputes SET status = ${upheld ? 'upheld' : 'no_refund'}, decided_at = now(), decided_by = ${adminLabel}, decision_note = ${text || null} WHERE id = ${r.dispute_id}`; }
+    try { await sql`UPDATE stay_disputes SET status = ${how === 'confirmed' ? 'upheld' : 'no_refund'}, decided_at = now(), decided_by = ${adminLabel}, decision_note = ${text || null} WHERE id = ${r.dispute_id}`; }
     catch (e) { console.error('dispute not closed:', r.dispute_id, e.message); }
   }
-  if (!upheld) {
+  if (how === 'corrected') {
+    // Put a hidden listing back first: a fake report that turns out to be
+    // a correction means the place is plainly real.
+    let restored = false;
+    if (r.reason === 'fake' && r.listing_status_before) {
+      const other = await sql`SELECT 1 FROM checkin_reports WHERE listing_id = ${r.listing_id} AND reason = 'fake' AND status = 'open' AND id <> ${r.id} LIMIT 1`;
+      if (!other.length) {
+        restored = (await sql`UPDATE listings SET status = ${r.listing_status_before}, admin_status_reason = NULL
+                              WHERE id = ${r.listing_id} AND status = 'blocked' AND checkin_blocked_at IS NULL RETURNING id`).length > 0;
+      }
+    }
+    // The place is real — the guest is in it — so the listing gets its check.
+    await sql`UPDATE orders SET guest_confirmed_stay_at = COALESCE(guest_confirmed_stay_at, now()) WHERE id = ${r.order_id}`;
+    let correctionId = null;
+    try {
+      const LC = require('./_listing-corrections');
+      if (await LC.ready(sql)) {
+        const saved = await LC.create(sql, { orderId: r.order_id, guestId: r.guest_id, what: text, photos: [], source: 'stepped_down', reportId: r.id, adminLabel });
+        correctionId = saved.id;
+      }
+    } catch (e) { console.error('correction not filed from report:', r.id, e.message); }
+    await S.systemUpdate(sql, r.guest_ticket_id, `Aerva has looked at this. The place is real and your booking stands, so there is no refund — but you were right that the listing does not match on this point, and Aerva has asked your host to put it right: ${text}`, { resolve: true });
+    // The host already knows a report was made — they were told when it
+    // was opened and their payout was held — so the outcome has to reach
+    // them. What it does NOT do is hand them the guest's words back
+    // (owner, 14 Nov 2026): Aerva speaks in its own voice, about the
+    // listing, as something to improve.
+    await S.systemUpdate(sql, r.host_ticket_id, `Aerva has looked at this and is not upholding it. You keep this booking, the payout hold is lifted, and nothing is held against you. One thing on the listing itself is worth updating, so the photos and the description show the place as it is today: ${text}`, { resolve: true });
+    // Guest side only: the thread belongs to the booking, and a host who
+    // reads a line there knows exactly whose stay it came from.
+    await postThreadMessage(sql, r.order_id, 'system', 'Aerva has looked at the report made on arrival. The place is real and the booking stands, and Aerva has asked the host to put the listing right.', { audience: 'guest' });
+    await email(o.guest_email, `Your report about ${o.property_name}`,
+      `<h2 style="font-family:Georgia,serif;">Aerva has looked at your report</h2>
+       <p>The place is real and your booking stands, so nothing is refunded — but you were right that the listing does not match:</p>
+       <p style="padding:10px 12px; background:#f4eadc; border-radius:8px;">${esc(text)}</p>
+       <p>Aerva has asked your host to put the listing right, so the next guest sees the real thing. Thank you for telling us.</p>`);
+    await email(host && host.email, `Not upheld — and one update for ${o.property_name}`,
+      `<p>Aerva has reviewed the report made on arrival and is <strong>not</strong> upholding it.${restored ? ' Your listing is live again.' : ''} You keep this booking, the hold on its payout is lifted, and nothing is held against you.</p>
+       <p>Checking the place against the listing did turn up one detail worth updating, so that what guests expect and what they walk into are the same thing:</p>
+       <p style="padding:10px 12px; background:#f4eadc; border-radius:8px;">${esc(text)}</p>
+       <p>There is no deadline and no penalty — it is so the next guest sees the real thing.</p>`);
+    await logAudit(sql, { action: 'checkin_report_corrected', success: true, actorType: 'admin', actorIdentifier: adminLabel, targetType: 'order', targetId: r.order_id,
+      metadata: { reportId: r.id, reason: r.reason, listingRestored: restored, correctionId, note: text } });
+    return { status: 'corrected', listingRestored: restored, correctionId };
+  }
+  if (how !== 'confirmed') {
     // Back live, unless Aerva blocked the listing or another fake report on it is open.
     let restored = false;
     if (r.reason === 'fake' && r.listing_status_before) {
@@ -793,10 +853,30 @@ async function confirmStay(sql, { orderId, guestId }) {
   if (!done.length) return { ok: true, already: true };
   const first = await sql`UPDATE listings SET checkin_verified_at = now(), checkin_verified_order_id = ${o.id}
                           WHERE id = ${o.listing_id} AND checkin_verified_at IS NULL AND checkin_blocked_at IS NULL RETURNING id`;
-  await require('./_cancellations').postThreadMessage(sql, o.id, 'system', 'The guest confirmed this place is real and as listed. Thank you.');
+  // The guest's own receipt, and nobody else's business (owner,
+  // 14 Nov 2026). Shared with the host it read as "your guest was asked
+  // to vouch for you" — a host who has done nothing wrong learns only
+  // that Aerva was checking up on them. There is nothing here the host
+  // needs: the check costs them nothing and changes nothing.
+  await require('./_cancellations').postThreadMessage(sql, o.id, 'system', 'You confirmed this place is real and as listed. Thank you.', { audience: 'guest' });
   await logAudit(sql, { action: 'checkin_stay_confirmed', success: true, actorType: 'guest', actorIdentifier: String(guestId), targetType: 'order', targetId: o.id,
     metadata: { listingId: o.listing_id, listingChecked: first.length > 0 } });
   return { ok: true, listingChecked: first.length > 0 };
+}
+
+// "It's here, but something's different" — the middle answer on the
+// check-in card (owner, 13 Nov 2026). The guest is standing in the right
+// house and is staying, so this confirms the place exactly as the button
+// above does; it only also files a correction against the listing. No
+// money, no payout hold, nothing held against the host — the rules are in
+// _listing-corrections.js. The heavy path is untouched: a guest who
+// cannot stay still goes to Report a problem.
+async function reportDifference(sql, { orderId, guestId, what, photos }) {
+  const LC = require('./_listing-corrections');
+  if (!(await LC.ready(sql))) throw userError('Aerva cannot take this just now. Please use Report a problem instead.', 503);
+  const confirmed = await confirmStay(sql, { orderId, guestId });
+  const saved = await LC.create(sql, { orderId, guestId, what, photos });
+  return { ok: true, correctionId: saved.id, listingChecked: confirmed.listingChecked === true };
 }
 
 // ---------------------------------------------------------------------
@@ -855,8 +935,27 @@ async function decorateGuestBookings(sql, bookings) {
         const w = confirmWindow({ arrival: b.arrival, departure: b.departure, tz: x.tz, check_in_time: x.check_in_time, check_out_time: x.check_out_time });
         b.confirmed_real = !!x.guest_confirmed_stay_at;
         b.can_confirm_real = !x.guest_confirmed_stay_at && !x.checkin_verified_at && w.open;
+        // "It's here, but something's different" is open to EVERY guest in
+        // their own stay window, not only the one who first verifies the
+        // listing — a listing drifts from its photos over time, and the
+        // tenth guest is as entitled to say so as the first (owner,
+        // 13 Nov 2026). Nothing nags them: on an already-checked listing
+        // this shows as a quiet line, not the full card.
+        b.can_report_difference = w.open;
       }
     }
+    // One correction already filed on this stay: show it rather than the
+    // buttons, so nobody files the same thing twice.
+    try {
+      const LC = require('./_listing-corrections');
+      if (await LC.ready(sql)) {
+        const byOrder = await LC.forGuest(sql, bookings.map(b => Number(b.id)));
+        bookings.forEach(b => {
+          const c = byOrder.get(Number(b.id));
+          if (c) { b.correction = { what: c.what, status: c.status, at: c.created_at }; if (c.status === 'open') b.can_report_difference = false; }
+        });
+      }
+    } catch (err) { console.error('corrections view failed:', err.message); }
     for (let i = bookings.length - 1; i >= 0; i--) if (bookings[i]._hide) bookings.splice(i, 1);
   } catch (err) { console.error('check-in promise view failed:', err.message); }
   return bookings;
@@ -1013,5 +1112,5 @@ async function runJob(sql, { deadlineMs = 4000 } = {}) {
 
 module.exports = {
   REASONS, MAX_OFFERS, NOT_READY, HOLD_NOTICE_ID, holdFrom, isArrivalReason, ready, payoutHolds, holdFor, openReport, decideReport, startListingReview, candidates, sendOffers,
-  quoteRebook, rebookHolds, acceptOffer, applyRebook, refundInFull, declineOffers, confirmStay, decorateGuestBookings, decorateSharedBookings, adminView, balances, unblockListing, hostView, runJob, rebookRange
+  quoteRebook, rebookHolds, acceptOffer, applyRebook, refundInFull, declineOffers, confirmStay, reportDifference, decorateGuestBookings, decorateSharedBookings, adminView, balances, unblockListing, hostView, runJob, rebookRange
 };

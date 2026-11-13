@@ -32,7 +32,21 @@
     font-weight:400;
     -webkit-font-smoothing:antialiased;
     overflow-x:hidden;
+    /* The footer sits at the foot of the window even when the page is
+       short — My Bookings with one stay on it, say — instead of stopping
+       halfway down with bare page colour under it (owner, 13 Nov 2026).
+       The header is position:fixed, so it is out of this flow and is not
+       a flex item; footer{margin-top:auto} just below does the pushing.
+       dvh keeps it honest on phones, where the browser's own bars move.
+       The review reminder bar pushes body down with margin-top:--rr-h
+       further down this file, so that comes off the height or the page
+       grows a scrollbar it does not need. */
+    min-height:calc(100vh - var(--rr-h, 0px));
+    min-height:calc(100dvh - var(--rr-h, 0px));
+    display:flex;
+    flex-direction:column;
   }
+  body > footer{ margin-top:auto; }
   @media (prefers-reduced-motion: reduce){
     *{animation-duration:0.01ms !important; animation-iteration-count:1 !important; transition-duration:0.01ms !important; scroll-behavior:auto !important;}
   }
@@ -3881,6 +3895,14 @@ button.ap-day.is-in{ background:#d9c7a6 !important; color:#1c1b19; }
 .mb-tab.is-on .mb-tab-n{ background:#f4eadc; opacity:1; }
 .mb-tabs + [data-mb-panel] .mb-group:first-child{ margin-top:0; }
 @media (max-width: 520px){ .mb-tab{ flex:1 1 0; justify-content:center; padding:10px 8px 11px; font-size:14px; } }
+
+/* The check-in card's answers: "Yes, it's as listed" beside "It's here,
+   but something's different" (owner, 13 Nov 2026). They wrap on a phone
+   rather than squeezing, because the second one is a sentence. */
+.cp-answers{ display:flex; gap:12px; align-items:center; flex-wrap:wrap; }
+.cp-answers .filter-clear{ text-align:left; }
+.cp-diff textarea{ font-family:'Jost', sans-serif; border:1px solid var(--line-dark); border-radius:6px; background:#fff; color:var(--ink); }
+.cp-diff textarea:focus{ outline:2px solid var(--gold-text); outline-offset:1px; }
 .mb-group:first-child{ margin-top:0; }
 /* The review reminder: one compact row on a phone, and not on a listing page while booking. */
 @media (max-width: 600px){

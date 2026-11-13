@@ -3609,8 +3609,30 @@
       const res = await fetch(API_BASE + '/api/get-pending-listings?stayDisputes=1', { headers: authHeaders() });
       const d = await res.json();
       if(!res.ok){ box.innerHTML = '<p>' + escAdmin(d.error || 'Could not load.') + '</p>'; return; }
-      if(!d.disputes.length){ box.innerHTML = '<p style="opacity:0.7;">No open disputes.</p>'; return; }
-      box.innerHTML = d.disputes.map(x => `
+      // Listing corrections (owner, 13 Nov 2026): the place is real and the
+      // guest stayed, but the listing is out on some point. No money, no
+      // payout hold, nothing held against the host — they are only advised
+      // to put it right. Shown above the disputes because they are quick.
+      const corr = (d.corrections || []).length ? `
+        <h3 style="margin:0 0 10px;">Listings to correct <span style="font-weight:400; opacity:0.6; font-size:14px;">— nothing is held against the host; no money moves</span></h3>
+        ${d.corrections.map(c => `
+          <div style="border:1px solid #e6ded3; border-radius:10px; padding:14px 16px; margin-bottom:12px; background:#fcfaf7;">
+            <strong>#${Number(c.id)} · ${escAdmin(c.listing || '')}</strong>${c.city ? ' · ' + escAdmin(c.city) : ''}${c.code ? ' · ' + escAdmin(c.code) : ''}
+            ${c.source === 'stepped_down' ? ' <span style="font-size:12px; background:#f4eadc; border-radius:4px; padding:2px 6px;">stepped down from a report on arrival</span>' : ''}
+            <p style="margin:8px 0; font-size:14px;"><strong>${escAdmin(c.guest || 'Guest')}:</strong> ${escAdmin(c.what)}</p>
+            <small>${fileLinks(c.photos)}</small>
+            <p style="font-size:13px; opacity:0.7; margin:6px 0 0;">Host: ${escAdmin(c.host || '')} · ${escAdmin(c.hostEmail || '')}</p>
+            <input id="corrNote-${Number(c.id)}" placeholder="What the host should put right (the guest and the host both see this)" style="width:100%; margin-top:10px; padding:8px; border:1px solid #ddd; border-radius:6px;">
+            <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+              <button type="button" class="approve-btn" onclick="decideCorrection(${Number(c.id)}, 'advised')">Ask the host to put it right</button>
+              <button type="button" class="approve-btn" onclick="decideCorrection(${Number(c.id)}, 'dropped')">Drop it — the listing is right</button>
+              <button type="button" class="reject-btn" onclick="decideCorrection(${Number(c.id)}, 'escalated')">This is serious — I am opening a report</button>
+            </div>
+            <p id="corrErr-${Number(c.id)}" style="color:#a3402f; font-size:13px;"></p>
+          </div>`).join('')}
+        <h3 style="margin:18px 0 10px;">Disputes</h3>` : '';
+      if(!d.disputes.length){ box.innerHTML = corr + '<p style="opacity:0.7;">No open disputes.</p>'; return; }
+      box.innerHTML = corr + d.disputes.map(x => `
         <div style="border:1px solid #e6ded3; border-radius:10px; padding:14px 16px; margin-bottom:12px;">
           <strong>#${Number(x.id)} · ${escAdmin(x.suite_name)}</strong> · ${escAdmin(String(x.arrival).slice(0,10))} → ${escAdmin(String(x.departure).slice(0,10))} · raised ${escAdmin(String(x.raised_date).slice(0,10))}
           <div style="display:grid; grid-template-columns:1fr 1fr; gap:14px; margin-top:10px; font-size:14px;">
@@ -3635,6 +3657,21 @@
     const d = await res.json().catch(() => ({}));
     if(!res.ok){ const e = document.getElementById('dispErr-' + id); if(e) e.textContent = d.error || 'Could not decide.'; return; }
     if(refund) alert(`Refunded ${d.refundNights} night(s): ₹${Number(d.total).toLocaleString('en-IN')}. Host is paid ₹${Number(d.hostPayout).toLocaleString('en-IN')}.`);
+    loadStayDisputes();
+  }
+
+  // A correction never costs the host anything, so there is no money
+  // warning here — only a check that Aerva meant to press it.
+  async function decideCorrection(id, action){
+    const note = (document.getElementById('corrNote-' + id) || {}).value || '';
+    const ask = { advised: 'Ask the host to put the listing right? Nothing is held against them and no money moves.',
+                  dropped: 'Drop this — the listing is right as it stands?',
+                  escalated: 'Mark this as escalated? Open the dispute or the check-in report yourself afterwards.' }[action];
+    if(!confirm(ask)) return;
+    if(action === 'advised' && !note.trim() && !confirm('No note. The host is told what the guest said, but not what you want changed. Carry on?')) return;
+    const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ decideCorrection: { id, action, note } }) });
+    const d = await res.json().catch(() => ({}));
+    if(!res.ok){ const e = document.getElementById('corrErr-' + id); if(e) e.textContent = d.error || 'Could not do this.'; return; }
     loadStayDisputes();
   }
 
@@ -4829,7 +4866,9 @@ async function loadCheckinPromise(){
       if(isAdmin && x.status === 'open') act = `<input id="cpNote-${id}" placeholder="Note (required to clear; the guest is told)" style="width:100%; box-sizing:border-box; margin-top:10px; padding:8px; border:1px solid #ddd; border-radius:6px;">
           <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
             <button type="button" class="lk-btn is-danger" onclick="cpDecide(${id}, true)">Confirm — the host failed${x.reason === 'fake' ? ' (block this listing)' : ''}</button>
-            <button type="button" class="lk-btn is-ghost" onclick="cpDecide(${id}, false)">Clear — not upheld${x.reason === 'fake' ? ' (listing back live)' : ''}</button></div>`;
+            <button type="button" class="lk-btn is-ghost" onclick="cpDecide(${id}, false)">Clear — not upheld${x.reason === 'fake' ? ' (listing back live)' : ''}</button>
+            <button type="button" class="lk-btn" onclick="cpDecide(${id}, false, 'corrected')">Real, but the listing is wrong</button></div>
+          <p style="font-size:12.5px; opacity:0.7; margin:6px 0 0;">The third one is for a guest who reached for this over something small: the booking stands and there is no refund, the host keeps the payout with nothing held against them, and they are asked to put the listing right.</p>`;
       if(isAdmin && x.status === 'confirmed') act = `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
             <button type="button" class="lk-btn" onclick="cpFind(${id})">${offers.length ? 'Find places again' : 'Find places'}</button>
             <button type="button" class="lk-btn is-danger" onclick="cpRefund(${id})">Refund in full</button></div>
@@ -4857,12 +4896,16 @@ async function loadCheckinPromise(){
     body.innerHTML = html;
   }catch(err){ body.innerHTML = '<p class="lk-empty">' + lkEsc(err.message || 'Could not load.') + '</p>'; }
 }
-async function cpDecide(id, upheld){
+async function cpDecide(id, upheld, outcome){
   const note = (document.getElementById('cpNote-' + id) || {}).value || '';
   const err = document.getElementById('cpErr-' + id);
-  if(!upheld && note.trim().length < 5){ if(err) err.textContent = 'Write why it is not upheld — the guest is told.'; return; }
-  if(!confirm(upheld ? 'Confirm the report? The host is not paid for this booking; a fake listing stays blocked. Then move or refund the guest.' : 'Clear the report? The booking stands and any hidden listing goes back live.')) return;
-  try{ await lkPost({ checkinDecide: { reportId: id, upheld, note } }); loadCheckinPromise(); loadAdminSummary(true); }
+  if(!upheld && note.trim().length < 5){ if(err) err.textContent = outcome === 'corrected' ? 'Write what the listing has wrong — the guest and the host are both told.' : 'Write why it is not upheld — the guest is told.'; return; }
+  const ask = outcome === 'corrected'
+    ? 'The place is real and the guest can stay, but the listing is wrong on this point? The booking stands with no refund, the host keeps the payout and has nothing held against them, and they are asked to put the listing right.'
+    : upheld ? 'Confirm the report? The host is not paid for this booking; a fake listing stays blocked. Then move or refund the guest.'
+             : 'Clear the report? The booking stands and any hidden listing goes back live.';
+  if(!confirm(ask)) return;
+  try{ await lkPost({ checkinDecide: { reportId: id, upheld, outcome, note } }); loadCheckinPromise(); loadAdminSummary(true); }
   catch(e){ if(err) err.textContent = e.message; }
 }
 async function cpFind(id){
