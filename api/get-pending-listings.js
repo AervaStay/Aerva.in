@@ -146,6 +146,11 @@ function razorpayErrorMessage(err) {
 }
 const ADMIN_SESSION_LIFETIME_MS = 30 * 24 * 60 * 60 * 1000; // 30 days — same as guest sessions
 const ADMIN_RESET_LINK_LIFETIME_MS = 60 * 60 * 1000; // 1 hour — same reasoning as guest-auth.js's password reset link
+// Letting someone back onto the team: their old password is made unusable,
+// so this is the only way back in, and it is deliberately short (owner,
+// 14 Nov 2026). Taking them off again raises session_version, which kills
+// the link whether or not the two hours have run out.
+const ADMIN_BACK_LINK_LIFETIME_MS = 2 * 60 * 60 * 1000;
 const BCRYPT_ROUNDS = 12; // matches guest-auth.js exactly
 const SITE_BASE = 'https://aerva.in';
 // Keep this in sync with whatever your actual admin page filename is —
@@ -161,7 +166,11 @@ async function sendAdminPasswordResetEmail(admin, resetTok, invite = null) {
   const link = `${SITE_BASE}/${ADMIN_PAGE_PATH}?resetToken=${resetTok}`;
   const html = `
     <div style="font-family:sans-serif; max-width:480px;">
-      ${invite ? `<h2 style="font-family:Georgia,serif;">You have been added to Aerva Admin</h2>
+      ${invite && invite.back ? `<h2 style="font-family:Georgia,serif;">You are back on the Aerva team</h2>
+      <p>${invite.by ? invite.by + ' has put you' : 'You have been put'} back on the Aerva team as <strong>${invite.role}</strong>.</p>
+      <p>Your old password no longer works. Choose a new one with the link below — <strong>it expires in ${invite.hours || 2} hours</strong>, and it is the only way back in.</p>
+      <p><a href="${link}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Choose my password</a></p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If the two hours run out, ask a super admin to put you back on the team again — “Forgot password” will not work until you have set a password with a link like this one.</p>` : invite ? `<h2 style="font-family:Georgia,serif;">You have been added to Aerva Admin</h2>
       <p>${invite.by ? invite.by + ' added you' : 'You have been added'} to the Aerva team as <strong>${invite.role}</strong>. Click below to choose your password and sign in. This link expires in 3 days.</p>
       <p><a href="${link}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Choose my password</a></p>
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">If the link has expired, use “Forgot password” on the admin login page.</p>` : `<h2 style="font-family:Georgia,serif;">Reset your admin password</h2>
@@ -179,7 +188,7 @@ async function sendAdminPasswordResetEmail(admin, resetTok, invite = null) {
     body: JSON.stringify({
       from: 'Aerva <hello@aerva.in>',
       to: admin.email,
-      subject: invite ? 'You have been added to Aerva Admin' : 'Reset your Aerva admin password',
+      subject: invite && invite.back ? 'You are back on the Aerva team — set your password' : invite ? 'You have been added to Aerva Admin' : 'Reset your Aerva admin password',
       html
     })
   });
@@ -482,6 +491,15 @@ module.exports = async (req, res) => {
       if (!payload || payload.action !== 'admin-password-reset') {
         return res.status(400).json({ error: 'This reset link is invalid or has expired. Please request a new one.' });
       }
+      // Off the team: no password is set and no session is handed out,
+      // whatever link they are holding (owner, 14 Nov 2026). Sign-in and
+      // "Forgot password" already refuse them; this was the way round.
+      // Raising session_version on removal kills the link as well, so this
+      // is the second lock on the same door rather than the only one.
+      const whoRows = await sql`SELECT to_jsonb(a)->>'removed_at' AS removed_at FROM admins a WHERE a.id = ${payload.listingId}`;
+      if (whoRows[0] && whoRows[0].removed_at) {
+        return res.status(403).json({ error: 'This account is no longer on the Aerva team.' });
+      }
       // A link works once: choosing a password raises the account's session
       // version (below), and a link carries the version it was made under.
       // Without this an invite or reset email stayed usable for its whole
@@ -551,7 +569,14 @@ module.exports = async (req, res) => {
   // GET ?adminMe=1 — who is signed in, and their role (the page shows only what it allows)
   if (req.method === 'GET' && req.query.adminMe === '1') {
     const me = await actions.me(sql, sessionPayload, ADMIN_ROLE);
-    return res.status(200).json({ ...me, superAdmin: safety.isSuperAdmin(ADMIN_AUDIT) });
+    // Two things have been called "super admin": the Data safety list in
+    // the environment, and the admins.super_admin column the owner manages
+    // in Admin -> Team. Sign-off goes by the column (or the list), the same
+    // check actions.isSuper makes on the server, so the buttons show for
+    // exactly the people the server will let act (owner, 14 Nov 2026).
+    let canSignOff = false;
+    try { canSignOff = await actions.isSuper(sql, ADMIN_ME.id); } catch (err) { /* older database */ }
+    return res.status(200).json({ ...me, superAdmin: safety.isSuperAdmin(ADMIN_AUDIT), canSignOff });
   }
 
   // ---- Data safety (_data-safety.js, _test-data.js): SUPER ADMIN ONLY ----
@@ -715,6 +740,15 @@ module.exports = async (req, res) => {
   // GET ?supportActions=1[&status=pending|done|all]
   // POST { proposeAction: { kind, params, reason, ticketId? } } · { withdrawAction: { id } }
   // POST { reviewAction: { id, approve, note } } — reviewer or admin, never the proposer
+  //      { reviewAction: { id, action: 'return', note } } — sent back to the
+  //        representative to do again; nothing is decided (owner, 14 Nov 2026)
+  //      { reviewAction: { id, approve: true, changes: { kind?, params?, note } } } —
+  //        the reviewer changes it and approves in one go; what they changed
+  //        is kept beside what was proposed and shows on the case for ever
+  // POST { reproposeAction: { id, kind?, params?, reason? } } — the representative
+  //        sends a returned proposal again
+  // POST { signoffAction: { id, decision: 'good'|'rejected'|'reverted', note } } —
+  //        a super admin signs off on what the two of them did. Moves no money.
   // POST { blockGuestListing: { listingId, guestId, reason } } · { unblockGuestListing: { listingId, guestId } } — admin
   // POST { resolveReport: { id, status: 'actioned'|'dismissed', note } } — admin
   if (req.method === 'GET' && req.query.supportActions === '1') {
@@ -737,8 +771,34 @@ module.exports = async (req, res) => {
       return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
     }
   }
+  // POST { assignRequest: { id, adminId } }              who is working it
+  if (req.method === 'POST' && req.body && req.body.assignRequest) {
+    try {
+      const x = req.body.assignRequest;
+      const to = x.adminId === null || x.adminId === undefined ? null : (String(x.adminId) === 'me' ? ADMIN_ME.id : Number(x.adminId));
+      const email = to === ADMIN_ME.id ? ADMIN_ME.email : null;
+      return res.status(200).json({ success: true, ...(await support.assignRequest(sql, { id: x.id, adminId: to, adminEmail: email, byEmail: ADMIN_ACTOR, audit: ADMIN_AUDIT })) });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('assignRequest failed:', err);
+      return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
+    }
+  }
+  // POST { hostStep: { id, needed, why?, ask? } }        the first decision on a case
+  //      { hostReply: { id, reply } | { id, noAnswer: true } }
+  if (req.method === 'POST' && req.body && (req.body.hostStep || req.body.hostReply || req.body.messageHost)) {
+    try {
+      const b = req.body;
+      if (b.messageHost) return res.status(200).json({ success: true, ...(await support.messageHost(sql, { id: b.messageHost.id, text: b.messageHost.text, adminEmail: ADMIN_ACTOR, audit: ADMIN_AUDIT })) });
+      if (b.hostStep) return res.status(200).json({ success: true, host: await support.setHostStep(sql, { id: b.hostStep.id, needed: b.hostStep.needed === true, why: b.hostStep.why, ask: b.hostStep.ask, adminEmail: ADMIN_ACTOR, audit: ADMIN_AUDIT }) });
+      return res.status(200).json({ success: true, host: await support.recordHostReply(sql, { id: b.hostReply.id, reply: b.hostReply.reply, noAnswer: b.hostReply.noAnswer === true, adminEmail: ADMIN_ACTOR, audit: ADMIN_AUDIT }) });
+    } catch (err) {
+      if (!err.isUserFacing) console.error('hostStep failed:', err);
+      return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
+    }
+  }
   if (req.method === 'POST' && req.body && (req.body.setAdminRole || req.body.removeTeamMember || req.body.restoreTeamMember || req.body.setSuperAdmin
       || req.body.proposeAction || req.body.withdrawAction || req.body.reviewAction
+      || req.body.reproposeAction || req.body.signoffAction
       || req.body.blockGuestListing || req.body.unblockGuestListing || req.body.resolveReport)) {
     try {
       const b = req.body;
@@ -746,7 +806,21 @@ module.exports = async (req, res) => {
       // Only a super admin takes someone off the team, lets them back in, or
       // names another super admin (owner, 12 Nov 2026).
       if (b.removeTeamMember) return res.status(200).json(await actions.removeMember(sql, { adminId: b.removeTeamMember.adminId, byId: ADMIN_ME.id, audit: ADMIN_AUDIT }));
-      if (b.restoreTeamMember) return res.status(200).json(await actions.restoreMember(sql, { adminId: b.restoreTeamMember.adminId, byId: ADMIN_ME.id, audit: ADMIN_AUDIT }));
+      if (b.restoreTeamMember) {
+        const out = await actions.restoreMember(sql, { adminId: b.restoreTeamMember.adminId, byId: ADMIN_ME.id, audit: ADMIN_AUDIT });
+        // Their old password no longer works, so they need a fresh link to
+        // set one — two hours, and dead the moment they are taken off the
+        // team again (owner, 14 Nov 2026).
+        if (out && out.restored) {
+          try {
+            const tok = createToken(out.restored.id, 'admin-password-reset', ADMIN_BACK_LINK_LIFETIME_MS, { sv: out.restored.sv });
+            await sendAdminPasswordResetEmail({ email: out.restored.email, name: out.restored.name }, tok,
+              { role: out.restored.role, by: ADMIN_ACTOR, back: true, hours: 2 });
+            out.emailed = out.restored.email;
+          } catch (err) { console.error('restore: set-password email not sent:', err.message); out.emailFailed = true; }
+        }
+        return res.status(200).json(out);
+      }
       if (b.setSuperAdmin) return res.status(200).json(await actions.setSuper(sql, { adminId: b.setSuperAdmin.adminId, isSuper: b.setSuperAdmin.isSuper === true, byId: ADMIN_ME.id, audit: ADMIN_AUDIT }));
       if (b.proposeAction) {
         const x = b.proposeAction;
@@ -756,7 +830,17 @@ module.exports = async (req, res) => {
       if (b.withdrawAction) return res.status(200).json(await actions.withdraw(sql, { id: b.withdrawAction.id, admin: ADMIN_ME, audit: ADMIN_AUDIT }));
       if (b.reviewAction) {
         const x = b.reviewAction;
-        return res.status(200).json({ success: true, ...(await actions.review(sql, razorpay, { id: x.id, approve: x.approve === true, note: x.note, admin: Object.assign({ role: ADMIN_ROLE }, ADMIN_ME), audit: ADMIN_AUDIT })) });
+        return res.status(200).json({ success: true, ...(await actions.review(sql, razorpay, { id: x.id, approve: x.approve === true, action: x.action, changes: x.changes, note: x.note, admin: Object.assign({ role: ADMIN_ROLE }, ADMIN_ME), audit: ADMIN_AUDIT })) });
+      }
+      if (b.reproposeAction) {
+        const x = b.reproposeAction;
+        const row = await actions.repropose(sql, { id: x.id, kind: x.kind, params: x.params || {}, reason: x.reason, admin: Object.assign({ role: ADMIN_ROLE }, ADMIN_ME), audit: ADMIN_AUDIT });
+        return res.status(200).json({ success: true, action: row });
+      }
+      if (b.signoffAction) {
+        const x = b.signoffAction;
+        return res.status(200).json({ success: true, ...(await actions.signoff(sql, razorpay, { id: x.id, decision: x.decision, note: x.note,
+          admin: Object.assign({ role: ADMIN_ROLE, superAdmin: await actions.isSuper(sql, ADMIN_ME.id) }, ADMIN_ME), audit: ADMIN_AUDIT })) });
       }
       if (b.blockGuestListing) {
         const x = b.blockGuestListing;
@@ -1107,7 +1191,8 @@ module.exports = async (req, res) => {
                              AND last_user_message_at IS NOT NULL AND (last_support_message_at IS NULL OR last_user_message_at > last_support_message_at)`),
       count('batch', sql`SELECT count(*)::int AS n FROM job_runs WHERE last_ok IS FALSE`),
       migrations.pendingCount(sql).then(n => { if (n != null) counts.migrations = n; }),
-      count('approvals', sql`SELECT count(*)::int AS n FROM support_actions WHERE status = 'pending'`)
+      // Money sitting at the super admin's gate is waiting on somebody too.
+      count('approvals', sql`SELECT count(*)::int AS n FROM support_actions WHERE status IN ('pending', 'awaiting_admin')`)
         .then(() => priceReview.pendingCount(sql)).then(n => { if (n) counts.approvals = (counts.approvals || 0) + n; })
         // Natural-disaster requests (at once), old emergency requests with Aerva (escalated, or
         // unanswered for 24 hours) and old reviews: the same requests Approvals lists.
@@ -1166,10 +1251,37 @@ module.exports = async (req, res) => {
   // POST { supportSuggest: { ticketId } } — three replies the agent could
   // send next (_support-chat.js suggestReplies). Never sent by itself.
   if (req.method === 'POST' && req.body && req.body.supportSuggest) {
-    try { return res.status(200).json(await require('./_support-chat').suggestReplies(sql, Number(req.body.supportSuggest.ticketId) || 0)); }
+    try { return res.status(200).json(await require('./_support-chat').suggestReplies(sql, Number(req.body.supportSuggest.ticketId) || 0, ADMIN_ACTOR)); }
     catch (err) {
       if (!err.isUserFacing) console.error('supportSuggest failed:', err);
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Suggestions are not available right now.' });
+    }
+  }
+  // POST { supportHostDraft: { ticketId } } — the opening message to the
+  // host, written by the model and returned for a representative to read,
+  // edit and send. It is NOT sent here; nothing reaches a host unsent.
+  if (req.method === 'POST' && req.body && req.body.supportHostDraft) {
+    try { return res.status(200).json(await require('./_support-chat').draftHostSummary(sql, Number(req.body.supportHostDraft.ticketId) || 0, ADMIN_ACTOR)); }
+    catch (err) {
+      if (!err.isUserFacing) console.error('supportHostDraft failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'The draft is not available right now.' });
+    }
+  }
+  // POST { supportHostSuggest: { ticketId } } — three replies a
+  // representative could send the host next, as cards. Never sent by itself.
+  if (req.method === 'POST' && req.body && req.body.supportHostSuggest) {
+    try { return res.status(200).json(await require('./_support-chat').suggestHostReplies(sql, Number(req.body.supportHostSuggest.ticketId) || 0, ADMIN_ACTOR)); }
+    catch (err) {
+      if (!err.isUserFacing) console.error('supportHostSuggest failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Suggestions are not available right now.' });
+    }
+  }
+  // GET ?aiBudget=1 — what the AI has cost per day, and today's ceiling.
+  if (req.method === 'GET' && req.query && req.query.aiBudget) {
+    try { return res.status(200).json(await require('./_ai-budget').report(sql, Number(req.query.days) || 14)); }
+    catch (err) {
+      console.error('aiBudget failed:', err);
+      return res.status(500).json({ error: 'Could not load AI usage.' });
     }
   }
   // POST { supportCase: { ticketId, summary?, outcome?, requesterConduct?, otherConduct?, conductNote? } }

@@ -211,6 +211,11 @@ async function partialRefund(sql, razorpay, { orderId, amount, reason, hostPays,
   if (!o) throw userError('Booking not found.', 404);
   if (!o.razorpay_payment_id) throw userError('No payment is recorded for this booking, so it cannot be refunded here.');
   if (!['paid', 'cancelled'].includes(o.status)) throw userError(`This booking is "${o.status}" — nothing more can be refunded.`);
+  // No second refund on a booking that has already had one (owner,
+  // 14 Nov 2026). This is the direct admin route, so it is stopped here too
+  // — the rule is about the booking, not about who is asking.
+  const stop = await require('./_refunds').refuseSecondRefund(sql, o.id, { by: adminLabel || null });
+  if (stop) throw stop;
   const money = await moneyState(sql, o.id);
   if (amt > money.refundable) throw userError(`At most ${inr(money.refundable)} can be refunded (charged ${inr(money.charged)}, already refunded ${inr(money.refunded)}).`);
 

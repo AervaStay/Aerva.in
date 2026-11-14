@@ -103,6 +103,18 @@
   .mn-amt{font-variant-numeric:tabular-nums; font-weight:600; white-space:nowrap;}
   .mn-in .mn-amt{color:#2f6b45;}
   .mn-out .mn-amt{color:#a3402f;}
+  /* Where the money has got to, at a glance (owner, 14 Nov 2026). The tint
+     is faint on purpose: the table is read for its numbers, and a strong
+     colour on whole rows makes those harder to compare, not easier. */
+  .mn-table tr.mn-waiting{background:#fff6e3;}
+  .mn-table tr.mn-waiting td:first-child{box-shadow:inset 3px 0 0 #d8a93a;}
+  .mn-table tr.mn-received{background:#f1f7f1;}
+  .mn-table tr.mn-received td:first-child{box-shadow:inset 3px 0 0 #58926a;}
+  .mn-table tr.mn-moving{background:#f1f4fb;}
+  .mn-table tr.mn-moving td:first-child{box-shadow:inset 3px 0 0 #6f86c4;}
+  .mn-table tr.mn-failed{background:#fdf0ee;}
+  .mn-table tr.mn-failed td:first-child{box-shadow:inset 3px 0 0 #a3402f;}
+  .mn-bar-2{padding-top:0; margin-top:-6px;}
   .mn-note{font-size:11.5px; opacity:0.65; margin-top:2px;}
   .mn-id code{font-size:11.5px; background:#f6f1e8; border-radius:6px; padding:2px 6px; white-space:nowrap; cursor:copy;}
   .mn-idline{display:flex; gap:6px; align-items:baseline; margin-bottom:3px;}
@@ -174,6 +186,40 @@
   .sup-msg.user{background:#f7f3ee; border-color:transparent;}
   .sup-msg.support{border-left:3px solid #a9884f;}
   .sup-msg.internal{background:#fff8e1; border:1px dashed #d8b65a;}
+  /* Two conversations, side by side and never to be confused (owner,
+     14 Nov 2026). The host column is tinted and its send button is the
+     danger colour, because writing to the wrong party is the breach that
+     actually happens. */
+  .sup-two{display:grid; grid-template-columns:1fr 1fr; gap:14px; align-items:start;}
+  .sup-chan{border:1px solid #e6ded3; border-radius:10px; overflow:hidden;}
+  .sup-chan-head{padding:8px 12px; font-weight:600; background:#f4eadc; border-bottom:1px solid #e6ded3;}
+  .sup-chan-host .sup-chan-head{background:#efe6f3; border-bottom-color:#ddd0e4;}
+  .sup-chan-host{border-color:#ddd0e4; background:#fcfafd;}
+  .sup-chan-body{padding:10px 12px; max-height:460px; overflow:auto;}
+  .sup-chan-compose{padding:10px 12px; border-top:1px solid #e6ded3;}
+  .sup-chan-compose textarea{width:100%; min-height:70px; padding:8px; border:1px solid #ddd; border-radius:6px; font:inherit;}
+  @media (max-width: 900px){ .sup-two{grid-template-columns:1fr;} }
+  /* The horizon: where a request has got to (owner, 14 Nov 2026). */
+  .sup-horizon{border:1px solid #e6ded3; border-radius:10px; padding:12px 14px; margin:0 0 12px; background:#fcfaf7;}
+  .sup-horizon-head{margin-bottom:8px;}
+  .sup-horizon-line{list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:6px 18px;}
+  .sup-horizon-line .hz{display:flex; gap:6px; align-items:baseline; font-size:13px; flex:0 1 auto;}
+  .hz-mark{font-weight:700;}
+  .hz-note{opacity:0.65; font-size:12px;}
+  .hz-done .hz-mark{color:#2f6b45;}
+  .hz-now{font-weight:600;}
+  .hz-now .hz-mark{color:#a3402f;}
+  .hz-later{opacity:0.55;}
+  .hz-skipped{opacity:0.45;}
+  .hz-skipped .hz-label{text-decoration:line-through;}
+  @media (max-width: 720px){ .sup-horizon-line{flex-direction:column; gap:4px;} }
+  /* One block per proposal, carrying its own state (owner, 14 Nov 2026). */
+  .sup-msg.sup-action{background:#fdfaf4; border:1px solid #d8b65a;}
+  .sup-msg.sup-action .lk-chip{margin-left:6px; vertical-align:2px;}
+  .sup-msg.sup-action em{font-style:normal; font-weight:600; opacity:0.75;}
+  .sup-signoff{margin-top:10px; padding-top:10px; border-top:1px solid #eadfcf;}
+  .sup-signoff button{margin-right:6px;}
+  .lk-chip.is-ok{background:#e8f3ea; color:#2f6b3f;}
   .sup-msg.system{border:none; padding:2px 0; font-size:12.5px; opacity:0.65;}
   .sup-msg-body{white-space:pre-wrap; overflow-wrap:anywhere; margin-top:4px;}
   .sup-facts{display:grid; grid-template-columns:repeat(auto-fit, minmax(220px, 1fr)); gap:10px; margin:12px 0; font-size:13.5px;}
@@ -872,6 +918,7 @@
       <button type="button" class="approve-btn" onclick="loadTransactions()">Show</button>
       <button type="button" class="approve-btn mn-quiet" onclick="mnDownload()">Download CSV</button>
     </div>
+    <div class="mn-bar mn-bar-2"><span class="mn-chips" id="mnStateChips"></span></div>
     <div class="mn-figs" id="mnFigs"></div>
     <div id="mnList"><p style="opacity:0.6;">Loading…</p></div>
     <div id="mnMore" style="margin-top:14px;"></div>
@@ -2013,8 +2060,13 @@
     if(!box) return;
     box.innerHTML = [['', 'In and out'], ['in', 'Money in'], ['out', 'Money out']]
       .map(([k, label]) => `<button type="button" class="mn-chip${mnState.way === k ? ' on' : ''}" onclick="mnSetWay('${k}')">${label}</button>`).join('');
+    // Where the money has got to, not which way it went (owner, 14 Nov 2026).
+    const st = document.getElementById('mnStateChips');
+    if(st) st.innerHTML = [['', 'Any state'], ['waiting', 'Not sent yet'], ['moving', 'On its way'], ['failed', 'Failed'], ['done', 'Settled']]
+      .map(([k, label]) => `<button type="button" class="mn-chip${(mnState.state || '') === k ? ' on' : ''}" onclick="mnSetState('${k}')">${label}</button>`).join('');
   }
   window.mnSetWay = function(k){ mnState.way = k; mnDrawWays(); loadTransactions(); };
+  window.mnSetState = function(k){ mnState.state = k; mnDrawWays(); loadTransactions(); };
 
   function mnQuery(before){
     const p = new URLSearchParams({ transactions: '1', limit: '200' });
@@ -2023,6 +2075,7 @@
     if(f('mnTo')) p.set('to', f('mnTo'));
     if(f('mnQ').trim()) p.set('q', f('mnQ').trim());
     if(mnState.way) p.set('direction', mnState.way);
+    if(mnState.state) p.set('state', mnState.state);
     if(before) p.set('before', before);
     return p.toString();
   }
@@ -2057,6 +2110,17 @@
       + (skipped.length ? `<p class="mn-skip">Not included: ${escAdmin(skipped.join(', '))} — that part of the database could not be read.</p>` : '');
   }
 
+  // Colour by where the money has got to, so a page of rows can be read at a
+  // glance (owner, 14 Nov 2026): still to go out, on its way, refused, or
+  // safely in. Taken from the status words the ledger already gives.
+  function mnRowState(r){
+    const st = String(r.status || '').toLowerCase();
+    if(st.startsWith('not sent')) return 'mn-waiting';
+    if(st === 'failed') return 'mn-failed';
+    if(st === 'starting' || st.startsWith('with razorpay')) return 'mn-moving';
+    if(st.startsWith('received')) return 'mn-received';
+    return '';
+  }
   function mnDraw(){
     const box = document.getElementById('mnList');
     const more = document.getElementById('mnMore');
@@ -2068,7 +2132,7 @@
     box.innerHTML = `<div class="mn-scroll"><table class="tds-table mn-table">
       <thead><tr><th>Date</th><th>Payment or payout</th><th>Who</th><th>Booking</th><th class="mn-r">Money in</th><th class="mn-r">Money out</th><th>Razorpay id</th><th>Status</th></tr></thead>
       <tbody>${mnState.rows.map(r => `
-        <tr class="${r.direction === 'in' ? 'mn-in' : 'mn-out'}">
+        <tr class="${r.direction === 'in' ? 'mn-in' : 'mn-out'} ${mnRowState(r)}">
           <td class="mn-when">${escAdmin(mnDate(r.at))}<div class="mn-note">${escAdmin(mnTime(r.at))}</div></td>
           <td><div>${escAdmin(r.what || '')}</div>${r.note ? `<div class="mn-note">${escAdmin(r.note)}</div>` : ''}${r.listing ? `<div class="mn-note">${escAdmin(r.listing)}</div>` : ''}</td>
           <td><div>${escAdmin(r.who || '—')}</div><div class="mn-note">${escAdmin(r.whoIs || '')}${r.whoEmail ? ' · ' + escAdmin(r.whoEmail) : ''}</div></td>
@@ -3271,6 +3335,7 @@
     box.style.display = 'block';
     box.innerHTML = '<p style="opacity:0.6;">Loading…</p>';
     supOpenId = id;
+    window.supOpenId = id;   // read by supSignoff, which lives in another script block
     try{
       const res = await fetch(API_BASE + '/api/get-pending-listings?supportTicket=' + Number(id), { headers: authHeaders() });
       const d = await res.json();
@@ -3317,13 +3382,173 @@
   }
   // The timeline, oldest first. Redrawn on its own by the live updates, so
   // whatever is being typed below it is never lost.
+  // Where this request has got to, in one line across the top (owner,
+  // 14 Nov 2026). Every stage is read from something that already
+  // happened, so it cannot drift from the case below it. A stage that this
+  // request never needed is struck through rather than hidden: "no money
+  // on this one" is worth knowing at a glance.
+  function supHorizonHtml(d){
+    const H = d.horizon;
+    if(!H || !H.stages) return '';
+    const id = Number(d.ticket.id);
+    const mark = { done: '✓', now: '●', later: '○', skipped: '–' };
+    return `<div class="sup-horizon">
+      <div class="sup-horizon-head"><strong>Where this is:</strong> ${escAdmin(H.where)}
+        ${d.ticket.assigned_to_email ? `<span class="tds-sub">· with ${escAdmin(d.ticket.assigned_to_email)}</span>
+          <button type="button" class="filter-clear" onclick="supAssign(${id}, null)" style="font-size:12px;">unassign</button>`
+          : `<button type="button" class="approve-btn" onclick="supAssign(${id}, 'me')" style="padding:3px 10px; font-size:12px; margin-left:6px;">Assign to me</button>`}
+      </div>
+      <ol class="sup-horizon-line">${H.stages.map(st => `
+        <li class="hz hz-${escAdmin(st.state)}"><span class="hz-mark">${mark[st.state] || '○'}</span>
+          <span class="hz-label">${escAdmin(st.label)}</span>
+          ${st.note ? `<span class="hz-note">${escAdmin(st.note)}</span>` : ''}</li>`).join('')}</ol>
+      <p class="lk-msg" id="hzMsg"></p></div>`;
+  }
+  window.supAssign = async function(id, who){
+    const m = document.getElementById('hzMsg'); if(m){ m.className = 'lk-msg'; m.textContent = ''; }
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ assignRequest: { id, adminId: who } }) });
+      const dd = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(dd.error || 'Could not change who has this.');
+      openSupport(id);
+    }catch(err){ if(m){ m.className = 'lk-msg is-err'; m.textContent = err.message; } }
+  };
+  // Step 3 of the support flow (owner, 14 Nov 2026): the FIRST decision on
+  // a case is whether the host is needed. Nothing can be proposed until it
+  // is answered, so it sits at the top of the case, above the timeline.
+  function supHostStepHtml(d){
+    const h = d.host;
+    if(!h || !h.hasBooking) return '';
+    const id = Number(d.ticket.id);
+    const chip = h.needed === null ? 'sup-late' : h.needed === false ? '' : (h.reply || h.noAnswer) ? 'sup-us' : 'sup-late';
+    let body = '';
+    if(h.needed === null){
+      body = `<p style="margin:6px 0;">Nothing can be proposed on this request until this is answered.</p>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start;">
+          <input id="hsWhy" placeholder="Why the host is not needed" style="flex:1 1 260px; padding:8px; border:1px solid #ddd; border-radius:6px;">
+          <button type="button" class="approve-btn" onclick="supHostStep(${id}, false)">The host is not needed</button>
+        </div>
+        <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start; margin-top:8px;">
+          <textarea id="hsAsk" rows="3" placeholder="What do you want to ask the host?" style="flex:1 1 320px; padding:8px; border:1px solid #ddd; border-radius:6px; font:inherit;"></textarea>
+          <div style="display:flex; flex-direction:column; gap:6px;">
+            <button type="button" class="lk-btn" onclick="supDraftHost(${id})" id="hsDraftBtn">Draft it with AI</button>
+            <button type="button" class="approve-btn" onclick="supHostStep(${id}, true)">Ask the host</button>
+          </div>
+        </div>
+        <p class="tds-sub" style="margin:6px 0 0;">The draft is written for you to read and change. Nothing reaches the host until you press <em>Ask the host</em>.</p>`;
+    } else if(h.needed === false){
+      body = `<p style="margin:6px 0;">${escAdmin(h.whyNot || '')} <span class="tds-sub">— ${escAdmin(h.askedBy || '')}</span></p>`;
+    } else {
+      body = `<p style="margin:6px 0;"><em>Asked:</em> ${escAdmin(h.ask || '')} <span class="tds-sub">${escAdmin(h.askedBy || '')} · ${escAdmin(supDate(h.askedAt))}</span></p>`;
+      if(h.reply) body += `<p style="margin:6px 0; padding:8px 10px; background:#f7f3ee; border-radius:8px;"><em>The host said:</em> ${escAdmin(h.reply)} <span class="tds-sub">${escAdmin(supDate(h.repliedAt))}</span></p>`;
+      else if(h.noAnswer) body += `<p style="margin:6px 0;">The host did not answer. Recorded, and the request carries on.</p>`;
+      else body += `<div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-start; margin-top:6px;">
+          <input id="hsReply" placeholder="What the host said" style="flex:1 1 260px; padding:8px; border:1px solid #ddd; border-radius:6px;">
+          <button type="button" class="approve-btn" onclick="supHostReply(${id})">Record their answer</button>
+          ${h.overdue ? `<button type="button" class="reject-btn" onclick="supHostReply(${id}, true)">They did not answer</button>` : `<span class="tds-sub" style="align-self:center;">They have ${Number(h.waitHours)} hours to answer</span>`}
+        </div>`;
+    }
+    return `<div class="sup-msg internal" style="margin:10px 0;">
+      <strong>Do we need the host on this?</strong> <span class="sup-flag ${chip}">${escAdmin(h.state)}</span>
+      ${body}<p class="lk-msg" id="hsMsg"></p></div>`;
+  }
+  window.supHostStep = async function(id, needed){
+    const why = (document.getElementById('hsWhy') || {}).value || '';
+    const ask = (document.getElementById('hsAsk') || {}).value || '';
+    const m = document.getElementById('hsMsg'); if(m){ m.className = 'lk-msg'; m.textContent = ''; }
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ hostStep: { id, needed, why, ask } }) });
+      const dd = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(dd.error || 'Could not save this.');
+      openSupport(id);
+    }catch(err){ if(m){ m.className = 'lk-msg is-err'; m.textContent = err.message; } }
+  };
+  // The model writes the opening message to the host; a representative
+  // reads it, changes it if they like, and sends it (owner, 14 Nov 2026:
+  // "AI should just summarise the issue and send to host"). It is filled
+  // into the box, never sent from here.
+  window.supDraftHost = async function(id){
+    const box = document.getElementById('hsAsk');
+    const btn = document.getElementById('hsDraftBtn');
+    const m = document.getElementById('hsMsg'); if(m){ m.className = 'lk-msg'; m.textContent = ''; }
+    if(btn){ btn.disabled = true; btn.textContent = 'Writing…'; }
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ supportHostDraft: { ticketId: id } }) });
+      const dd = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(dd.error || 'Could not write a draft.');
+      if(box){ box.value = dd.summary || ''; box.focus(); }
+      if(m){ m.className = 'lk-msg is-ok'; m.textContent = 'Draft ready — read it, change anything, then press “Ask the host”.'; }
+    }catch(err){ if(m){ m.className = 'lk-msg is-err'; m.textContent = err.message; } }
+    finally{ if(btn){ btn.disabled = false; btn.textContent = 'Draft it with AI'; } }
+  };
+  window.supHostReply = async function(id, noAnswer){
+    const reply = (document.getElementById('hsReply') || {}).value || '';
+    const m = document.getElementById('hsMsg'); if(m){ m.className = 'lk-msg'; m.textContent = ''; }
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ hostReply: { id, reply, noAnswer: noAnswer === true } }) });
+      const dd = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(dd.error || 'Could not save this.');
+      openSupport(id);
+    }catch(err){ if(m){ m.className = 'lk-msg is-err'; m.textContent = err.message; } }
+  };
+  // The host's channel, beside the request's (owner, 14 Nov 2026). Two
+  // conversations that must never be confused, so they are two columns in
+  // two colours, each with its own compose box that says who it writes to.
+  // The guest never sees anything in the host column.
+  function supHostChannelHtml(d){
+    if(!d.ticket.order_id) return '';
+    const id = Number(d.ticket.id);
+    const rows = (d.hostThread || []);
+    const who = (m) => m.from === 'host' ? 'The host' : m.from === 'guest' ? 'The guest' : 'Aerva';
+    return `<div class="sup-chan sup-chan-host">
+      <div class="sup-chan-head">Aerva ⟷ Host <span class="tds-sub">· the guest never sees this</span></div>
+      <div class="sup-chan-body">
+        ${rows.length ? rows.map(m => `<div class="sup-msg ${m.from === 'host' ? 'user' : 'support'}">
+            <strong>${escAdmin(who(m))}</strong>${m.audience === 'host' ? ' <span class="sup-flag sup-us">host only</span>' : ''}
+            <span class="tds-sub">${escAdmin(supDate(m.at))}</span>
+            <div class="sup-msg-body">${escAdmin(m.text || '')}</div></div>`).join('')
+          : '<p class="lk-empty">Nothing said to the host yet.</p>'}
+      </div>
+      <div class="sup-chan-compose">
+        <div class="sup-suggest" id="supHostSuggest">
+          <button type="button" class="lk-btn" onclick="supSuggestHost(${id})" id="hostSuggestBtn">Suggest a reply to the host</button>
+          <p class="tds-sub" style="margin:6px 0 0;">Pick one and it drops into the box below. You can change it, or ignore them and write your own. Nothing is sent until you press send.</p>
+          <div id="supHostSuggestList"></div>
+        </div>
+        <label class="lk-wide"><strong>You are writing to the HOST</strong>
+          <textarea id="hostMsg" maxlength="4000" placeholder="Ask the host something. Do not quote the guest — ask a plain question about what happened."></textarea></label>
+        <button type="button" class="reject-btn" onclick="supSendHost(${id})">Send to the host</button>
+        <p class="lk-msg" id="hostMsgErr"></p>
+      </div></div>`;
+  }
+  window.supSendHost = async function(id){
+    const box = document.getElementById('hostMsg');
+    const m = document.getElementById('hostMsgErr'); if(m){ m.className = 'lk-msg'; m.textContent = ''; }
+    const text = (box || {}).value || '';
+    if(text.trim().length < 5){ if(m){ m.className = 'lk-msg is-err'; m.textContent = 'Write the message.'; } return; }
+    if(!confirm('Send this to the HOST? The guest will not see it.\n\n' + text.trim().slice(0, 300))) return;
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ messageHost: { id, text } }) });
+      const dd = await res.json().catch(() => ({}));
+      if(!res.ok) throw new Error(dd.error || 'Could not send it.');
+      openSupport(id);
+    }catch(err){ if(m){ m.className = 'lk-msg is-err'; m.textContent = err.message; } }
+  };
   function supTimelineHtml(d){
     const t = d.ticket;
     // One timeline for the reference, oldest first: the request, every message,
     // status change, internal note, case-record save and the person's feedback.
     const Cx = d.conduct || {};
-    const events = (d.messages || []).map(m => ({ at: m.created_at, kind: 'msg', m }))
+    // A proposal is ONE block carrying its own live state — not the three
+    // notes it used to leave scattered through the thread, where a
+    // proposal already approved still read as waiting (owner, 14 Nov 2026:
+    // "all 3 are proposals and what actually was the next action done —
+    // not clear"). Those notes are still written, for the audit record;
+    // they are simply not read out here, because the block says it better.
+    const noteIsProposal = (b) => /^(Proposed for approval \(#|Proposal #\d+ (approved|rejected)|Signed off by a super admin)/.test(String(b || ''));
+    const events = (d.messages || []).filter(m => !(m.internal && noteIsProposal(m.body))).map(m => ({ at: m.created_at, kind: 'msg', m }))
       .concat((d.caseNotes || []).map(n => ({ at: n.created_at, kind: 'case', n })))
+      .concat((d.actions || []).map(a => ({ at: a.proposedAt, kind: 'action', a })))
       .sort((a, b) => new Date(a.at) - new Date(b.at) || (a.kind === 'msg' ? -1 : 1));
     const msgs = '<h4 style="margin:16px 0 4px;">Timeline <span class="tds-sub">(' + events.length + ' entries)</span></h4>' + events.map(e => {
       if(e.kind === 'case'){
@@ -3332,6 +3557,29 @@
           ${n.summary ? `<div class="sup-msg-body"><em>Issue:</em> ${escAdmin(n.summary)}</div>` : ''}
           ${n.outcome ? `<div class="sup-msg-body"><em>Outcome:</em> ${escAdmin(n.outcome)}</div>` : ''}
           ${n.requester_conduct || n.other_party_conduct ? `<div class="sup-msg-body"><em>Behaviour:</em> ${escAdmin(t.role === 'host' ? 'host' : 'guest')} ${escAdmin(Cx[n.requester_conduct] || '—')}${n.other_party_conduct ? ' · ' + escAdmin(t.role === 'host' ? 'guest' : 'host') + ' ' + escAdmin(Cx[n.other_party_conduct] || '—') : ''}${n.conduct_note ? ' — ' + escAdmin(n.conduct_note) : ''}</div>` : ''}</div>`;
+      }
+      if(e.kind === 'action'){
+        const a = e.a;
+        const chip = { pending: 'is-due', approving: 'is-due', done: 'is-ok', failed: 'is-failed', rejected: 'is-cancelled', withdrawn: 'is-completed', returned: 'is-due' }[a.status] || '';
+        return `<div class="sup-msg internal sup-action">
+          <strong>Proposal #${Number(a.id)} · ${escAdmin(a.kindLabel)}</strong>
+          <span class="lk-chip ${chip}">${escAdmin(a.stateLabel)}</span>
+          <span class="tds-sub">${escAdmin(supDate(a.proposedAt))} · ${escAdmin(a.proposedBy || '—')}</span>
+          <div class="sup-msg-body"><em>What it does:</em> ${escAdmin(a.what)}</div>
+          <div class="sup-msg-body"><em>Reason:</em> ${escAdmin(a.reason || '—')}</div>
+          ${a.changed ? `<div class="sup-msg-body"><em>Changed by the reviewer:</em> ${escAdmin(a.changedBy || '—')} — ${escAdmin(a.changeNote || '')}${a.originally ? `<br><span class="tds-sub">The representative had asked for: ${escAdmin(a.originally.kindLabel)} — ${escAdmin(a.originally.what)}</span>` : ''}</div>` : ''}
+          ${a.decidedBy ? `<div class="sup-msg-body"><em>${a.status === 'returned' ? 'Sent back by' : 'Decided by'}:</em> ${escAdmin(a.decidedBy)} · ${escAdmin(supDate(a.decidedAt))}${a.note ? ' — “' + escAdmin(a.note) + '”' : ''}</div>` : ''}
+          ${a.error ? `<div class="sup-msg-body error">${escAdmin(a.error)}</div>` : ''}
+          ${a.signoff ? `<div class="sup-msg-body"><em>Super admin:</em> ${escAdmin(a.signoffLabel)} — ${escAdmin(a.signoffBy || '')}${a.signoffNote ? ' — “' + escAdmin(a.signoffNote) + '”' : ''}</div>` : ''}
+          ${supCanSignoff() && !a.signoff && ['done','failed','rejected','returned','withdrawn'].includes(a.status) ? `
+            <div class="sup-signoff">
+              <input id="soNote-${Number(a.id)}" placeholder="Note (needed to reject or revert)" style="width:100%; padding:7px 9px; border:1px solid #ddd; border-radius:6px; margin:8px 0 6px;">
+              <button type="button" class="approve-btn" onclick="supSignoff(${Number(a.id)}, 'good')">Good to proceed</button>
+              <button type="button" class="reject-btn" onclick="supSignoff(${Number(a.id)}, 'rejected')">Reject</button>
+              <button type="button" class="approve-btn" onclick="supSignoff(${Number(a.id)}, 'reverted')">Revert</button>
+              <p class="lk-msg" id="soMsg-${Number(a.id)}"></p>
+            </div>` : ''}
+        </div>`;
       }
       const m = e.m;
       if(m.sender === 'system') return `<div class="sup-msg system">${escAdmin(m.body)} · ${escAdmin(supDate(m.created_at))}</div>`;
@@ -3386,10 +3634,18 @@
       </div>`;
     box.innerHTML = `<p><a href="#" onclick="loadSupport(); return false;">‹ All requests</a></p>
       <h3 style="margin:6px 0 2px;">${escAdmin(t.ref)} — ${escAdmin(t.subject)}</h3>
+      ${supHorizonHtml(d)}
       <div class="sup-facts" id="supFacts">${facts}</div>
+      ${supHostStepHtml(d)}
       ${caseBox}
       <div id="supPropose"></div>
-      <div id="supTimeline">${msgs}</div>
+      <div class="sup-two">
+        <div class="sup-chan">
+          <div class="sup-chan-head">Aerva ⟷ ${escAdmin(t.role === 'host' ? 'Host (they raised this)' : 'Guest')} <span class="tds-sub">· the other side never sees this</span></div>
+          <div id="supTimeline">${msgs}</div>
+        </div>
+        ${supHostChannelHtml(d)}
+      </div>
       <div class="sup-reply" style="margin-top:16px;">
         <div class="sup-suggest" id="supSuggest">
           <div class="sup-suggest-head"><strong>Suggested replies</strong> <span class="tds-sub">tap one to put it in the box, edit it if you like, then Send</span>
@@ -3537,6 +3793,31 @@
       box.querySelectorAll('[data-s]').forEach(b => b.addEventListener('click', () => supUse(d.suggestions[Number(b.getAttribute('data-s'))])));
     }catch(e){ if(id === supOpenId) box.innerHTML = '<p class="sup-suggest-wait">Suggestions are not available right now.</p>'; }
   }
+  // The same cards for the HOST column. On demand only — the guest's cards
+  // load on their own because the guest is waiting; the host's cost a model
+  // call and are only wanted once the host has actually said something.
+  function supUseHost(text){
+    const ta = document.getElementById('hostMsg'); if(!ta) return;
+    ta.value = text;
+    ta.dispatchEvent(new Event('input'));
+    ta.focus();
+    ta.setSelectionRange(ta.value.length, ta.value.length);
+  }
+  window.supSuggestHost = async function(id){
+    const box = document.getElementById('supHostSuggestList'); if(!box) return;
+    const btn = document.getElementById('hostSuggestBtn');
+    if(btn) btn.disabled = true;
+    box.innerHTML = '<p class="sup-suggest-wait">Drafting suggestions…</p>';
+    try{
+      const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ supportHostSuggest: { ticketId: id } }) });
+      const d = await res.json().catch(() => ({}));
+      if(id !== window.supOpenId) return;
+      if(!res.ok){ box.innerHTML = '<p class="sup-suggest-wait">' + escAdmin(d.error || 'Suggestions are not available right now.') + '</p>'; return; }
+      box.innerHTML = (d.suggestions || []).map((x, i) => `<button type="button" class="sup-suggestion" data-hs="${i}">${escAdmin(x)}</button>`).join('');
+      box.querySelectorAll('[data-hs]').forEach(b => b.addEventListener('click', () => supUseHost(d.suggestions[Number(b.getAttribute('data-hs'))])));
+    }catch(e){ if(id === window.supOpenId) box.innerHTML = '<p class="sup-suggest-wait">Suggestions are not available right now.</p>'; }
+    finally{ if(btn) btn.disabled = false; }
+  };
 
   // 75 → "1 h 15 min", 3000 → "2 d 2 h"
   function supDur(min){ const m = Math.round(Number(min) || 0); if(m < 60) return m + ' min'; if(m < 1440) return Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : ''); return Math.floor(m / 1440) + ' d' + (Math.floor((m % 1440) / 60) ? ' ' + Math.floor((m % 1440) / 60) + ' h' : ''); }
@@ -4738,6 +5019,24 @@ window.applyRole = async function(){
 };
 const isAdminRole = () => (window.ADMIN_ROLE || 'admin') === 'admin';
 const canReview = () => ['admin', 'reviewer'].includes(window.ADMIN_ROLE || 'admin');
+// A super admin signs off on what the representative and the reviewer did
+// (owner, 14 Nov 2026). They keep every other power — this is on top.
+const supCanSignoff = () => !!(ADMIN_ME_INFO && ADMIN_ME_INFO.canSignOff);
+async function supSignoff(id, decision){
+  const note = (document.getElementById('soNote-' + id) || {}).value || '';
+  const msg = document.getElementById('soMsg-' + id);
+  const ask = { good: 'Mark this as good to proceed?', rejected: 'Record that this decision was wrong?',
+                reverted: 'Revert this? It goes back to be done again. Money that has already left Aerva is NOT taken back — you are told what to put right by hand.' }[decision];
+  if(!confirm(ask)) return;
+  if(decision !== 'good' && note.trim().length < 5){ if(msg){ msg.className = 'lk-msg is-err'; msg.textContent = 'Say why — the representative and the reviewer both see it.'; } return; }
+  try{
+    const r = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true), body: JSON.stringify({ signoffAction: { id, decision, note } }) });
+    const d = await r.json().catch(() => ({}));
+    if(!r.ok) throw new Error(d.error || 'Could not sign this off.');
+    if(d.toPutRight) alert(d.toPutRight);
+    openSupport(window.supOpenId);
+  }catch(err){ if(msg){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; } }
+}
 
 // ---- Approvals ----
 async function loadPriceReviews(){
@@ -4880,7 +5179,7 @@ async function loadCheckinPromise(){
         <span>Host ${lkEsc(x.host_name || '')}${x.host_phone ? ' · <a href="tel:' + lkEsc(x.host_phone) + '">' + lkEsc(x.host_phone) + '</a>' : ''}${x.host_email ? ' · ' + lkEsc(x.host_email) : ''}</span>
         ${x.details ? `<div style="margin-top:8px; padding:8px 10px; background:#f7f3ee; border-radius:8px; font-size:13.5px;"><strong>Guest:</strong> ${lkEsc(x.details)}<br><small>${files(x.evidence)}</small></div>` : ''}
         ${x.status === 'open' ? `<div style="margin-top:6px; padding:8px 10px; border:1px solid #eee; border-radius:8px; font-size:13.5px;"><strong>Host:</strong> ${x.host_response ? lkEsc(x.host_response) + `<br><small>${files(x.host_evidence)}</small>` : '<span style="opacity:0.6;">No reply yet</span>'}</div>` : ''}
-        ${offers.length ? `<p class="lk-sub" style="margin:8px 0 0;">Sent to the guest: ${offers.map(o => `${lkEsc(o.name)} (${o.difference > 0 ? '+' : o.difference < 0 ? '−' : ''}${rupees(Math.abs(o.difference))})`).join(' · ')}</p>` : ''}
+        ${offers.length ? `<p class="lk-sub" style="margin:8px 0 0;"><strong>${offers.length} other place${offers.length === 1 ? '' : 's'} offered to the guest</strong> for the nights they have left — they pick one and pay the difference, or decline them all for a full refund:<br>${offers.map(o => `${lkEsc(o.name)} — ${o.difference > 0 ? 'guest pays ' + rupees(o.difference) + ' more' : o.difference < 0 ? rupees(Math.abs(o.difference)) + ' back to them as Aerva credit' : 'same price'}`).join('<br>')}</p>` : ''}
         ${x.status === 'rebooked' ? `<p class="lk-sub" style="margin:8px 0 0;">Moved to booking #${Number(x.rebook_order_id)} · difference ${x.difference > 0 ? 'paid ' : 'credited '}${rupees(Math.abs(x.difference))}${Number(x.recovered_from_host) ? ' · ' + rupees(x.recovered_from_host) + ' to recover from the host' : ''}</p>` : ''}
         ${x.status === 'refunded' ? `<p class="lk-sub" style="margin:8px 0 0;">Refunded ${rupees(x.refund_amount)}${Number(x.recovered_from_host) ? ' · ' + rupees(x.recovered_from_host) + ' to recover from the host' : ''}</p>` : ''}
         ${x.decision_note ? `<p class="lk-sub" style="margin:6px 0 0;">Note: ${lkEsc(x.decision_note)}</p>` : ''}
@@ -4961,42 +5260,91 @@ async function loadApprovals(){
     body.innerHTML = d.actions.map(a => {
       const mine = Number(a.proposed_by) === meId;
       const pend = a.status === 'pending';
-      const stChip = { pending: 'is-due', approving: 'is-due', done: '', failed: 'is-failed', rejected: 'is-cancelled', withdrawn: 'is-completed' }[a.status] || '';
-      const stWord = { pending: 'Waiting', approving: 'Being carried out', done: 'Approved · done', failed: 'Approved · failed', rejected: 'Rejected', withdrawn: 'Withdrawn' }[a.status] || a.status;
+      const stChip = { pending: 'is-due', approving: 'is-due', done: '', failed: 'is-failed', rejected: 'is-cancelled', withdrawn: 'is-completed', returned: 'is-due', awaiting_admin: 'is-due' }[a.status] || '';
+      const stWord = { pending: 'Waiting for a reviewer', approving: 'Being carried out', done: 'Approved · done', failed: 'Approved · failed', rejected: 'Rejected', withdrawn: 'Withdrawn', returned: 'Sent back', awaiting_admin: 'Waiting for a super admin — nothing paid yet' }[a.status] || a.status;
       return `<div class="ap-card${pend ? ' is-pending' : ''}">
         <div class="ap-head"><strong>#${Number(a.id)} · ${lkEsc(a.kindLabel)}</strong> <span class="lk-chip ${stChip}">${lkEsc(stWord)}</span>
           <span class="lk-sub" style="display:inline;">proposed by ${lkEsc(a.proposed_by_email || '—')} · ${lkWhen(a.proposed_at)}</span></div>
         <div class="ap-grid">
-          <div>${a.order_id ? `<div class="lk-kv"><span>Booking</span><span><button type="button" class="lk-link" onclick="apOpen('booking', ${Number(a.order_id)})">#${Number(a.order_id)} ${lkEsc(a.suite_name || '')} ›</button></span></div>` : ''}
-            ${a.code ? lkKv('Code', `<code>${lkEsc(a.code)}</code>`) : ''}${a.arrival ? lkKv('Dates', `${lkDay(a.arrival)} → ${lkDay(a.departure)}`) : ''}
+          <div>${a.order_id ? `<div class="lk-kv"><span>Booking</span><span><button type="button" class="lk-link" onclick="apOpen('booking', ${Number(a.order_id)})">${lkEsc(a.code || '#' + Number(a.order_id))}${a.suite_name ? ' · ' + lkEsc(a.suite_name) : ''} ›</button></span></div>` : ''}
+            ${a.arrival ? lkKv('Dates', `${lkDay(a.arrival)} → ${lkDay(a.departure)}`) : ''}
             ${a.guest_name || a.guest_email ? `<div class="lk-kv"><span>Guest</span><span><button type="button" class="lk-link" onclick="apOpen('guest', ${Number(a.guest_id)})">${lkEsc(a.guest_name || a.guest_email)} ›</button></span></div>` : ''}
             ${a.property_name && !a.order_id ? `<div class="lk-kv"><span>Listing</span><span><button type="button" class="lk-link" onclick="apOpen('listing', ${Number(a.listing_id)})">${lkEsc(a.property_name)} ›</button></span></div>` : ''}
             ${a.ticket_ref ? `<div class="lk-kv"><span>Request</span><span><button type="button" class="lk-link" onclick="apOpenTicket(${Number(a.ticket_id)})">${lkEsc(a.ticket_ref)} ›</button></span></div>` : ''}</div>
-          <div><div class="ap-what">${lkEsc(a.description || '')}</div>
-            <div class="ap-label">Reason</div><div class="ap-text">${lkEsc(a.reason)}</div></div>
+          <div><div class="ap-label">If you approve this</div><div class="ap-what">${lkEsc(a.description || '')}</div>
+            <div class="ap-label">Why they asked for it</div><div class="ap-text">${lkEsc(a.reason)}</div></div>
         </div>
+        ${a.hostStep ? `<div class="ap-label">Was the host heard?</div><div class="ap-text">${lkEsc(a.hostStep.line)}</div>` : ''}
         ${a.summary ? `<div class="ap-label">Conversation summary</div><div class="ap-summary">${lkEsc(a.summary)}</div>` : ''}
         ${a.status !== 'pending' && a.reviewed_by_email ? `<p class="lk-sub" style="margin-top:8px;">${a.status === 'withdrawn' ? 'Withdrawn' : 'Decided by ' + lkEsc(a.reviewed_by_email)} · ${lkWhen(a.reviewed_at)}${a.review_note ? ' — “' + lkEsc(a.review_note) + '”' : ''}${a.error ? `<br><span class="error">${lkEsc(a.error)}</span>` : ''}</p>` : ''}
         ${(a.params || {}).refundFee ? `<p class="lk-sub" style="color:#a3402f; margin-top:8px;"><strong>Refunds Aerva’s service fee</strong> — an exception; only an admin can approve. Why: ${lkEsc((a.params || {}).feeReason || '—')}</p>` : ''}
         ${pend && canReview() && !mine && (!(a.params || {}).refundFee || isAdminRole()) ? `<div class="lk-form ap-decide">
             <label class="lk-wide">Note (required to reject; the representative sees it)<textarea id="apNote${Number(a.id)}" maxlength="1000"></textarea></label>
             <button type="button" class="lk-btn" onclick="apDecide(${Number(a.id)}, true)">Approve and carry out</button>
+            ${a.kind === 'cancel_refund' || a.kind === 'partial_refund' ? `<button type="button" class="lk-btn" onclick="apChange(${Number(a.id)}, '${lkEsc(a.kind)}')">Change the amount and approve</button>` : ''}
+            <button type="button" class="lk-btn is-ghost" onclick="apDecide(${Number(a.id)}, false, 'return')">Send back to them</button>
             <button type="button" class="lk-btn is-ghost" onclick="apDecide(${Number(a.id)}, false)">Reject</button></div><p class="lk-msg" id="apMsg${Number(a.id)}"></p>` : ''}
         ${pend && mine ? `<p class="lk-sub" style="color:#8a6c39;"><strong>You proposed this, so you cannot approve it.</strong> Money is never moved by one person alone: another admin or reviewer has to approve it. You can <button type="button" class="lk-link" onclick="apWithdraw(${Number(a.id)})">withdraw it</button> instead.</p>` : ''}
         ${pend && !canReview() && !mine ? '<p class="lk-sub">Waiting for a reviewer.</p>' : ''}
+        ${a.status === 'awaiting_admin' ? (supCanSignoff() ? `<div class="lk-form ap-decide">
+            <p class="lk-sub" style="margin:0 0 6px;"><strong>Nothing has been paid.</strong> Money leaves Aerva only when you press Pay it.</p>
+            <label class="lk-wide">Note (needed to reject or send back)<textarea id="gateNote${Number(a.id)}" maxlength="1000"></textarea></label>
+            <button type="button" class="lk-btn is-danger" onclick="apGate(${Number(a.id)}, 'pay')">Pay it</button>
+            <button type="button" class="lk-btn is-ghost" onclick="apGate(${Number(a.id)}, 'rejected')">Reject</button>
+            <button type="button" class="lk-btn is-ghost" onclick="apGate(${Number(a.id)}, 'reverted')">Back to the reviewer</button>
+            <button type="button" class="lk-btn is-ghost" onclick="apGate(${Number(a.id)}, 'revert_cr')">Back to the representative</button>
+            </div><p class="lk-msg" id="gateMsg${Number(a.id)}"></p>`
+          : '<p class="lk-sub"><strong>Nothing has been paid.</strong> This is with a super admin — money moves only when they decide.</p>') : ''}
       </div>`;
     }).join('');
   }catch(err){ body.innerHTML = `<p class="lk-empty error">${lkEsc(err.message)}</p>`; }
 }
 function apOpen(kind, id){ switchTab('lookup'); lkState.stack = []; lkOpen(kind, id, false); }
 function apOpenTicket(id){ switchTab('support'); setTimeout(() => openSupport(id), 50); }
-async function apDecide(id, approve){
+async function apDecide(id, approve, action){
   const note = document.getElementById('apNote' + id).value.trim();
   const msg = document.getElementById('apMsg' + id); msg.className = 'lk-msg'; msg.textContent = '';
-  if(!approve && note.length < 5){ msg.className = 'lk-msg is-err'; msg.textContent = 'Write why it is rejected.'; return; }
-  if(!confirm(approve ? 'Approve and carry this out now? Money moves at once for refunds and cancellations.' : 'Reject this proposal?')) return;
+  if(!approve && note.length < 5){ msg.className = 'lk-msg is-err'; msg.textContent = action === 'return' ? 'Write what they should do differently.' : 'Write why it is rejected.'; return; }
+  const ask = action === 'return' ? 'Send this back to the representative? Nothing is decided — they can change it and send it again.'
+            : approve ? 'Approve and carry this out now? Money moves at once for refunds and cancellations.' : 'Reject this proposal?';
+  if(!confirm(ask)) return;
   try{
-    await lkPost({ reviewAction: { id, approve, note } });
+    await lkPost({ reviewAction: { id, approve, action, note } });
+    loadApprovals(); loadAdminSummary(true);
+  }catch(err){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; loadAdminSummary(true); }
+}
+// The reviewer changes the amount and approves in one go (owner,
+// 14 Nov 2026). What the representative asked for is kept and shown beside
+// it on the case for ever, because this is one person deciding alone.
+// The gate: a super admin decides whether money actually leaves Aerva
+// (owner, 14 Nov 2026). Everything before this point is a recommendation.
+async function apGate(id, decision){
+  const note = (document.getElementById('gateNote' + id) || {}).value || '';
+  const msg = document.getElementById('gateMsg' + id); if(msg){ msg.className = 'lk-msg'; msg.textContent = ''; }
+  const ask = { pay: 'Pay this now? The money leaves Aerva at once.',
+                rejected: 'Reject this? Nothing is paid.',
+                reverted: 'Send it back to the reviewer? Nothing is paid.',
+                revert_cr: 'Send it back to the representative to work again? Nothing is paid.' }[decision];
+  if(!confirm(ask)) return;
+  if(decision !== 'pay' && note.trim().length < 5){ if(msg){ msg.className = 'lk-msg is-err'; msg.textContent = 'Say why — the representative and the reviewer both see it.'; } return; }
+  try{
+    await lkPost({ signoffAction: { id, decision, note } });
+    loadApprovals(); loadAdminSummary(true);
+  }catch(err){ if(msg){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; } loadAdminSummary(true); }
+}
+async function apChange(id, kind){
+  const msg = document.getElementById('apMsg' + id); msg.className = 'lk-msg'; msg.textContent = '';
+  const isPct = kind === 'cancel_refund';
+  const raw = prompt(isPct ? 'Approve with a different refund percentage.\n\nWhat percentage of the booking price should the guest get back? (0–100)'
+                           : 'Approve with a different amount.\n\nHow much should the guest get back, in rupees?');
+  if(raw == null) return;
+  const n = Number(String(raw).replace(/[^0-9.]/g, ''));
+  if(!isFinite(n) || n < 0 || (isPct && n > 100)){ msg.className = 'lk-msg is-err'; msg.textContent = isPct ? 'Give a percentage between 0 and 100.' : 'Give an amount in rupees.'; return; }
+  const why = prompt('Say what you changed and why. The representative sees this, and it stays on the case.') || '';
+  if(why.trim().length < 5){ msg.className = 'lk-msg is-err'; msg.textContent = 'Say what you changed and why.'; return; }
+  if(!confirm(`Approve with ${isPct ? n + '% of the booking price' : '₹' + n} instead, and carry it out now? Money moves at once.`)) return;
+  try{
+    await lkPost({ reviewAction: { id, approve: true, note: why, changes: { params: isPct ? { refundPercent: n } : { amount: n }, note: why } } });
     loadApprovals(); loadAdminSummary(true);
   }catch(err){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; loadAdminSummary(true); }
 }
@@ -5026,7 +5374,7 @@ async function loadTeam(){
         <span>${iAmSuper ? `<button type="button" class="lk-btn is-ghost" onclick="restoreTeamMember(${Number(m.id)})">Let them back in</button>` : ''}</span></div>`;
     body.innerHTML = `<div class="lk-list">${d.team.map(row).join('')}</div>
       ${(d.removed || []).length ? `<h3 style="margin:22px 0 6px;">Off the team</h3>
-        <p class="lk-sub" style="margin:0 0 8px; max-width:760px;">They cannot sign in and cannot be sent a new password. Their account is kept so every approval, case record and audit line still says who did it.</p>
+        <p class="lk-sub" style="margin:0 0 8px; max-width:760px;">They cannot sign in, cannot be sent a new password, and any link they were still holding is dead. Their account is kept so every approval, case record and audit line still says who did it. Letting someone back in sends them a new link to set a password — their old one never works again.</p>
         <div class="lk-list">${d.removed.map(gone).join('')}</div>` : ''}
       <p class="lk-msg" id="teamMsg"></p>`;
   }catch(err){ body.innerHTML = `<p class="lk-empty error">${lkEsc(err.message)}</p>`; }
@@ -5041,7 +5389,12 @@ async function removeTeamMember(id, who){
 }
 async function restoreTeamMember(id){
   const msg = document.getElementById('teamMsg');
-  try{ await lkPost({ restoreTeamMember: { adminId: id } }); await loadTeam(); const m = document.getElementById('teamMsg'); m.className = 'lk-msg is-ok'; m.textContent = 'They are back on the team, with the role they had. They sign in with their old password, or use "Forgot password".'; }
+  try{
+    const out = await lkPost({ restoreTeamMember: { adminId: id } }); await loadTeam();
+    const m = document.getElementById('teamMsg'); m.className = 'lk-msg is-ok';
+    m.textContent = out && out.emailFailed
+      ? 'They are back on the team, with the role they had — but the email did not send. Their old password no longer works, so take them off and put them back to try again.'
+      : `They are back on the team, with the role they had. Their old password no longer works: a link to set a new one has been sent to ${out && out.emailed ? out.emailed : 'their email'} and it expires in 2 hours.`; }
   catch(err){ if(msg){ msg.className = 'lk-msg is-err'; msg.textContent = err.message; } else alert(err.message); }
 }
 async function setSuperAdmin(id, on){
@@ -5116,6 +5469,7 @@ function mountPropose(el, ctx){
       <span class="pp-f" data-for="decline"><label>Why it is turned down (goes on the case record)<select id="${id}dg">${DECLINE_GROUNDS.map(([k, label]) => `<option value="${k}">${lkEsc(label)}</option>`).join('')}</select></label></span>
       <label class="lk-wide pp-f" data-for="decline">What the person is told (they see this word for word — edit it to the case)<textarea id="${id}dm" maxlength="1500" placeholder="For example: we checked with the host and the room matched the listing, so there is nothing to refund here."></textarea></label>
       <span class="pp-f" data-for="decline"><label>How the person behaved (for the case record)<select id="${id}dc"><option value="neutral">Neutral</option><option value="cooperative">Cooperative</option><option value="difficult">Difficult</option><option value="abusive">Abusive or threatening</option><option value="not_involved">Not involved</option></select></label></span>
+      ${ctx.orderId ? `<span class="pp-f" data-for="decline"><label>How the other side behaved<select id="${id}doc"><option value="neutral">Neutral</option><option value="cooperative">Cooperative</option><option value="difficult">Difficult</option><option value="abusive">Abusive or threatening</option><option value="not_involved">Not involved</option></select></label></span>` : ''}
       <label class="lk-wide">Reason — what you found and why this is right (the reviewer decides on it)<textarea id="${id}r" maxlength="1500"></textarea></label>
       <button type="button" class="lk-btn" id="${id}go">Send for approval</button>
     </div><p class="lk-msg" id="${id}m"></p></div>`;
@@ -5159,6 +5513,9 @@ function mountPropose(el, ctx){
       if(v('dm').length < 20){ m.className = 'lk-msg is-err'; m.textContent = 'Write what the person will be told, in a sentence or two.'; return; }
       params.message = v('dm');
       params.conduct = v('dc') || 'neutral';
+      // Both sides, because a request cannot be resolved without both and
+      // the decline used to be approved and then fail at the last step.
+      if(ctx.orderId) params.otherConduct = v('doc') || 'neutral';
       params.ground = v('dg') || 'other';
     }
     if(v('r').length < 10){ m.className = 'lk-msg is-err'; m.textContent = 'Explain the reason in a sentence or two.'; return; }

@@ -24,6 +24,7 @@ const fs = require('fs');
 const path = require('path');
 const vm = require('vm');
 const support = require('./_support');
+const budget = require('./_ai-budget');
 const { logAudit } = require('./_audit-log');
 const { normalizeToE164 } = require('./_phone-validation');
 
@@ -129,18 +130,44 @@ async function personContext(sql, guestId) {
 
 // ---------------------------------------------------------------- the model
 
-async function askModel(system, messages) {
+// The policy corpus, as a system block the API will cache. It is the same
+// bytes on every call and it is the bulk of what we send — around 27,000
+// tokens — so it goes FIRST, before the per-path rules. A cache entry is
+// keyed by the prefix it sits in, so putting the invariant first lets the
+// guest assistant and the team's suggestion cards share one entry instead
+// of warming two. A cached read costs a tenth of a fresh one.
+// Caching has a minimum block size. The corpus is far above it in normal
+// running, but if aerva-policies.js is missing or fails to parse the block
+// would be a few words, and asking for that to be cached is pointless and
+// can be rejected — so the marker is only set when there is something worth
+// caching.
+const CACHE_MIN_CHARS = 8000;
+const policyBlock = () => {
+  const text = 'AERVA POLICIES AND HELP TOPICS (the only rules you may state):\n\n' + loadPolicies();
+  return text.length >= CACHE_MIN_CHARS
+    ? { type: 'text', text, cache_control: { type: 'ephemeral' } }
+    : { type: 'text', text };
+};
+
+// `opts.sql` opts the call into the budget: the day's ceiling is checked
+// before the call and the API's own token counts are recorded after it.
+// Without it the call still works — the photo and message checks elsewhere
+// do not meter — but nothing is written down.
+async function askModel(system, messages, opts = {}) {
   const key = process.env.ANTHROPIC_API_KEY;
   if (!key) throw Object.assign(new Error('ANTHROPIC_API_KEY not set'), { unavailable: true });
+  const { sql = null, kind = 'other', by = null } = opts;
+  if (sql) await budget.check(sql, { kind, by });
   const ctrl = new AbortController(); const timer = setTimeout(() => ctrl.abort(), 22000);
   try {
     const r = await fetch('https://api.anthropic.com/v1/messages', {
       method: 'POST', signal: ctrl.signal,
       headers: { 'x-api-key': key, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
-      body: JSON.stringify({ model: MODEL(), max_tokens: 700, system, messages })
+      body: JSON.stringify({ model: MODEL(), max_tokens: opts.maxTokens || 700, system, messages })
     });
     const d = await r.json().catch(() => ({}));
     if (!r.ok) throw Object.assign(new Error((d.error && d.error.message) || `Anthropic API ${r.status}`), { unavailable: true });
+    if (sql) await budget.record(sql, { kind, by, model: d.model || MODEL(), usage: d.usage || {} });
     return (d.content || []).filter(c => c.type === 'text').map(c => c.text).join('').trim();
   } finally { clearTimeout(timer); }
 }
@@ -252,11 +279,11 @@ async function send(sql, guestId, rawText) {
     }
     while (messages.length && messages[0].role !== 'user') messages.shift();
     const system = [
+      policyBlock(),
       { type: 'text', text: RULES() },
-      { type: 'text', text: 'AERVA POLICIES AND HELP TOPICS (the only rules you may state):\n\n' + loadPolicies(), cache_control: { type: 'ephemeral' } },
       { type: 'text', text: 'THE PERSON YOU ARE HELPING (their own data — never reveal anyone else\'s):\n\n' + ctx.text }
     ];
-    const raw = await askModel(system, messages);
+    const raw = await askModel(system, messages, { sql, kind: 'chat' });
     const m = HANDOFF_RE.exec(raw);
     if (m) handoff = { category: support.CATEGORIES[m[1]] ? m[1] : 'other', orderId: Number(m[2]) || null };
     reply = raw.replace(HANDOFF_RE, '').trim() || 'A member of Aerva’s support team can take this from here — tap “Speak to an agent”.';
@@ -331,7 +358,7 @@ Rules:
 
 Reply with JSON only, no other text: {"suggestions": ["…", "…", "…"]}`;
 
-async function suggestReplies(sql, ticketId) {
+async function suggestReplies(sql, ticketId, by = null) {
   const t = (await sql`SELECT id, ref, subject, category, guest_id, status FROM support_tickets WHERE id = ${Number(ticketId) || 0}`)[0];
   if (!t) throw userError('Request not found.', 404);
   const msgs = await sql`SELECT sender, internal, body, created_at, to_jsonb(m)->>'via' AS via
@@ -342,10 +369,16 @@ async function suggestReplies(sql, ticketId) {
   });
   let person = '';
   try { if (t.guest_id) person = (await personContext(sql, t.guest_id)).text; } catch (e) { person = ''; }
-  const system = SUGGEST_RULES() + '\n\n# The customer\n' + (person || 'Account details unavailable.') + '\n\n# Aerva policies and help topics\n' + loadPolicies().slice(0, 60000);
+  // Cached policy block first, so this shares the cache entry the guest
+  // assistant warms. It used to send a 60,000-character slice of the
+  // policies fresh on every click, which was the whole cost of a suggestion.
+  const system = [
+    policyBlock(),
+    { type: 'text', text: SUGGEST_RULES() + '\n\n# The customer\n' + (person || 'Account details unavailable.') }
+  ];
   const user = `Request ${t.ref} — ${t.subject} (category: ${t.category}, status: ${t.status}).\n\nConversation so far, oldest first:\n${lines.join('\n\n') || '(no messages yet)'}\n\nWrite the three suggested replies now.`;
   let text;
-  try { text = await askModel(system, [{ role: 'user', content: user }]); }
+  try { text = await askModel(system, [{ role: 'user', content: user }], { sql, kind: 'suggest', by }); }
   catch (err) { if (err.unavailable) throw userError('Suggestions are not available right now.', 503); throw err; }
   const m = String(text || '').match(/\{[\s\S]*\}/);
   let list = [];
@@ -355,4 +388,236 @@ async function suggestReplies(sql, ticketId) {
   return { suggestions: list };
 }
 
-module.exports = { getThread, summary, send, handoff, loadPolicies, personContext, suggestReplies, _internals: { HANDOFF_RE, RULES } };
+// ---------------------------------------------------------------- the host side
+//
+// The owner's rule (14 Nov 2026): "AI should just summarise the issue and
+// send to host. Further reply should be done by CR or reviewer only and ai
+// suggestions should be given to them."
+//
+// So the model does exactly two things on the host channel, and neither of
+// them sends anything:
+//   • draftHostSummary — writes the opening message to the host: what the
+//     booking is, what is being looked into, and the one question the host
+//     needs to answer. A representative reads it, edits it if they like,
+//     and sends it. Nothing reaches the host unsent.
+//   • suggestHostReplies — after the host answers, offers three replies a
+//     representative could send next, as cards. They pick one, or type
+//     their own.
+//
+// Confidentiality is the hard part and it is in the prompt, not in review:
+// the host must never be shown the guest's words, the guest's name beyond a
+// first name, what the guest is asking Aerva for, or any accusation
+// attributed to them. Aerva asks the host what happened in Aerva's own
+// voice. The representative sees both sides; neither side sees the other's
+// chat. The guest's own requested amounts and threats of a review are
+// exactly the material that must not cross.
+
+const HOST_CONFIDENTIALITY = `Confidentiality — these are absolute:
+- NEVER quote or paraphrase the guest's message, and never say "the guest said", "the guest claims" or "the guest is asking for".
+- NEVER mention what the guest wants from Aerva: no refund amount, no compensation, no cancellation request, no threat of a review, no mention of money at all.
+- Use the guest's FIRST NAME only, or "the guest". Never their surname, email, phone number or account details.
+- Do not take sides, do not suggest the host is at fault, and do not repeat an accusation. Aerva is asking what happened, not accusing.
+- Write as Aerva ("we"), not as the guest's messenger.`;
+
+const HOST_SUMMARY_RULES = () => `You write the first message Aerva's support team sends to a HOST about a stay of theirs. Aerva (aerva.in) is a boutique platform in India for booking hand-picked homes.
+
+A guest has raised something about this booking. Your job is to tell the host, neutrally, what is being looked into and ask them the one thing Aerva needs from them.
+
+${HOST_CONFIDENTIALITY}
+
+Shape of the message:
+- Open by naming the booking: the listing and the dates.
+- One or two sentences on the subject in neutral terms ("a question has come up about the hot water during their stay"), never as a complaint or a claim.
+- Then the single most useful question for the host to answer, so one reply settles it.
+- Close by saying when Aerva needs to hear back (24 hours) and that their reply is not shared with the guest.
+- Warm, calm, respectful of the host. At most about 110 words. Plain text only: no markdown, no headings, no bullet points. Do not sign off with a name.
+
+Reply with JSON only, no other text: {"summary": "…"}`;
+
+const HOST_SUGGEST_RULES = () => `You help a member of Aerva's support team reply to a HOST on Aerva's private channel with that host. Aerva (aerva.in) is a boutique platform in India for booking hand-picked homes.
+
+Write THREE different replies the team member could send the host next, in answer to what the host has just said. Make them genuinely different: for example one that thanks them and closes the exchange, one that asks for the single detail still missing (a photo, a date, a meter reading), and one that tells them what happens next.
+
+${HOST_CONFIDENTIALITY}
+
+Rules:
+- Use ONLY Aerva's policies below and the facts in this conversation. Never invent rules, amounts, dates or timelines.
+- Do NOT tell the host what Aerva will decide, pay, refund, withhold or deduct, and never promise them an outcome either way. If that is coming, say the team is reviewing it and they will hear.
+- Never ask the host for bank details, a password or an OTP.
+- Internal notes in the conversation are the team's own context: use them, never mention or quote them.
+- Warm, calm and professional, as a person writing. At most about 70 words each. Plain text only: no markdown.
+- Reply in the language the host is writing in.
+
+Reply with JSON only, no other text: {"suggestions": ["…", "…", "…"]}`;
+
+// What both host-side calls are allowed to know about the case. The guest's
+// own messages are summarised down to a subject line and the team's internal
+// notes, never passed through verbatim — the cheapest confidentiality
+// guarantee is not sending the material at all.
+async function hostCaseFacts(sql, t) {
+  const booking = (await sql`SELECT o.id, o.confirmation_code, o.arrival, o.departure, o.guests,
+                                    l.property_name AS listing, l.city,
+                                    NULLIF(COALESCE(NULLIF(btrim(g.first_name), ''), split_part(btrim(g.name), ' ', 1)), '') AS guest_first
+                             FROM support_tickets st
+                             LEFT JOIN orders o   ON o.id = st.order_id
+                             LEFT JOIN listings l ON l.id = o.listing_id
+                             LEFT JOIN guests g   ON g.id = st.guest_id
+                             WHERE st.id = ${t.id}`)[0] || {};
+  const notes = await sql`SELECT body FROM support_messages
+                          WHERE ticket_id = ${t.id} AND internal = true AND body IS NOT NULL
+                          ORDER BY created_at ASC, id ASC LIMIT 10`;
+  const parts = [
+    `Request ${t.ref} — subject as the guest titled it: ${t.subject}`,
+    `Category: ${support.CATEGORIES[t.category] || t.category}`,
+    booking.listing ? `Booking: ${booking.listing}${booking.city ? ', ' + booking.city : ''}` : 'Booking: not linked to this request',
+    booking.confirmation_code ? `Confirmation code: ${booking.confirmation_code}` : '',
+    booking.arrival ? `Dates: ${String(booking.arrival).slice(0, 10)} to ${String(booking.departure).slice(0, 10)}${booking.guests ? ` · ${booking.guests} guest(s)` : ''}` : '',
+    booking.guest_first ? `Guest's first name: ${booking.guest_first}` : '',
+    notes.length ? 'The team\'s internal notes on the case (your context — never repeat these to the host):\n' + notes.map(n => `- ${String(n.body).slice(0, 1200)}`).join('\n') : ''
+  ].filter(Boolean);
+  return { text: parts.join('\n'), booking };
+}
+
+// Did the draft carry the guest's own words or their money across? Returns
+// why, or null when it is clean.
+//
+//  • Money: a host being asked what happened has no business being told a
+//    sum. Any amount in the draft is a leak, whether or not the guest named
+//    that figure — Aerva does not discuss money with a host through this
+//    channel at all.
+//  • Wording: a run of six or more words shared with what the guest wrote
+//    is a quote however it is introduced. Short overlaps are ordinary
+//    English ("the hot water in the bathroom") and are left alone.
+const STOP_WORDS = 6;
+function normWords(s) {
+  return String(s || '').toLowerCase().replace(/[^a-z0-9₹\s]/g, ' ').split(/\s+/).filter(Boolean);
+}
+function leakedFromGuest(draft, guestBodies) {
+  const d = String(draft || '');
+  if (/(?:₹|rs\.?\s*|inr\s*)\s*\d/i.test(d)) return 'the draft names an amount of money';
+  // A bare figure is only a leak if the guest actually wrote that figure —
+  // otherwise a year, a pin code or the booking's own confirmation code
+  // would be rejected for looking like a price. So the guest's numbers are
+  // the list, and the draft must not repeat any of them.
+  const theirs = new Set();
+  for (const body of guestBodies || []) {
+    for (const n of String(body || '').match(/\d[\d,]{2,}/g) || []) theirs.add(n.replace(/,/g, ''));
+  }
+  if (theirs.size) {
+    for (const n of d.match(/\d[\d,]{2,}/g) || []) {
+      if (theirs.has(n.replace(/,/g, ''))) return 'the draft repeats a figure the guest named';
+    }
+  }
+  const dw = normWords(d);
+  if (dw.length < STOP_WORDS) return null;
+  for (const body of guestBodies || []) {
+    const gw = normWords(body);
+    if (gw.length < STOP_WORDS) continue;
+    const spans = new Set();
+    for (let i = 0; i + STOP_WORDS <= gw.length; i++) spans.add(gw.slice(i, i + STOP_WORDS).join(' '));
+    for (let i = 0; i + STOP_WORDS <= dw.length; i++) {
+      if (spans.has(dw.slice(i, i + STOP_WORDS).join(' '))) return 'the draft repeats the guest’s own wording';
+    }
+  }
+  return null;
+}
+
+// The opening message to the host. Returned for a representative to read,
+// edit and send — this function never sends it. No policy corpus: writing a
+// neutral summary of one case needs the case, not Aerva's rule book, and
+// the corpus is the expensive part of a call.
+async function draftHostSummary(sql, ticketId, by = null) {
+  const t = (await sql`SELECT id, ref, subject, category, guest_id, order_id, status, host_ask
+                       FROM support_tickets WHERE id = ${Number(ticketId) || 0}`)[0];
+  if (!t) throw userError('Request not found.', 404);
+  const facts = await hostCaseFacts(sql, t);
+  const guestWords = await sql`SELECT body FROM support_messages
+                               WHERE ticket_id = ${t.id} AND sender = 'user' AND internal = false AND body IS NOT NULL
+                               ORDER BY created_at ASC, id ASC LIMIT 6`;
+  const system = [{ type: 'text', text: HOST_SUMMARY_RULES() }];
+  const user = `${facts.text}
+
+What the guest wrote, for YOUR understanding only — you must not quote it, paraphrase it as theirs, or pass on anything they are asking Aerva for:
+${guestWords.map(m => `- ${String(m.body).slice(0, 1500)}`).join('\n') || '- (nothing in writing yet)'}
+
+Write the message to the host now.`;
+  let text;
+  try { text = await askModel(system, [{ role: 'user', content: user }], { sql, kind: 'host_summary', by, maxTokens: 500 }); }
+  catch (err) { if (err.unavailable) throw userError('The draft is not available right now — write the question to the host yourself.', 503); throw err; }
+  const m = String(text || '').match(/\{[\s\S]*\}/);
+  let summary = '';
+  try { summary = m ? String(JSON.parse(m[0]).summary || '') : ''; } catch (e) { summary = ''; }
+  summary = summary.replace(/\*\*/g, '').replace(/^#+\s*/gm, '').trim().slice(0, 1500);
+  if (!summary) throw userError('No draft this time. Try again, or write the question yourself.', 502);
+  // The model has to see the complaint to summarise it, so the rule against
+  // passing it on is an instruction — and an instruction is not a
+  // guarantee. This is the guarantee: the draft is checked against what the
+  // guest actually wrote before a representative is ever shown it. A draft
+  // that borrows the guest's own wording, or carries a sum of money, is
+  // thrown away rather than offered for sending.
+  const leak = leakedFromGuest(summary, guestWords.map(x => x.body));
+  if (leak) {
+    await logAudit(sql, { action: 'support_host_draft_withheld', success: false, actorType: 'admin',
+      actorIdentifier: by || 'unknown', targetType: 'support_ticket', targetId: t.id, metadata: { why: leak } }).catch(() => {});
+    throw userError('The draft came back carrying the guest’s own words, so it has not been shown. Try again, or write the question to the host yourself.', 502);
+  }
+  return { summary, booking: facts.booking.confirmation_code || null, draft: true };
+}
+
+// Three replies a representative could send the host next. Cards only —
+// nothing is sent until they choose one and press send.
+async function suggestHostReplies(sql, ticketId, by = null) {
+  const t = (await sql`SELECT id, ref, subject, category, guest_id, order_id, status, host_ask, host_reply
+                       FROM support_tickets WHERE id = ${Number(ticketId) || 0}`)[0];
+  if (!t) throw userError('Request not found.', 404);
+  const facts = await hostCaseFacts(sql, t);
+  // The host channel itself: what Aerva has said to this host and what the
+  // host said back. The guest's chat is deliberately not here.
+  // The host channel is the booking's own thread, restricted to what the
+  // host is shown — the same rows Admin puts in the right-hand column. The
+  // guest-only messages of that thread are excluded by the audience filter,
+  // so nothing the guest wrote can reach this prompt through it.
+  let thread = [];
+  if (t.order_id) {
+    try {
+      thread = await sql`SELECT m.sender_type, m.display_text, m.created_at
+                         FROM messages m JOIN conversations c ON c.id = m.conversation_id
+                         WHERE c.order_id = ${t.order_id} AND m.unsent_at IS NULL
+                           AND m.display_text IS NOT NULL
+                           AND COALESCE(m.audience, 'both') IN ('both', 'host')
+                         ORDER BY m.created_at ASC, m.id ASC LIMIT 30`;
+    } catch (err) { thread = []; }
+  }
+  // The booking thread can carry messages the guest sent the host directly.
+  // Those the host has already read, so they are fair context — but they
+  // must be labelled as the guest's, never as Aerva's.
+  const WHO = { host: 'Host', guest: 'The guest, writing to the host directly', system: 'Aerva Support', admin: 'Aerva Support' };
+  const lines = thread.map(m => `${WHO[m.sender_type] || 'Aerva Support'}: ${String(m.display_text).slice(0, 2000)}`);
+  if (!lines.length) {
+    if (t.host_ask) lines.push(`Aerva Support: ${String(t.host_ask).slice(0, 2000)}`);
+    if (t.host_reply) lines.push(`Host: ${String(t.host_reply).slice(0, 2000)}`);
+  }
+  const system = [
+    policyBlock(),
+    { type: 'text', text: HOST_SUGGEST_RULES() + '\n\n# The case\n' + facts.text }
+  ];
+  const user = `Aerva's private channel with the host, oldest first:
+${lines.join('\n\n') || '(nothing sent to the host yet)'}
+
+Write the three suggested replies to the host now.`;
+  let text;
+  try { text = await askModel(system, [{ role: 'user', content: user }], { sql, kind: 'host_suggest', by }); }
+  catch (err) { if (err.unavailable) throw userError('Suggestions are not available right now.', 503); throw err; }
+  const m = String(text || '').match(/\{[\s\S]*\}/);
+  let list = [];
+  try { list = m ? JSON.parse(m[0]).suggestions : []; } catch (e) { list = []; }
+  list = (Array.isArray(list) ? list : []).map(x => String(x || '').replace(/\*\*/g, '').trim()).filter(Boolean).slice(0, 3).map(x => x.slice(0, 1200));
+  if (!list.length) throw userError('No suggestions this time. Try again.', 502);
+  return { suggestions: list };
+}
+
+module.exports = {
+  getThread, summary, send, handoff, loadPolicies, personContext, suggestReplies,
+  draftHostSummary, suggestHostReplies,
+  _internals: { HANDOFF_RE, RULES, HOST_CONFIDENTIALITY, hostCaseFacts, leakedFromGuest }
+};

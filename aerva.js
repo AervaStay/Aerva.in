@@ -17179,7 +17179,7 @@ function aervaCheckinPromiseHtml(b){
       html += `<p style="margin:8px 0 6px;">Choose a place for ${esc(new Date(c.offers[0].from + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }))} – ${esc(new Date(c.offers[0].to + 'T00:00:00Z').toLocaleDateString('en-IN', { day: 'numeric', month: 'short', timeZone: 'UTC' }))}. You pay only the difference:</p>`;
       html += c.offers.map(o => `<div class="cp-offer" style="display:flex; gap:10px; align-items:flex-start; flex-wrap:wrap; justify-content:space-between; padding:10px 0; border-top:1px solid #eadfcf;">
           <div style="flex:1 1 220px; min-width:0;"><strong>${esc(o.name)}</strong>${o.distanceKm != null ? ` <span style="opacity:0.7;">· ${esc(String(o.distanceKm))} km away</span>` : ''}<br>
-            <span style="font-size:13px; opacity:0.85;">${o.nights} night${o.nights === 1 ? '' : 's'}: stay ${money(o.subtotal)} · GST ${money(o.gst)} · service fee ${money(o.fee)}${o.deposit ? ` · refundable deposit ${money(o.deposit)}` : ''} = <strong>${money(o.total)}</strong></span><br>
+            <span style="font-size:13px; opacity:0.85;">${o.nights} night${o.nights === 1 ? '' : 's'}: stay ${money(o.subtotal)} · GST ${money(o.gst)}${o.feeWaived ? ` · <span style="color:#2f6b45;">no service fee (${money(o.feeWaived)} waived)</span>` : o.fee ? ` · service fee ${money(o.fee)}` : ''}${o.deposit ? ` · refundable deposit ${money(o.deposit)}` : ''} = <strong>${money(o.total)}</strong></span><br>
             <span style="font-size:13px;">You paid ${money(o.oldTotal)} · ${o.difference > 0 ? `<strong>you pay ${money(o.difference)} more</strong>` : o.difference < 0 ? `<strong>${money(-o.difference)} back to you as Aerva credit</strong>` : '<strong>nothing more to pay</strong>'}</span></div>
           ${paying ? '' : `<button type="button" class="btn solid" data-cp-accept="${b.id}" data-cp-option="${Number(o.n)}" data-cp-sum="${encodeURIComponent(JSON.stringify({ name: o.name, from: o.from, to: o.to, nights: o.nights, subtotal: o.subtotal, gst: o.gst, fee: o.fee, deposit: o.deposit, total: o.total, oldTotal: o.oldTotal, difference: o.difference }))}" style="min-height:44px; padding:10px 18px;">Choose this place</button>`}
           <div class="cp-sum" style="flex:1 1 100%;"></div>
@@ -17215,7 +17215,7 @@ function aervaCheckinPromiseHtml(b){
   }
   if(b.checkin_summary){
     const s = b.checkin_summary;
-    html += `<p style="font-size:13.5px; margin:8px 0 0;">Booked by Aerva under its check-in promise (instead of ${esc(s.from)}). You paid ${money(s.originalTotal)}${s.difference > 0 ? ` + ${money(s.difference)}` : s.difference < 0 ? ` − ${money(-s.difference)} back as Aerva credit` : ''} = <strong>${money(s.total)}</strong>.</p>`;
+    html += `<p style="font-size:13.5px; margin:8px 0 0;">Booked by Aerva under its check-in promise (instead of ${esc(s.from)}). You paid ${money(s.originalTotal)}${s.difference > 0 ? ` + ${money(s.difference)}` : s.difference < 0 ? ` − ${money(-s.difference)} back as Aerva credit` : ''} = <strong>${money(s.total)}</strong>.${s.aervaGaveUp > 0 ? ` Aerva charged no service fee on this one — ${money(s.aervaGaveUp)} it would normally have earned, not taken, because your first place let you down.` : ''}</p>`;
   }
   return html;
 }

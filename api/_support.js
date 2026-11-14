@@ -576,8 +576,36 @@ async function adminGet(sql, id) {
     try { bookings.asGuest = cols(await pick('guest')); } catch (err) { console.error('support: person bookings', err && err.message); }
     try { bookings.asHost = cols(await pick('host')); } catch (err) { console.error('support: host bookings', err && err.message); }
   }
+  // Every proposal on this request with its whole trail — who proposed it,
+  // who changed it, who decided, who signed it off — so the timeline can
+  // show one block per decision instead of three notes to piece together
+  // (owner, 14 Nov 2026). Never fails the request view.
+  let actions = [];
+  try { actions = await require('./_support-actions').forTicket(sql, t.id); } catch (err) { console.error('support: actions', err && err.message); }
+  // The first decision on the case: was the host needed, and what did they
+  // say (owner, 14 Nov 2026). Shown to the representative, the reviewer and
+  // the super admin alike.
+  let host = null;
+  try { host = await hostStep(sql, t.id); } catch (err) { console.error('support: host step', err && err.message); }
+  // The host's own channel, brought in beside the request's (owner,
+  // 14 Nov 2026: "cr will get both chat side by side"). Two separate
+  // conversations — the guest never sees this one — shown together so the
+  // representative can work from both and cannot confuse them.
+  let hostThread = [];
+  if (t.order_id) {
+    try {
+      hostThread = await sql`SELECT m.id, m.sender_type, m.display_text, m.created_at, m.audience, m.photo_urls
+                             FROM messages m JOIN conversations c ON c.id = m.conversation_id
+                             WHERE c.order_id = ${t.order_id} AND m.unsent_at IS NULL
+                               AND COALESCE(m.audience, 'both') IN ('both', 'host')
+                             ORDER BY m.created_at, m.id`;
+    } catch (err) { console.error('support: host thread', err && err.message); }
+  }
   return { ticket: { ...t, categoryLabel: (CATEGORIES[t.category] || {}).label || t.category }, messages: msgs, statuses: STATUS_LABELS,
-           caseNotes, caseRecord: caseNotes[0] || null, conduct: CONDUCT, otherParty: !!(t.order_id || t.listing_id), bookings };
+           caseNotes, caseRecord: caseNotes[0] || null, conduct: CONDUCT, otherParty: !!(t.order_id || t.listing_id), bookings, actions, host,
+           horizon: horizon(t, actions, host),
+           hostThread: hostThread.map(m => ({ id: m.id, from: m.sender_type, text: m.display_text, at: m.created_at,
+             audience: m.audience || 'both', photos: m.photo_urls || [] })) };
 }
 
 // The support team's record of a request: the issue as understood, the
@@ -1029,6 +1057,211 @@ function categoryList() {
   return Object.keys(CATEGORIES).map(k => ({ key: k, label: CATEGORIES[k].label, audience: CATEGORIES[k].audience, booking: CATEGORIES[k].booking, bookingAs: CATEGORIES[k].bookingAs, listing: CATEGORIES[k].listing }));
 }
 
+
+// ---------------------------------------------------------------- the host step
+//
+// Owner, 14 Nov 2026, step 3 of the support flow: the FIRST thing a
+// customer representative decides on a request is whether the host is
+// needed. Before this, a refund could be proposed without anyone having
+// asked the host what happened, and a reviewer had no way of knowing.
+//
+// Not needed → they say why, and move on.
+// Needed     → the host is asked here, their words are kept here, and the
+//              reviewer and the super admin both see them beside the money.
+// No answer  → recorded as no answer, and the representative carries on. A
+//              host who says nothing cannot leave a guest waiting for ever.
+const HOST_STEP_HOURS = 24;
+
+async function hostStepReady(sql) {
+  try { const r = await sql`SELECT 1 FROM information_schema.columns WHERE table_name = 'support_tickets' AND column_name = 'host_needed' LIMIT 1`; return r.length > 0; }
+  catch (err) { return false; }
+}
+
+// What the case shows about this step, for the CR, the reviewer and the
+// super admin alike.
+async function hostStep(sql, ticketId) {
+  if (!(await hostStepReady(sql))) return null;
+  const t = (await sql`SELECT to_jsonb(s)->>'host_needed' AS needed, to_jsonb(s)->>'host_no_reason' AS no_reason,
+                              to_jsonb(s)->>'host_ask' AS ask, to_jsonb(s)->>'host_asked_at' AS asked_at,
+                              to_jsonb(s)->>'host_asked_by' AS asked_by, to_jsonb(s)->>'host_reply' AS reply,
+                              to_jsonb(s)->>'host_replied_at' AS replied_at, to_jsonb(s)->>'host_no_answer' AS no_answer,
+                              s.order_id
+                         FROM support_tickets s WHERE s.id = ${Number(ticketId) || 0}`)[0];
+  if (!t) return null;
+  const needed = t.needed == null ? null : t.needed === 'true';
+  const overdue = needed === true && !t.reply && t.asked_at && (Date.now() - new Date(t.asked_at).getTime()) > HOST_STEP_HOURS * 3600e3;
+  return {
+    answered: needed !== null, needed, hasBooking: !!t.order_id,
+    whyNot: t.no_reason || null, ask: t.ask || null, askedAt: t.asked_at || null, askedBy: t.asked_by || null,
+    reply: t.reply || null, repliedAt: t.replied_at || null, noAnswer: t.no_answer === 'true',
+    overdue: !!overdue, waitHours: HOST_STEP_HOURS,
+    state: needed === null ? 'Not decided yet'
+      : needed === false ? 'The host was not needed'
+      : t.reply ? 'The host answered'
+      : t.no_answer === 'true' ? 'The host did not answer'
+      : overdue ? `Asked, no answer after ${HOST_STEP_HOURS} hours` : 'Asked, waiting for the host'
+  };
+}
+
+// The representative answers the step. Asking the host posts in the
+// booking's thread, for the host's eyes only.
+async function setHostStep(sql, { id, needed, why, ask, adminEmail = 'admin', audit = {} }) {
+  if (!(await hostStepReady(sql))) throw userError('Run the database update for the host step first (Admin → Database updates).', 503);
+  const t = (await sql`SELECT id, order_id, ref FROM support_tickets WHERE id = ${Number(id) || 0}`)[0];
+  if (!t) throw userError('Support request not found.', 404);
+  if (needed === false) {
+    const reason = String(why || '').trim().slice(0, 600);
+    if (reason.length < 5) throw userError('Say why the host is not needed — the reviewer sees it.');
+    await sql`UPDATE support_tickets SET host_needed = false, host_no_reason = ${reason}, host_asked_by = ${adminEmail} WHERE id = ${t.id}`;
+    await logAudit(sql, { action: 'support_host_step_skipped', success: true, actorType: 'admin', ...audit, targetType: 'support_ticket', targetId: t.id, metadata: { why: reason } });
+    return await hostStep(sql, t.id);
+  }
+  const question = String(ask || '').trim().slice(0, 1500);
+  if (question.length < 10) throw userError('Write what you are asking the host.');
+  if (!t.order_id) throw userError('There is no booking on this request, so there is no host to ask.');
+  await sql`UPDATE support_tickets SET host_needed = true, host_ask = ${question}, host_asked_at = now(), host_asked_by = ${adminEmail}, host_no_answer = false WHERE id = ${t.id}`;
+  try {
+    await require('./_cancellations').postThreadMessage(sql, t.order_id, 'system',
+      `Aerva is looking into something on this booking and would like your side of it: ${question}`, { audience: 'host' });
+  } catch (err) { console.error('host step: thread message failed:', err.message); }
+  await logAudit(sql, { action: 'support_host_asked', success: true, actorType: 'admin', ...audit, targetType: 'support_ticket', targetId: t.id, metadata: { orderId: t.order_id } });
+  return await hostStep(sql, t.id);
+}
+
+// What the host said — typed in by the representative, or marked as no
+// answer once the window has passed.
+async function recordHostReply(sql, { id, reply, noAnswer, adminEmail = 'admin', audit = {} }) {
+  if (!(await hostStepReady(sql))) throw userError('Run the database update for the host step first.', 503);
+  const t = (await sql`SELECT to_jsonb(s)->>'host_needed' AS needed, s.id FROM support_tickets s WHERE s.id = ${Number(id) || 0}`)[0];
+  if (!t) throw userError('Support request not found.', 404);
+  if (t.needed !== 'true') throw userError('The host has not been asked on this request.');
+  if (noAnswer === true) {
+    await sql`UPDATE support_tickets SET host_no_answer = true WHERE id = ${t.id}`;
+    await logAudit(sql, { action: 'support_host_no_answer', success: true, actorType: 'admin', ...audit, targetType: 'support_ticket', targetId: t.id });
+    return await hostStep(sql, t.id);
+  }
+  const said = String(reply || '').trim().slice(0, 3000);
+  if (said.length < 5) throw userError('Write what the host said.');
+  await sql`UPDATE support_tickets SET host_reply = ${said}, host_replied_at = now(), host_no_answer = false WHERE id = ${t.id}`;
+  await logAudit(sql, { action: 'support_host_replied', success: true, actorType: 'admin', ...audit, targetType: 'support_ticket', targetId: t.id });
+  return await hostStep(sql, t.id);
+}
+
+
+// ---------------------------------------------------------------- the horizon
+//
+// Owner, 14 Nov 2026: "I want to know horizon timeline that tells me where
+// we are with the issue". One line of stages across the top of a request,
+// each either done, where we are now, still to come, or skipped because
+// this request never needed it.
+//
+// Every stage is READ from something that already happened — the request's
+// status, the host step, the proposals and their sign-off. Nothing here is
+// a second source of truth that could drift from the first.
+const STAGES = [
+  { key: 'raised',    label: 'Raised' },
+  { key: 'assigned',  label: 'With a representative' },
+  { key: 'host',      label: 'Host asked' },
+  { key: 'reviewer',  label: 'With a reviewer' },
+  { key: 'admin',     label: 'With a super admin' },
+  { key: 'money',     label: 'Paid' },
+  { key: 'resolved',  label: 'Answered' },
+  { key: 'closed',    label: 'Closed' }
+];
+const MONEY = ['cancel_refund', 'partial_refund', 'deposit_refund'];
+
+function horizon(t, acts, host) {
+  const a = Array.isArray(acts) ? acts : [];
+  const live = a.filter(x => !['withdrawn', 'rejected'].includes(x.status));
+  const money = live.filter(x => MONEY.includes(x.kind));
+  const at = (v) => (v ? new Date(v).toISOString() : null);
+  const anyIn = (set) => live.some(x => set.includes(x.status));
+  const out = [];
+  const put = (key, state, note, when) => { const st = STAGES.find(s => s.key === key); out.push({ key, label: st.label, state, note: note || null, at: when || null }); };
+
+  put('raised', 'done', null, at(t.created_at));
+
+  // Who has it. Assignment may not have been run yet, in which case the
+  // stage says so plainly rather than inventing a name.
+  const who = t.assigned_to_email || null;
+  // The label itself changes, because "waiting to be assigned" and "with
+  // Priya" are different answers to "where is this?" (owner, 14 Nov 2026).
+  out.push({ key: 'assigned', label: who ? 'With a representative' : 'Waiting to be assigned',
+             state: who ? 'done' : 'now', note: who || 'Nobody has picked this up yet', at: at(t.assigned_at) });
+
+  // The host step only exists on a request about a booking.
+  if (!host || !host.hasBooking) put('host', 'skipped', 'No booking on this request, so there is no host to ask');
+  else if (!host.answered) put('host', who ? 'now' : 'later', 'Not decided yet');
+  else if (host.needed === false) put('host', 'skipped', host.whyNot);
+  else put('host', host.reply || host.noAnswer ? 'done' : 'now', host.reply ? 'They answered' : host.noAnswer ? 'They did not answer' : 'Waiting for the host', at(host.askedAt));
+
+  // A reviewer has it from the moment something is proposed.
+  if (!live.length) put('reviewer', 'later', 'Nothing proposed yet');
+  else if (anyIn(['pending'])) put('reviewer', 'now', 'Waiting for a reviewer');
+  else if (anyIn(['returned'])) put('reviewer', 'now', 'Sent back to the representative');
+  else put('reviewer', 'done', live.map(x => x.stateLabel || x.status).join(' · '));
+
+  // The super admin stage exists only when money is involved.
+  if (!money.length) put('admin', 'skipped', 'Nothing on this request moves money');
+  else if (money.some(x => x.status === 'awaiting_admin')) put('admin', 'now', 'Waiting for a super admin — nothing paid yet');
+  else if (money.some(x => ['done', 'failed'].includes(x.status))) put('admin', 'done', money.map(x => x.signoffBy ? 'Decided by ' + x.signoffBy : 'Decided').join(' · '));
+  else put('admin', 'later', 'It will come here once a reviewer approves');
+
+  // Paid or not, said plainly — the owner asked for exactly this.
+  if (!money.length) put('money', 'skipped', 'No money on this request');
+  else if (money.some(x => x.status === 'done')) put('money', 'done', 'Paid');
+  else if (money.some(x => x.status === 'failed')) put('money', 'now', 'Tried and did not go through');
+  else put('money', 'later', 'Not paid');
+
+  put('resolved', ['resolved', 'closed'].includes(t.status) ? 'done' : 'later',
+      ['resolved', 'closed'].includes(t.status) ? null : 'The person has not been given an answer yet', at(t.resolved_at));
+  put('closed', t.status === 'closed' ? 'done' : 'later', t.status === 'closed' ? (t.auto_closed ? 'Closed by itself' : null) : null, at(t.closed_at));
+
+  const nowAt = out.findIndex(x => x.state === 'now');
+  return { stages: out, atStage: nowAt === -1 ? out.length - 1 : nowAt,
+           where: nowAt === -1 ? (t.status === 'closed' ? 'Closed' : 'Answered') : out[nowAt].label };
+}
+
+// Picking up a request. By hand for now; the queue will call this too.
+async function assignRequest(sql, { id, adminId, adminEmail, byEmail = 'admin', audit = {} }) {
+  const t = (await sql`SELECT id FROM support_tickets WHERE id = ${Number(id) || 0}`)[0];
+  if (!t) throw userError('Support request not found.', 404);
+  try {
+    if (adminId == null) {
+      await sql`UPDATE support_tickets SET assigned_to = NULL, assigned_to_email = NULL, assigned_at = NULL WHERE id = ${t.id}`;
+    } else {
+      const who = (await sql`SELECT id, email FROM admins a WHERE a.id = ${Number(adminId) || 0} AND to_jsonb(a)->>'removed_at' IS NULL`)[0];
+      if (!who) throw userError('That team member is not on the team.', 404);
+      await sql`UPDATE support_tickets SET assigned_to = ${who.id}, assigned_to_email = ${who.email}, assigned_at = now() WHERE id = ${t.id}`;
+    }
+  } catch (err) {
+    if (err.isUserFacing) throw err;
+    throw userError('Run the database update for the request horizon first (Admin → Database updates).', 503);
+  }
+  await logAudit(sql, { action: adminId == null ? 'support_unassigned' : 'support_assigned', success: true, actorType: 'admin', ...audit,
+    targetType: 'support_ticket', targetId: t.id, metadata: { to: adminEmail || null, by: byEmail } });
+  return { assignedTo: adminEmail || null };
+}
+
+
+// A message to the host on the booking's own thread, from the case screen
+// (owner, 14 Nov 2026). The guest never sees it: it carries audience
+// 'host', the same split the booking thread already uses everywhere else.
+// Deliberately a separate call from replying to the requester, so writing
+// to the wrong party takes a different button and not a slip of the eye.
+async function messageHost(sql, { id, text, adminEmail = 'admin', audit = {} }) {
+  const t = (await sql`SELECT id, order_id FROM support_tickets WHERE id = ${Number(id) || 0}`)[0];
+  if (!t) throw userError('Support request not found.', 404);
+  if (!t.order_id) throw userError('There is no booking on this request, so there is no host to write to.');
+  const body = String(text || '').trim().slice(0, 4000);
+  if (body.length < 5) throw userError('Write the message.');
+  await require('./_cancellations').postThreadMessage(sql, t.order_id, 'system', body, { audience: 'host' });
+  await sql`INSERT INTO support_messages (ticket_id, sender, internal, admin_email, body)
+            VALUES (${t.id}, 'support', true, ${adminEmail}, ${'To the host (the guest does not see this): ' + body.slice(0, 500)})`;
+  await logAudit(sql, { action: 'support_host_message', success: true, actorType: 'admin', ...audit, targetType: 'support_ticket', targetId: t.id, metadata: { orderId: t.order_id } });
+  return { ok: true };
+}
+
 module.exports = {
   categoryList,
   CATEGORIES, STATUS_LABELS, STATUSES, FIRST_RESPONSE_HOURS, MAX_NEW_PER_DAY,
@@ -1036,5 +1269,6 @@ module.exports = {
   requestOptions, createRequest, listRequests, getRequest, replyToRequest, closeRequest, submitFeedback, autoCloseResolved, bellNotifications,
   createChatRequest, appendUserMessage, applyFeedback, ticketView, bookingRole,
   adminList, adminGet, adminReply, adminSaveCase, eraseForAccount, cleanFiles, openSystemRequest, systemUpdate,
+  hostStep, setHostStep, recordHostReply, HOST_STEP_HOURS, horizon, assignRequest, STAGES, messageHost,
   createSignedOutRequest, signedOutView, signedOutReplyTo, signedOutNewLink, KEY_DAYS, SO_REPLY_MAX, SO_REPLIES_PER_HOUR, SO_NEW_LINK_PER_IP_HOUR, NEW_LINK_ANSWER, SIGNIN_PROBLEMS, SIGNED_OUT_PER_IP_HOUR, SIGNED_OUT_PER_EMAIL_DAY, SIGNED_OUT_BODY_MIN, SIGNED_OUT_BODY_MAX
 };

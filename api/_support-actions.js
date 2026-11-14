@@ -54,6 +54,9 @@ const KINDS = {
 // enough." A customer representative or a reviewer still proposes it and a
 // second person decides.
 const MONEY_KINDS = ['cancel_refund', 'partial_refund', 'deposit_refund'];
+// Still to be decided by somebody: the reviewer's queue and the super
+// admin's gate both count as waiting (owner, 14 Nov 2026).
+const OPEN_STATES = ['pending', 'awaiting_admin'];
 const needsReview = (kind, role) => MONEY_KINDS.includes(kind) || (role || 'admin') !== 'admin';
 
 const GROUNDS = {
@@ -82,7 +85,11 @@ const MODIFIERS = new Set(['q', 'status', 'subject', 'limit', 'offset', 'before'
 const AGENT_GET = new Set(['cancellationRequests', 'adminNotes', 'adminSummary', 'adminMe', 'supportCategories', 'supportTickets', 'supportTicket', 'supportTicketLive', 'lookup', 'lookupBooking', 'lookupGuest', 'lookupListing', 'supportActions', 'priceReviews',
   // Approvals also shows these two lists to every role (read only; the page offers the check-in actions to admins alone and the POSTs stay admin-only).
   'checkinPromise', 'groupBookings']);
-const AGENT_POST = new Set(['supportReply', 'supportCase', 'supportSuggest', 'raiseForCustomer', 'proposeAction', 'withdrawAction', 'adminSignOutEverywhere']);
+// reproposeAction: a proposal the reviewer sent back, put right and sent
+// again. It is the representative's own work, so it belongs to them
+// (owner, 14 Nov 2026). signoffAction is NOT here for anyone: the function
+// itself allows only a super admin.
+const AGENT_POST = new Set(['supportReply', 'supportCase', 'supportSuggest', 'raiseForCustomer', 'proposeAction', 'withdrawAction', 'reproposeAction', 'hostStep', 'hostReply', 'assignRequest', 'messageHost', 'adminSignOutEverywhere']);
 const REVIEWER_POST = new Set([...AGENT_POST, 'reviewAction', 'decidePriceReview', 'decideCancellationRequest']);
 function allowed(role, req) {
   if (role === 'admin') return true;
@@ -163,9 +170,25 @@ async function restoreMember(sql, { adminId, byId, audit }) {
   const t = (await sql`SELECT id, email, to_jsonb(a)->>'removed_at' AS removed_at FROM admins a WHERE a.id = ${Number(adminId) || 0}`)[0];
   if (!t) throw userError('Team member not found.', 404);
   if (!t.removed_at) throw userError('They are already on the team.', 409);
-  await sql`UPDATE admins SET removed_at = NULL, session_version = COALESCE(session_version, 0) + 1 WHERE id = ${t.id}`;
+  // Back on the team, but NOT back with their old password (owner,
+  // 14 Nov 2026). Someone who has been off the team may have been off it
+  // for months; letting the password they last used work again means an
+  // account comes back to life on a secret nobody has checked since. So
+  // the password is made unusable and they are sent a fresh link to set a
+  // new one, good for two hours.
+  //
+  // '!' is not a bcrypt hash and never compares true, so sign-in simply
+  // fails. Raising session_version at the same time kills any older invite
+  // or reset link they were still holding — including one sent before they
+  // were taken off.
+  await sql`UPDATE admins SET removed_at = NULL, password_hash = '!', session_version = COALESCE(session_version, 0) + 1 WHERE id = ${t.id}`;
   await logAudit(sql, { action: 'admin_restored', success: true, actorType: 'admin', ...audit, targetType: 'admin', targetId: t.id, metadata: { email: t.email } });
-  return team(sql);
+  const out = await team(sql);
+  // The endpoint sends the email: it owns the token maker and the mailer.
+  const row = (await soft(sql`SELECT id, email, name, COALESCE(to_jsonb(a)->>'role', 'admin') AS role,
+                                     COALESCE(session_version, 0) AS session_version
+                                FROM admins a WHERE a.id = ${t.id}`))[0];
+  return Object.assign(out, { restored: row ? { id: row.id, email: row.email, name: row.name, role: ROLES[row.role] || row.role, sv: Number(row.session_version) || 0 } : null });
 }
 
 // Naming (or unnaming) another super admin. Only a super admin may, and the
@@ -225,11 +248,20 @@ async function summarise(sql, { ticketId, orderId, reason, kind }) {
     const r = await fetch('https://api.anthropic.com/v1/messages', { method: 'POST', signal: ctrl.signal,
       headers: { 'x-api-key': process.env.ANTHROPIC_API_KEY, 'anthropic-version': '2023-06-01', 'content-type': 'application/json' },
       body: JSON.stringify({ model: process.env.SUPPORT_CHAT_MODEL || 'claude-haiku-4-5-20251001', max_tokens: 400,
-        system: 'You summarise an Aerva customer-support conversation for a reviewer who must approve or reject an action. Be neutral and factual, at most 120 words, plain text. Cover: what the customer reported, what evidence or facts appear in the conversation, what was already tried, and what the customer is asking for. Do not recommend a decision.',
-        messages: [{ role: 'user', content: `Proposed action: ${KINDS[kind]}${orderId ? ' on booking ' + orderId : ''}.\nAgent's reason: ${reason}\n\nConversation:\n${timeline.slice(0, 24000)}` }] }) });
+        // Plain sentences, no markdown, no questions back. It used to
+        // return "**Summary**" with the asterisks showing, write in Aerva's
+        // own jargon, and end by asking the reviewer which booking was
+        // meant — because it had been handed an internal row number as if
+        // it were a booking reference (owner, 14 Nov 2026).
+        system: 'You summarise an Aerva customer-support conversation for a reviewer who must approve or reject an action. Write 2 to 4 plain sentences, at most 100 words, in ordinary English a person could read aloud. Say what the customer reported, what was established, and what they are asking for. PLAIN TEXT ONLY: no markdown, no asterisks, no headings, no bullet points, no labels like "Summary:". Never ask the reviewer a question and never ask for clarification — if something is unclear, say what is known and stop. Do not recommend a decision. Refer to a booking only by its confirmation code or the property name, never by a number you were not given.',
+        messages: [{ role: 'user', content: `Proposed action: ${KINDS[kind]}.\nAgent's reason: ${reason}\n\nConversation:\n${timeline.slice(0, 24000)}` }] }) });
     clearTimeout(timer);
     const d = await r.json().catch(() => ({}));
-    const text = (d.content || []).filter(c => c.type === 'text').map(c => c.text).join('').trim();
+    let text = (d.content || []).filter(c => c.type === 'text').map(c => c.text).join('').trim();
+    // Belt and braces: strip any markdown that comes back anyway, and drop
+    // a closing sentence that asks the reviewer something.
+    text = text.replace(/\*\*/g, '').replace(/^#+\s*/gm, '').replace(/^[-•]\s*/gm, '')
+               .replace(/\s*(Clarification needed|Please clarify|Which booking|It is unclear which)[^.]*\.\s*$/i, '').trim();
     return r.ok && text ? text : fallback;
   } catch (e) { return fallback; }
 }
@@ -239,6 +271,14 @@ async function summarise(sql, { ticketId, orderId, reason, kind }) {
 async function checkAndPreview(sql, kind, p) {
   const order = p.orderId ? (await sql`SELECT o.*, l.host_id, l.property_name FROM orders o LEFT JOIN listings l ON l.id = o.listing_id WHERE o.id = ${Number(p.orderId)}`)[0] : null;
   if (['cancel_refund', 'partial_refund', 'deposit_refund'].includes(kind) && !order) throw userError('Choose the booking.');
+  // No second refund on a booking that has already had one (owner,
+  // 14 Nov 2026) — refused here, at the point of proposing, so a
+  // representative is told before they have promised a guest anything.
+  // A deposit is a separate pot of money, so it is not caught by this.
+  if (['cancel_refund', 'partial_refund'].includes(kind) && order) {
+    const stop = await require('./_refunds').refuseSecondRefund(sql, order.id, { ticketId: p.ticketId || null, by: p.byEmail || null });
+    if (stop) throw stop;
+  }
   if (kind === 'cancel_refund') {
     const pct = Number(p.refundPercent);
     if (!(pct >= 0 && pct <= 100)) throw userError('Refund must be 0 to 100%.');
@@ -293,10 +333,17 @@ async function checkAndPreview(sql, kind, p) {
     const CONDUCT = ['cooperative', 'neutral', 'difficult', 'abusive', 'not_involved'];
     const conduct = String(p.conduct || '').trim();
     if (!CONDUCT.includes(conduct)) throw userError('Choose how the person behaved — it goes on the case record.');
+    // The OTHER party's conduct too, whenever there is one. Resolving a
+    // request demands both (see adminReply in _support.js), so collecting
+    // only the first meant a decline was approved and then failed to carry
+    // out with "record how the other party behaved" — found while building
+    // the host step, 14 Nov 2026.
+    const otherConduct = String(p.otherConduct || '').trim();
+    if (order && !CONDUCT.includes(otherConduct)) throw userError('Choose how the other party behaved too — the case record needs both before a request can be closed.');
     const ground = String(p.ground || '').trim();
     if (!GROUNDS[ground]) throw userError('Choose the ground for turning it down — it goes on the case record.');
-    return { order, params: { orderId: order ? order.id : null, message: tell, conduct, ground },
-             preview: { message: tell, conduct, ground, groundLabel: GROUNDS[ground] } };
+    return { order, params: { orderId: order ? order.id : null, message: tell, conduct, otherConduct: otherConduct || undefined, ground },
+             preview: { message: tell, conduct, otherConduct: otherConduct || undefined, ground, groundLabel: GROUNDS[ground] } };
   }
   throw userError('Unknown action.');
 }
@@ -307,9 +354,39 @@ async function propose(sql, { kind, params = {}, reason, ticketId = null, admin,
   if (why.length < 10) throw userError('Explain why, in a sentence or two — the reviewer decides on it.');
   const tid = Number(ticketId) || null;
   if (tid && !(await sql`SELECT 1 FROM support_tickets WHERE id = ${tid}`).length) throw userError('Support request not found.', 404);
-  const c = await checkAndPreview(sql, kind, params);
-  const dup = c.params.orderId ? (await sql`SELECT id FROM support_actions WHERE kind = ${kind} AND order_id = ${c.params.orderId} AND status IN ('pending', 'approving')`)[0] : null;
-  if (dup) throw userError(`This is already waiting for approval (#${dup.id}).`, 409);
+  // THE HOST STEP COMES FIRST (owner, 14 Nov 2026). On a request about a
+  // booking, nothing can be proposed until the representative has said
+  // whether the host is needed — and, if they are, asked them. A reviewer
+  // should never have to guess whether the other side was heard.
+  if (tid) {
+    try {
+      const S = require('./_support');
+      const step = await S.hostStep(sql, tid);
+      if (step && step.hasBooking && !step.answered) {
+        throw userError('Answer “do we need the host on this?” first — it is the first step on the case, and the reviewer sees the answer.', 409);
+      }
+      if (step && step.needed === true && !step.reply && !step.noAnswer) {
+        throw userError('The host has been asked but has not answered yet. Record what they said, or mark that they did not answer, before proposing anything.', 409);
+      }
+    } catch (err) { if (err.isUserFacing) throw err; /* before the database update: carry on */ }
+  }
+  const c = await checkAndPreview(sql, kind, Object.assign({}, params, { ticketId: tid, byEmail: admin.email }));
+  // One live proposal of a kind per booking. 'awaiting_admin' and 'returned'
+  // are live too: the first is approved and waiting to be paid, the second
+  // is being reworked by the representative on that same row. Leaving them
+  // out let a second proposal be raised on a booking that already had one
+  // in flight, and both could reach a super admin — who would then be asked
+  // to pay the same thing twice.
+  const dup = c.params.orderId ? (await sql`SELECT id, status FROM support_actions
+                                            WHERE kind = ${kind} AND order_id = ${c.params.orderId}
+                                              AND status IN ('pending', 'approving', 'awaiting_admin', 'returned')`)[0] : null;
+  if (dup) {
+    throw userError(dup.status === 'awaiting_admin'
+      ? `This is already approved and waiting for a super admin (#${dup.id}). Nothing more can be raised on this booking until they decide.`
+      : dup.status === 'returned'
+      ? `This was sent back to be done again (#${dup.id}). Change that one and send it again rather than raising another.`
+      : `This is already waiting for approval (#${dup.id}).`, 409);
+  }
   const summary = await summarise(sql, { ticketId: tid, orderId: c.params.orderId, reason: why, kind });
   const row = (await sql`INSERT INTO support_actions (kind, ticket_id, order_id, guest_id, listing_id, params, reason, summary, preview, proposed_by, proposed_by_email)
     VALUES (${kind}, ${tid}, ${c.params.orderId || null}, ${c.params.guestId || (c.order ? c.order.guest_id : null) || null}, ${c.params.listingId || (c.order ? c.order.listing_id : null) || null},
@@ -334,7 +411,10 @@ function describe(kind, p, pv = {}) {
   if (kind === 'partial_refund') return `${inr(p.amount)} back to the guest, paid by ${p.hostPays ? 'the host' : 'Aerva'}; the booking stays.`;
   if (kind === 'deposit_refund') return `${inr(pv.toGuest)} of the ${inr(pv.deposit)} deposit back to the guest${pv.toHost ? `, ${inr(pv.toHost)} to the host` : ''}.`;
   if (kind === 'block_guest_listing') return `${pv.person || 'The guest'} would no longer see or book ${pv.listing || 'the listing'}.`;
-  if (kind === 'decline') return `Turned down — ${GROUNDS[pv.ground || p.ground] || 'a ground on the record'}. Nothing is paid and nothing changes. The person is told: “${(pv.message || p.message || '').slice(0, 300)}”`;
+  // Written as what WOULD happen. It used to read "Turned down — …" on a
+  // proposal nobody had approved yet, so a card marked WAITING described
+  // itself in the past tense (owner, 14 Nov 2026).
+  if (kind === 'decline') return `The request is turned down on the ground that ${(GROUNDS[pv.ground || p.ground] || 'a ground on the record').replace(/^The /, 'the ')}. No money is paid and nothing on the booking changes. The person is sent these words: “${(pv.message || p.message || '').slice(0, 300)}”`;
   return pv.person ? `About ${pv.person}${pv.listing ? ' at ' + pv.listing : ''}.` : '';
 }
 async function notifyReviewers(sql, row) {
@@ -355,8 +435,34 @@ async function withdraw(sql, { id, admin, audit }) {
   return { ok: true };
 }
 
+// The host step, for the approvals card: a reviewer and a super admin both
+// need to see whether the other side was heard before money was promised
+// (owner, 14 Nov 2026).
+async function hostStepFor(sql, ticketIds) {
+  const ids = [...new Set((ticketIds || []).map(Number).filter(Boolean))];
+  if (!ids.length) return new Map();
+  try {
+    const rows = await sql`SELECT id, to_jsonb(s)->>'host_needed' AS needed, to_jsonb(s)->>'host_no_reason' AS no_reason,
+                                  to_jsonb(s)->>'host_ask' AS ask, to_jsonb(s)->>'host_reply' AS reply,
+                                  to_jsonb(s)->>'host_no_answer' AS no_answer
+                             FROM support_tickets s WHERE s.id = ANY(${ids})`;
+    return new Map(rows.map(r => [Number(r.id), {
+      needed: r.needed == null ? null : r.needed === 'true',
+      whyNot: r.no_reason || null, ask: r.ask || null, reply: r.reply || null, noAnswer: r.no_answer === 'true',
+      line: r.needed == null ? 'Not decided'
+        : r.needed !== 'true' ? `Host not needed — ${r.no_reason || 'no reason given'}`
+        : r.reply ? `Host asked: “${String(r.ask || '').slice(0, 120)}” — they said: “${String(r.reply).slice(0, 200)}”`
+        : r.no_answer === 'true' ? `Host asked: “${String(r.ask || '').slice(0, 120)}” — they did not answer`
+        : `Host asked: “${String(r.ask || '').slice(0, 120)}” — waiting for their answer`
+    }]));
+  } catch (err) { return new Map(); }
+}
+
 async function list(sql, { status = 'pending' } = {}) {
-  const want = status === 'all' ? null : status === 'done' ? ['done', 'failed', 'rejected', 'withdrawn'] : ['pending', 'approving'];
+  // "Waiting" means waiting on somebody: a reviewer, or a super admin at
+  // the money gate (owner, 14 Nov 2026). Sent-back ones are the
+  // representative's to move, so they are listed with the open set too.
+  const want = status === 'all' ? null : status === 'done' ? ['done', 'failed', 'rejected', 'withdrawn'] : ['pending', 'approving', 'awaiting_admin', 'returned'];
   const rows = await sql`
     SELECT a.*, t.ref AS ticket_ref, o.suite_name, o.arrival, o.departure, o.status AS booking_status, o.total, to_jsonb(o)->>'confirmation_code' AS code,
            g.name AS guest_name, g.email AS guest_email, l.property_name
@@ -364,9 +470,11 @@ async function list(sql, { status = 'pending' } = {}) {
     LEFT JOIN support_tickets t ON t.id = a.ticket_id LEFT JOIN orders o ON o.id = a.order_id
     LEFT JOIN guests g ON g.id = a.guest_id LEFT JOIN listings l ON l.id = a.listing_id
     WHERE (${want}::text[] IS NULL OR a.status = ANY(${want}::text[]))
-    ORDER BY (a.status IN ('pending', 'approving')) DESC, a.proposed_at DESC LIMIT 200`;
+    ORDER BY (a.status IN ('pending', 'approving', 'awaiting_admin')) DESC, a.proposed_at DESC LIMIT 200`;
   const counts = await sql`SELECT status, count(*)::int AS n FROM support_actions GROUP BY status`;
-  return { kinds: KINDS, actions: rows.map(r => ({ ...r, kindLabel: KINDS[r.kind], description: describe(r.kind, r.params || {}, r.preview || {}) })), counts: Object.fromEntries(counts.map(c => [c.status, c.n])) };
+  const hosts = await hostStepFor(sql, rows.map(r => r.ticket_id));
+  return { kinds: KINDS, actions: rows.map(r => ({ ...r, kindLabel: KINDS[r.kind], description: describe(r.kind, r.params || {}, r.preview || {}),
+             hostStep: hosts.get(Number(r.ticket_id)) || null })), counts: Object.fromEntries(counts.map(c => [c.status, c.n])) };
 }
 
 // ---------------------------------------------------------------- approving
@@ -431,9 +539,33 @@ async function unblockGuest(sql, { listingId, guestId, audit }) {
   return { ok: true };
 }
 
-async function review(sql, razorpay, { id, approve, note, admin, audit }) {
-  const a = (await sql`SELECT * FROM support_actions WHERE id = ${Number(id) || 0}`)[0];
+// The reviewer's three ways out (owner, 14 Nov 2026):
+//   approve  — as proposed, or CHANGED first. A reviewer may change the
+//              action and approve it in one go: the owner chose that over
+//              sending a changed action back for a second approval, knowing
+//              it lets a reviewer decide a refund alone. What they changed
+//              is recorded beside what was proposed and stays on the case
+//              for ever — that record is the check that is left.
+//   return   — sent back to the representative to do again. Not a
+//              rejection: nothing is decided, and they may change it and
+//              propose it afresh.
+//   reject   — the answer is no, with a note the representative reads.
+async function review(sql, razorpay, { id, approve, action, note, changes, admin, audit }) {
+  let a = (await sql`SELECT * FROM support_actions WHERE id = ${Number(id) || 0}`)[0];
   if (!a) throw userError('Proposal not found.', 404);
+  const what = ['approve', 'reject', 'return'].includes(String(action || '')) ? String(action) : (approve ? 'approve' : 'reject');
+  if (what === 'return') {
+    const why = String(note || '').trim().slice(0, 1000);
+    if (why.length < 5) throw userError('Say what should be done differently — the representative sees it.');
+    const r = await sql`UPDATE support_actions SET status = 'returned', returned_by = ${admin.id}, returned_by_email = ${admin.email},
+                          returned_at = now(), review_note = ${why}
+                        WHERE id = ${a.id} AND status = 'pending' RETURNING id`;
+    if (!r.length) throw userError('This proposal has already been decided.', 409);
+    await logAudit(sql, { action: 'support_action_returned', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id,
+      metadata: { kind: a.kind, note: why, proposedBy: a.proposed_by_email } });
+    return { status: 'returned' };
+  }
+  approve = what === 'approve';
   // An admin's own non-money action is carried out as they send it (below,
   // in propose): that is the one case where the proposer is the approver.
   if (Number(a.proposed_by) === Number(admin.id) && !admin.selfApproveAllowed) {
@@ -449,13 +581,71 @@ async function review(sql, razorpay, { id, approve, note, admin, audit }) {
     await logAudit(sql, { action: 'support_action_rejected', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id, metadata: { kind: a.kind, note: why } });
     return { status: 'rejected' };
   }
-  // Refunding Aerva's service fee: an admin only, case by case.
+  // The reviewer changed it before approving. The representative's version
+  // is kept in original_kind/original_params and shown beside it on the
+  // case for ever, so what each person decided is never in doubt. The new
+  // version goes through checkAndPreview like any proposal, so every rule
+  // that applies to proposing applies to changing.
+  if (changes && (changes.kind || changes.params)) {
+    const newKind = changes.kind ? String(changes.kind) : a.kind;
+    if (!KINDS[newKind]) throw userError('Choose what should be done instead.');
+    const changeNote = String(changes.note || note || '').trim().slice(0, 1000);
+    if (changeNote.length < 5) throw userError('Say what you changed and why — the representative and the record both see it.');
+    const c = await checkAndPreview(sql, newKind, Object.assign({}, a.params || {}, changes.params || {}, { ticketId: a.ticket_id || null, byEmail: admin.email }));
+    const upd = await sql`UPDATE support_actions
+        SET original_kind = COALESCE(original_kind, ${a.kind}),
+            original_params = COALESCE(original_params, ${JSON.stringify(a.params || {})}::jsonb),
+            kind = ${newKind}, params = ${JSON.stringify(c.params)}::jsonb, preview = ${JSON.stringify(c.preview)}::jsonb,
+            changed_by = ${admin.id}, changed_by_email = ${admin.email}, changed_at = now(), change_note = ${changeNote}
+        WHERE id = ${a.id} AND status = 'pending' RETURNING *`;
+    if (!upd.length) throw userError('This proposal has already been decided.', 409);
+    a = upd[0];
+    await logAudit(sql, { action: 'support_action_changed', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id,
+      metadata: { from: { kind: a.original_kind, params: a.original_params }, to: { kind: newKind, params: c.params }, note: changeNote, proposedBy: a.proposed_by_email } });
+  }
+  // Refunding Aerva's service fee: an admin only, case by case. Checked
+  // after any change, so a reviewer cannot add it on the way through.
   if (a.kind === 'cancel_refund' && a.params && a.params.refundFee && (admin.role || 'admin') !== 'admin') {
     throw userError('This refunds Aerva’s service fee — only an admin can approve it.', 403);
   }
+  // THE GATE (owner, 14 Nov 2026). A reviewer's approval no longer pays.
+  // Anything that moves money stops here and waits for a super admin, who
+  // sees what the customer asked for, what the representative proposed,
+  // what the host said, and what the reviewer made of it — and only then
+  // is money sent. Two people have to agree before a rupee leaves Aerva.
+  // Everything that is NOT money still finishes on the reviewer's word: a
+  // support team that queues for a signature to say "no" stops saying
+  // anything.
+  // gatePassed: the super admin has already decided to pay it, and is
+  // running it through this very path so there is one execution route and
+  // not two.
+  if (MONEY_KINDS.includes(a.kind) && !admin.gatePassed) {
+    const held = await sql`UPDATE support_actions SET status = 'awaiting_admin', reviewed_by = ${admin.id}, reviewed_by_email = ${admin.email},
+                             reviewed_at = now(), review_note = ${why || null}
+                           WHERE id = ${a.id} AND status = 'pending' RETURNING id`;
+    if (!held.length) throw userError('This proposal has already been decided.', 409);
+    if (a.ticket_id) await sql`INSERT INTO support_messages (ticket_id, sender, internal, admin_email, body)
+                               VALUES (${a.ticket_id}, 'support', true, ${admin.email},
+                                       ${`Proposal #${a.id} approved by the reviewer and sent to a super admin. Nothing is paid until they decide.`})`;
+    await logAudit(sql, { action: 'support_action_awaiting_admin', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id,
+      metadata: { kind: a.kind, proposedBy: a.proposed_by_email, changed: !!a.changed_at } });
+    return { status: 'awaiting_admin' };
+  }
   // Only one approval runs: pending → approving in one statement.
-  const claim = await sql`UPDATE support_actions SET status = 'approving', reviewed_by = ${admin.id}, reviewed_by_email = ${admin.email}, reviewed_at = now(), review_note = ${why || null}
-                          WHERE id = ${a.id} AND status = 'pending' RETURNING id`;
+  //
+  // When a super admin is paying something through the gate, the reviewer
+  // already decided it and their name and words are on the row. Writing the
+  // super admin's name over them would leave nobody able to tell who
+  // reviewed it — the opposite of what the gate is for (owner, 14 Nov 2026:
+  // a super admin should see "what reviewer has done and what CR has
+  // done"). So the gate's run claims the row without touching the review
+  // trail; who paid it is recorded as the sign-off, which is a separate
+  // thing from who reviewed it.
+  const claim = admin.gatePassed
+    ? await sql`UPDATE support_actions SET status = 'approving'
+                WHERE id = ${a.id} AND status = 'pending' RETURNING id`
+    : await sql`UPDATE support_actions SET status = 'approving', reviewed_by = ${admin.id}, reviewed_by_email = ${admin.email}, reviewed_at = now(), review_note = ${why || null}
+                WHERE id = ${a.id} AND status = 'pending' RETURNING id`;
   if (!claim.length) throw userError('This proposal has already been decided.', 409);
   const p = a.params || {};
   const label = `${admin.email} (approved #${a.id}, proposed by ${a.proposed_by_email})`;
@@ -479,7 +669,8 @@ async function review(sql, razorpay, { id, approve, note, admin, audit }) {
       // be resolved, and a refusal must be as well documented as a refund.
       await S.adminSaveCase(sql, { id: a.ticket_id, summary: a.reason,
         outcome: `Turned down (${GROUNDS[p.ground] || 'ground not recorded'}) — nothing paid, nothing changed. Approved by ${admin.email} (proposal #${a.id}, proposed by ${a.proposed_by_email}). The person was told: ${p.message}`,
-        requesterConduct: p.conduct || 'neutral', adminEmail: label, audit: { actorIdentifier: admin.email } });
+        requesterConduct: p.conduct || 'neutral', otherConduct: p.otherConduct || undefined,
+        adminEmail: label, audit: { actorIdentifier: admin.email } });
       await S.adminReply(sql, { id: a.ticket_id, text: p.message, status: 'resolved', adminEmail: label,
         audit: { actorIdentifier: admin.email } });
       result = { declined: true, ticketId: a.ticket_id };
@@ -495,6 +686,150 @@ async function review(sql, razorpay, { id, approve, note, admin, audit }) {
   if (a.ticket_id) await sql`INSERT INTO support_messages (ticket_id, sender, internal, admin_email, body) VALUES (${a.ticket_id}, 'support', true, ${admin.email}, ${`Proposal #${a.id} approved and done: ${KINDS[a.kind]}.`})`;
   await logAudit(sql, { action: 'support_action_approved', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id, metadata: { kind: a.kind, proposedBy: a.proposed_by_email, result } });
   return { status: 'done', result };
+}
+
+// Every proposal on a request, with its whole trail, for the case
+// timeline (owner, 14 Nov 2026: "what actually was the next action done —
+// not clear"). The timeline used to reconstruct this from three separate
+// internal notes written at three different times, so a proposal that was
+// later approved still read as waiting, and a proposal to decline read in
+// the past tense before anyone had decided. Now the row itself says.
+const STATE = {
+  pending: 'Waiting for a reviewer', approving: 'Being carried out', done: 'Approved and done',
+  failed: 'Approved, but it did not go through', rejected: 'Rejected', withdrawn: 'Withdrawn',
+  returned: 'Sent back to the representative',
+  awaiting_admin: 'Approved by the reviewer — waiting for a super admin, nothing paid yet'
+};
+async function forTicket(sql, ticketId) {
+  const tid = Number(ticketId) || 0;
+  if (!tid) return [];
+  const rows = await soft(sql`SELECT * FROM support_actions WHERE ticket_id = ${tid} ORDER BY proposed_at, id`);
+  return rows.map(a => {
+    const p = a.params || {}, pv = a.preview || {};
+    const changed = !!a.changed_at;
+    return {
+      id: a.id, kind: a.kind, kindLabel: KINDS[a.kind] || a.kind,
+      status: a.status, stateLabel: STATE[a.status] || a.status,
+      // Present tense while it is still only a proposal, past tense once it
+      // has been carried out. "Turned down — …" on something nobody has
+      // approved yet was the worst of the old wording.
+      what: (a.status === 'done' ? '' : 'Would be: ') + describe(a.kind, p, pv),
+      reason: a.reason, proposedBy: a.proposed_by_email, proposedAt: a.proposed_at,
+      changed, changedBy: a.changed_by_email || null, changedAt: a.changed_at || null, changeNote: a.change_note || null,
+      // What the representative actually asked for, when a reviewer changed it.
+      originally: changed && a.original_kind ? { kindLabel: KINDS[a.original_kind] || a.original_kind, what: describe(a.original_kind, a.original_params || {}, {}) } : null,
+      decidedBy: a.reviewed_by_email || a.returned_by_email || null,
+      decidedAt: a.reviewed_at || a.returned_at || null,
+      note: a.review_note || null, error: a.error || null,
+      signoff: a.signoff || null, signoffLabel: a.signoff ? SIGNOFFS[a.signoff] : null,
+      signoffBy: a.signoff_by_email || null, signoffAt: a.signoff_at || null, signoffNote: a.signoff_note || null
+    };
+  });
+}
+
+// A super admin signs off on what the representative and the reviewer did
+// (owner, 14 Nov 2026). They keep every other power they have — this is
+// oversight on top, not instead.
+//   good     — satisfied. The case is closed to review.
+//   rejected — the decision was wrong, on the record, for whoever made it.
+//   reverted — put it right: the action goes back to be done again.
+//
+// MONEY IS NEVER PULLED BACK BY THIS. A refund that has reached a card is
+// gone; Aerva will not charge a guest again because a decision is being
+// revisited. So a sign-off records the judgement and, where money has
+// already moved, says plainly what has to be put right by hand. Nothing
+// here touches Razorpay.
+const SIGNOFFS = { pay: 'Paid', good: 'Good to proceed', rejected: 'Rejected', reverted: 'Reverted', revert_cr: 'Sent back to the representative' };
+async function signoff(sql, razorpay, { id, decision, note, admin, audit }) {
+  if (!admin || !admin.superAdmin) throw userError('Only a super admin can sign a decision off.', 403);
+  if (!SIGNOFFS[decision]) throw userError('Choose Pay it, Good to proceed, Reject or Revert.');
+  const why = String(note || '').trim().slice(0, 1000);
+  // Agreeing needs no explanation; disagreeing does. Checked after the row
+  // is read, so "this was already decided" is what you are told when that
+  // is the real problem, rather than being asked for a note first.
+  const mustSayWhy = !['good', 'pay'].includes(decision);
+  const a = (await sql`SELECT * FROM support_actions WHERE id = ${Number(id) || 0}`)[0];
+  if (!a) throw userError('Proposal not found.', 404);
+  if (a.signoff && a.status !== 'awaiting_admin') throw userError(`This was already decided — ${SIGNOFFS[a.signoff]}.`, 409);
+  if (mustSayWhy && why.length < 5) throw userError('Say why — the representative and the reviewer both see it.');
+  // ---- the gate: money the reviewer approved, waiting to be paid ----
+  if (a.status === 'awaiting_admin') {
+    if (decision === 'pay') {
+      // Back to pending, then through the one execution path there is, so
+      // every money rule that applies to an approval still applies here.
+      const ready = await sql`UPDATE support_actions SET status = 'pending' WHERE id = ${a.id} AND status = 'awaiting_admin' RETURNING id`;
+      if (!ready.length) throw userError('This has already been decided.', 409);
+      try {
+        const out = await review(sql, razorpay, { id: a.id, approve: true, note: why || a.review_note || 'Paid by a super admin.',
+          admin: Object.assign({}, admin, { gatePassed: true, selfApproveAllowed: true }), audit });
+        await sql`UPDATE support_actions SET signoff = 'pay', signoff_by = ${admin.id}, signoff_by_email = ${admin.email},
+                    signoff_at = now(), signoff_note = ${why || null} WHERE id = ${a.id}`;
+        return Object.assign({ signoff: 'pay' }, out);
+      } catch (err) {
+        // Put it back in the queue rather than losing it.
+        await sql`UPDATE support_actions SET status = 'awaiting_admin' WHERE id = ${a.id} AND status = 'pending'`.catch(() => {});
+        throw err;
+      }
+    }
+    const back = decision === 'reverted' ? 'pending' : decision === 'revert_cr' ? 'returned' : decision === 'rejected' ? 'rejected' : null;
+    if (!back) throw userError('Choose Pay it, Reject, or send it back.');
+    await sql`UPDATE support_actions SET status = ${back}, signoff = ${decision}, signoff_by = ${admin.id}, signoff_by_email = ${admin.email},
+                signoff_at = now(), signoff_note = ${why || null},
+                returned_by = ${back === 'returned' ? admin.id : null}, returned_by_email = ${back === 'returned' ? admin.email : null},
+                returned_at = ${back === 'returned' ? new Date().toISOString() : null}
+              WHERE id = ${a.id} AND status = 'awaiting_admin'`;
+    if (a.ticket_id) await sql`INSERT INTO support_messages (ticket_id, sender, internal, admin_email, body)
+                               VALUES (${a.ticket_id}, 'support', true, ${admin.email},
+                                       ${`Proposal #${a.id} — a super admin decided: ${SIGNOFFS[decision]}. Nothing was paid.${why ? ' ' + why : ''}`})`;
+    await logAudit(sql, { action: 'support_action_gate_' + decision, success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id,
+      metadata: { kind: a.kind, note: why, proposedBy: a.proposed_by_email, reviewedBy: a.reviewed_by_email } });
+    return { status: back, signoff: decision, paid: false };
+  }
+  if (!['done', 'failed', 'rejected', 'returned', 'withdrawn'].includes(a.status))
+    throw userError('Wait until the reviewer has decided — there is nothing to sign off yet.', 409);
+  await sql`UPDATE support_actions SET signoff = ${decision}, signoff_by = ${admin.id}, signoff_by_email = ${admin.email},
+              signoff_at = now(), signoff_note = ${why || null} WHERE id = ${a.id}`;
+  // What a revert can and cannot undo, said plainly rather than implied.
+  const moved = a.status === 'done' && MONEY_KINDS.includes(a.kind);
+  const toPutRight = decision === 'reverted' && moved
+    ? 'Money has already left Aerva on this one, and Aerva does not take a refund back off a guest. Put it right by hand: the booking and the payout are in Lookup.'
+    : null;
+  if (a.ticket_id) {
+    await sql`INSERT INTO support_messages (ticket_id, sender, internal, admin_email, body)
+              VALUES (${a.ticket_id}, 'support', true, ${admin.email},
+                      ${`Signed off by a super admin — ${SIGNOFFS[decision]} (proposal #${a.id}).${why ? ' ' + why : ''}${toPutRight ? ' ' + toPutRight : ''}`})`;
+  }
+  await logAudit(sql, { action: 'support_action_signed_off', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id,
+    metadata: { decision, note: why, kind: a.kind, status: a.status, proposedBy: a.proposed_by_email, reviewedBy: a.reviewed_by_email, changedBy: a.changed_by_email || null } });
+  return { status: a.status, signoff: decision, toPutRight };
+}
+
+// A proposal the reviewer sent back. The representative changes it and
+// sends it again: same row, so the case keeps one thread per decision
+// rather than sprouting a new number every time it goes round.
+async function repropose(sql, { id, kind, params = {}, reason, admin, audit }) {
+  const a = (await sql`SELECT * FROM support_actions WHERE id = ${Number(id) || 0}`)[0];
+  if (!a) throw userError('Proposal not found.', 404);
+  if (a.status !== 'returned') throw userError('Only a proposal that was sent back can be sent again.', 409);
+  const newKind = kind ? String(kind) : a.kind;
+  if (!KINDS[newKind]) throw userError('Choose what should be done.');
+  const why = String(reason || a.reason || '').trim().slice(0, 1500);
+  if (why.length < 10) throw userError('Explain why, in a sentence or two — the reviewer decides on it.');
+  // ticketId and byEmail matter: a second-refund attempt refuses itself
+  // inside here, and the refusal has to land on the case for a super admin
+  // to see and name who tried it. Without them the attempt was refused
+  // silently and the audit line said "unknown".
+  const c = await checkAndPreview(sql, newKind, Object.assign({}, a.params || {}, params || {}, { ticketId: a.ticket_id || null, byEmail: admin.email }));
+  const upd = await sql`UPDATE support_actions
+      SET kind = ${newKind}, params = ${JSON.stringify(c.params)}::jsonb, preview = ${JSON.stringify(c.preview)}::jsonb,
+          reason = ${why}, status = 'pending', proposed_by = ${admin.id}, proposed_by_email = ${admin.email}, proposed_at = now(),
+          returned_by = NULL, returned_by_email = NULL, returned_at = NULL, review_note = NULL
+      WHERE id = ${a.id} AND status = 'returned' RETURNING *`;
+  if (!upd.length) throw userError('This proposal has already moved on.', 409);
+  await notifyReviewers(sql, upd[0]);
+  await logAudit(sql, { action: 'support_action_reproposed', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id,
+    metadata: { kind: newKind, params: c.params, sentBackBy: a.returned_by_email } });
+  return upd[0];
 }
 
 // ---------------------------------------------------------------- for Lookup and the site
@@ -522,4 +857,4 @@ async function isBlocked(sql, guestId, listingId) {
   return (await soft(sql`SELECT 1 FROM listing_guest_blocks WHERE guest_id = ${guestId} AND listing_id = ${listingId}`)).length > 0;
 }
 
-module.exports = { GROUNDS, ROLES, KINDS, roleOf, allowed, me, team, setRole, isSuper, removeMember, restoreMember, setSuper, propose, withdraw, list, review, recordsFor, blockGuest, unblockGuest, blockedListingIds, isBlocked, addReport };
+module.exports = { GROUNDS, ROLES, KINDS, roleOf, allowed, me, team, setRole, isSuper, removeMember, restoreMember, setSuper, propose, withdraw, list, review, signoff, repropose, SIGNOFFS, describe, forTicket, recordsFor, blockGuest, unblockGuest, blockedListingIds, isBlocked, addReport };

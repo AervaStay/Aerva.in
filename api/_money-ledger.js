@@ -105,9 +105,21 @@ function ready(sql) { return !!sql; }
 async function ledger(sql, opts = {}) {
   const limit = Math.max(1, Math.min(MAX, Math.floor(Number(opts.limit)) || PAGE));
   const from = opts.from ? String(opts.from).slice(0, 40) : null;
+  // `to` is EXCLUSIVE here — the first moment not wanted — and every
+  // comparison below is `< to`. The caller converts: the Transactions
+  // endpoint takes the last day the owner wants included and passes the day
+  // after it. Do not add a day here as well.
   const to = opts.to ? String(opts.to).slice(0, 40) : null;
   const before = opts.before ? String(opts.before).slice(0, 40) : null;
   const want = opts.direction === 'in' || opts.direction === 'out' ? opts.direction : null;
+  // Where a rupee has got to, not which way it went (owner, 14 Nov 2026):
+  //   waiting — decided, not sent yet (a payout still due)
+  //   moving  — on its way (a refund Razorpay is still working through)
+  //   failed  — the bank or Razorpay refused it
+  //   done    — settled: received, refunded, or sent
+  // A source that cannot hold the state asked for is skipped whole, so
+  // "Not sent yet" does not page through thousands of payments to find none.
+  const state = ['waiting', 'moving', 'failed', 'done'].includes(opts.state) ? opts.state : null;
   const q = String(opts.q || '').trim().slice(0, 120);
   const like = q ? '%' + q.toLowerCase() + '%' : null;
   // One extra row tells us whether there is another page.
@@ -123,7 +135,8 @@ async function ledger(sql, opts = {}) {
   };
 
   // ---- Money in: a guest's payment for one or more bookings ----
-  if (want !== 'out') await part('booking payments', async () => {
+  const moneyInFits = !state || state === 'done';
+  if (want !== 'out' && moneyInFits) await part('booking payments', async () => {
     const got = await sql`
       SELECT o.razorpay_payment_id AS pid, min(o.razorpay_order_id) AS rz_order,
              min(o.created_at) AS at, count(*)::int AS bookings,
@@ -161,7 +174,7 @@ async function ledger(sql, opts = {}) {
   });
 
   // ---- Money in: one person's place in a group booking ----
-  if (want !== 'out') await part('group payments', async () => {
+  if (want !== 'out' && moneyInFits) await part('group payments', async () => {
     const got = await sql`
       SELECT c.id, c.amount::numeric AS amount, c.razorpay_payment_id AS pid, c.razorpay_order_id AS rz_order,
              c.paid_at AS at, c.first_name, c.last_name, c.email, c.places, c.kind,
@@ -195,7 +208,7 @@ async function ledger(sql, opts = {}) {
   });
 
   // ---- Money in: the extra payment when a booking grew ----
-  if (want !== 'out') await part('change payments', async () => {
+  if (want !== 'out' && moneyInFits) await part('change payments', async () => {
     const got = await sql`
       SELECT ch.id, ch.difference::numeric AS amount, ch.razorpay_payment_id AS pid, ch.razorpay_order_id AS rz_order,
              COALESCE(ch.applied_at, ch.accepted_at, ch.created_at) AS at, ch.summary,
@@ -235,6 +248,9 @@ async function ledger(sql, opts = {}) {
        WHERE (${from}::text IS NULL OR (r.created_at AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
          AND (${to}::text IS NULL OR (r.created_at AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${before}::timestamptz IS NULL OR r.created_at < ${before}::timestamptz)
+         AND (${state}::text IS NULL OR (${state} = 'failed' AND r.status = 'failed')
+              OR (${state} = 'moving' AND r.status IN ('new', 'creating', 'pending'))
+              OR (${state} = 'done' AND r.status = 'processed'))
          AND (${like}::text IS NULL OR lower(o.guest_email) LIKE ${like} OR lower(o.suite_name) LIKE ${like}
               OR lower(coalesce(r.razorpay_refund_id, '')) LIKE ${like} OR lower(r.razorpay_payment_id) LIKE ${like}
               OR lower(coalesce(o.confirmation_code, '')) LIKE ${like} OR lower(coalesce(c.email, '')) LIKE ${like})
@@ -268,6 +284,7 @@ async function ledger(sql, opts = {}) {
          AND (${from}::text IS NULL OR (COALESCE(c.refunded_at, c.refund_claimed_at) AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
          AND (${to}::text IS NULL OR (COALESCE(c.refunded_at, c.refund_claimed_at) AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${before}::timestamptz IS NULL OR COALESCE(c.refunded_at, c.refund_claimed_at) < ${before}::timestamptz)
+         AND (${state}::text IS NULL OR ${state} = 'done')
          AND (${like}::text IS NULL OR lower(coalesce(c.email, '')) LIKE ${like} OR lower(coalesce(l.property_name, '')) LIKE ${like}
               OR lower(coalesce(c.razorpay_refund_id, '')) LIKE ${like} OR lower(coalesce(c.razorpay_payment_id, '')) LIKE ${like})
        ORDER BY COALESCE(c.refunded_at, c.refund_claimed_at) DESC
@@ -301,6 +318,9 @@ async function ledger(sql, opts = {}) {
        WHERE (${from}::text IS NULL OR (COALESCE(p.sent_at, p.created_at) AT TIME ZONE 'Asia/Kolkata') >= ${from}::timestamp)
          AND (${to}::text IS NULL OR (COALESCE(p.sent_at, p.created_at) AT TIME ZONE 'Asia/Kolkata') < ${to}::timestamp)
          AND (${before}::timestamptz IS NULL OR COALESCE(p.sent_at, p.created_at) < ${before}::timestamptz)
+         AND (${state}::text IS NULL OR (${state} = 'waiting' AND p.status = 'due')
+              OR (${state} = 'failed' AND p.status = 'failed')
+              OR (${state} = 'done' AND p.status = 'sent'))
          AND (${like}::text IS NULL OR lower(coalesce(h.email, '')) LIKE ${like} OR lower(coalesce(h.name, '')) LIKE ${like}
               OR lower(coalesce(gu.email, '')) LIKE ${like} OR lower(coalesce(o.suite_name, '')) LIKE ${like}
               OR lower(coalesce(p.razorpayx_payout_id, '')) LIKE ${like} OR lower(coalesce(p.reference, '')) LIKE ${like}
