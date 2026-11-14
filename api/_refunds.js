@@ -332,9 +332,21 @@ module.exports = { safeRefund, pollRefunds, refundAcrossPayments, hasChangePayme
 // different kinds, and used to go straight through.
 const DAYS_TO_ARRIVE = '5 to 7 working days';
 
+// What has already been refunded of the BOOKING's own money.
+//
+// The deposit is a separate pot: it is held, and it goes back after a
+// normal stay, which says nothing at all about whether the stay itself was
+// refunded. Counting it here meant any booking whose deposit had been
+// returned — every finished stay — looked like a booking that had already
+// been refunded, and the one-refund rule then refused a refund that was
+// genuinely owed, on every route at once. The rule was written to exclude
+// deposits ("a deposit is a separate pot of money, so it is not caught by
+// this") and did not. Found by moneydd_test, 14 Nov 2026.
+const NOT_BOOKING_MONEY = ['deposit'];
 async function refundsOn(sql, orderId) {
   const rows = await sql`SELECT kind, amount, status, created_at FROM refunds
                          WHERE order_id = ${Number(orderId) || 0} AND status <> 'failed'
+                           AND kind <> ALL(${NOT_BOOKING_MONEY}::text[])
                          ORDER BY created_at`;
   const total = rows.reduce((t, r) => t + Math.round(Number(r.amount) || 0), 0);
   return { any: rows.length > 0, rows, totalPaise: total, totalInr: Math.round(total / 100), first: rows[0] || null, last: rows[rows.length - 1] || null };

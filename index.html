@@ -212,7 +212,17 @@
       <div class="search-field search-field-where">
         <label for="searchCity">Where</label>
         <div class="place-input-wrap">
-          <input type="text" id="searchCity" placeholder=" " autocomplete="off">
+          <!-- autocomplete="off" is IGNORED by Chrome and Safari on a field
+               they take for a contact field, which is how a guest who had
+               just registered got their own email address dropped into
+               "Where" (owner, 14 Nov 2026). An unrecognised token IS
+               honoured where "off" is not, and the password managers are
+               told to keep out by their own attributes. A random name is
+               set at load (aerva.js) so a saved-value heuristic has
+               nothing to match on. -->
+          <input type="search" id="searchCity" placeholder=" " autocomplete="aerva-no-fill"
+                 data-lpignore="true" data-1p-ignore data-form-type="other" data-bwignore="true"
+                 inputmode="search" spellcheck="false" aria-autocomplete="list">
           <span class="place-hint" id="placeHint"><span id="placeHintText"></span></span>
           <div class="place-suggestions" id="placeSuggestions" style="display:none;"></div>
         </div>

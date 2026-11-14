@@ -510,12 +510,28 @@ async function decorateBookings(sql, guestId, bookings) {
                               JOIN orders b ON b.razorpay_order_id = a.razorpay_order_id
                               WHERE b.id = ANY(${ids}) AND g.status <> 'withdrawn'`;
       const by = new Map(gifts.map(x => [Number(x.row_id), x]));
+      // Is the stay still ahead of us? Both answers below hang on it:
+      // a gift can be sent, changed or stopped only before check-in.
+      //
+      // IT FAILS SAFE. `String(b.local_today || '')` made an unknown date
+      // into the empty string, and every real date sorts after '', so a
+      // missing local_today turned the guard into "always allowed" — the
+      // wrong way round for an action that takes somebody's stay away. If
+      // we cannot tell what day it is at the property, we do not offer it
+      // (owner, 14 Nov 2026: "Change recipient" and "Stop gift" on a stay
+      // the recipient was already in).
+      const stillAhead = (b) => {
+        const today = String(b.local_today || '').slice(0, 10);
+        const arrival = String(b.arrival || '').slice(0, 10);
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(today) || !/^\d{4}-\d{2}-\d{2}$/.test(arrival)) return false;
+        return arrival > today;
+      };
       bookings.forEach(b => {
         const g = by.get(Number(b.id));
         if (g) b.gift = buyerView(g);
-        b.can_gift = !g && !b.group && b.status === 'paid' && (b.listing_type || 'stay') === 'stay' && !b.transfer_change_id
-                     && String(b.arrival).slice(0, 10) > String(b.local_today || '').slice(0, 10);
-        if (g) b.can_change_gift = b.status === 'paid' && String(b.arrival).slice(0, 10) > String(b.local_today || '').slice(0, 10);
+        const ahead = stillAhead(b);
+        b.can_gift = !g && !b.group && b.status === 'paid' && (b.listing_type || 'stay') === 'stay' && !b.transfer_change_id && ahead;
+        if (g) b.can_change_gift = b.status === 'paid' && ahead;
       });
     }
     const acct = await accountOf(sql, guestId);

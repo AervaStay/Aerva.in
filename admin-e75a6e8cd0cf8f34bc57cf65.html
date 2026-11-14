@@ -123,6 +123,14 @@
   .sup-flag{display:inline-block; font-size:11.5px; padding:2px 7px; border-radius:999px; margin:2px 4px 2px 0; background:#f1ebe2; color:#5a5349; white-space:nowrap;}
   .sup-late{background:#fbe9e6; color:#a3402f; font-weight:600;}
   .sup-us{background:#f4ecdc; color:#7c6030;}
+  /* Somebody else's request: readable, but plainly not yours to answer. */
+  .sup-locked{margin:8px 0; padding:10px 12px; border:1px solid #e0cfa8; border-left:4px solid #c89a3c; border-radius:6px; background:#fdf7ea; font-size:13.5px; line-height:1.45;}
+  /* The case record as a super admin reads it: somebody else's words. */
+  .sup-case.is-ro .sup-ro-row{display:grid; grid-template-columns:150px minmax(0,1fr); gap:10px; padding:7px 0; border-top:1px solid #efe7da; font-size:13.5px; line-height:1.5;}
+  .sup-case.is-ro .sup-ro-row:first-of-type{border-top:0;}
+  .sup-case.is-ro .sup-ro-k{color:#7a6a52; font-weight:600;}
+  .sup-case.is-ro .sup-ro-v{white-space:pre-wrap; overflow-wrap:anywhere;}
+  @media (max-width:640px){ .sup-case.is-ro .sup-ro-row{grid-template-columns:1fr; gap:2px;} }
   .sup-safety{background:#a3402f; color:#fff;}
   .sup-row{cursor:pointer;} .sup-row:hover td{background:#faf6f0;}
   /* Support tab, made readable (owner, 12 Nov 2026) */
@@ -2709,7 +2717,13 @@
           <strong>${escAdmin(r.listing || '')}</strong> · booking #${Number(r.orderId)} · ${escAdmin(refundKindLabel(r.kind))} · ${escAdmin(r.currency)} ${Number(r.amount).toLocaleString('en-IN')}
           <div style="margin-top:4px; ${r.status === 'failed' || stuck(r) ? 'color:#a3402f;' : 'opacity:0.75;'}">${r.status === 'failed' ? 'Failed: ' + escAdmin(r.failure || 'not refunded') + ' · attempts ' + Number(r.attempts) : stuck(r) ? 'Not started: interrupted before reaching Razorpay (since ' + payDate(r.createdAt) + ')' : 'In progress: waiting for Razorpay to confirm'}</div>
           ${r.bookingStands && (r.status === 'failed' || stuck(r)) ? '<div style="margin-top:4px; font-size:13px;">The booking was not cancelled and still stands, so this is not retried here: cancel it again from Lookup or Approvals once the cause is fixed.</div>' : ''}
-          ${(r.status === 'failed' || stuck(r)) && !r.bookingStands ? `<button class="approve-btn" style="margin-top:8px;" onclick="retryRefund(${Number(r.id)})">Retry refund</button>` : ''}
+          ${/* Rule 1 (owner, 14 Nov 2026): only a super admin moves money,
+                and a retry sends a real refund. Shown to nobody else, so
+                the refusal is never a surprise. */''}
+          ${(r.status === 'failed' || stuck(r)) && !r.bookingStands
+            ? (isSuperAdmin()
+                ? `<button class="approve-btn" style="margin-top:8px;" onclick="retryRefund(${Number(r.id)})">Retry refund</button>`
+                : `<p class="lk-sub" style="margin-top:8px;">A super admin sends this refund again.</p>`) : ''}
         </div>`).join('') : '<p style="opacity:0.6;">No refunds waiting. All refunds are confirmed by Razorpay.</p>';
       const dps = data.depositPayouts || [];
       document.getElementById('depositPayoutsList').innerHTML = dps.length ? dps.map(p => `
@@ -2765,7 +2779,7 @@
     const tdsNote = paid && paid.tds ? ` · TDS ${payInr(paid.tds)} (${Number(paid.tdsRate) || 0}%${paid.panFurnished ? '' : ', no PAN'})` : '';
     if(paid && paid.status === 'sent') return `<div style="color:#3a7d44; font-size:13.5px;">✓ Paid ${payDate(paid.sentAt)} · ${payInr(paid.net)}${tdsNote} · Ref ${escAdmin(paid.reference || '')}</div>`;
     if(paid && paid.status === 'processing') return `<div style="color:#8a6c39; font-size:13.5px;">Sending via RazorpayX · ${payInr(paid.net)}${tdsNote}</div>`;
-    const auto = !!window.__autoPayouts;
+    const auto = !!window.__autoPayouts && isSuperAdmin();   /* rule 1: only a super admin moves money (owner, 14 Nov 2026) */
     // Retry: the same safe attempt the scheduler makes (RazorpayX checked first).
     const retry = paid && auto && (paid.status === 'failed' || paid.status === 'due')
       ? `<button class="approve-btn" onclick="retryPayout(${Number(paid.id)})">Retry payout</button>` : '';
@@ -2780,6 +2794,11 @@
       ? `<label style="font-size:13px;">TDS ₹ <input id="payTds-${key}" type="number" min="0" placeholder="auto" style="width:90px; padding:7px; border:1px solid #ccc; border-radius:6px;"></label>
          ${owed ? `<label style="font-size:13px;"><input id="payDed-${key}" type="checkbox" checked> Deduct ${payInr(owed)} cancellation coupons</label>` : ''}`
       : '<span style="font-size:13px; opacity:0.7;">Co-host share: TDS only, no other deductions</span>';
+    // Recording a payout as sent by hand is a money move under rule 1
+    // (owner, 14 Nov 2026), so it is a super admin's alone. Everybody else
+    // sees that it is waiting, and on whom — but no button that would be
+    // refused.
+    if(!isSuperAdmin()) return `${status}<div style="margin:6px 0 10px;"><span class="lk-sub">A super admin sends this and records it.</span></div>`;
     return `${status}<div style="margin:6px 0 10px;">${retry}
       <button class="approve-btn" onclick="document.getElementById('pay-${key}').style.display='flex'">Mark paid (sent by hand)</button>
       <div id="pay-${key}" style="display:none; gap:8px; flex-wrap:wrap; align-items:center; margin-top:8px;">
@@ -2794,7 +2813,7 @@
   function depositPayoutControl(p){
     if(p.status === 'sent') return `<div style="color:#3a7d44; font-size:13.5px;">✓ Paid ${payDate(p.sentAt)} · Ref ${escAdmin(p.reference || '')}</div>`;
     if(p.status === 'processing') return '<div style="color:#8a6c39; font-size:13.5px;">Sending via RazorpayX</div>';
-    const auto = !!window.__autoPayouts;
+    const auto = !!window.__autoPayouts && isSuperAdmin();   /* rule 1: only a super admin moves money (owner, 14 Nov 2026) */
     const status = p.status === 'failed'
       ? `<div style="color:#a3402f; font-size:13.5px;">Failed at the bank: ${escAdmin(p.failure || 'not received')} · attempts ${Number(p.attempts) || 0}</div>`
       : `<div style="color:#a3402f; font-size:13.5px;">Not sent yet${p.failure ? ': ' + escAdmin(p.failure) : ''}</div>`;
@@ -3491,6 +3510,31 @@
       drawSupport(d);
     }catch(e){ box.innerHTML = '<p class="error">Could not load the request.</p>'; }
   }
+  // Did any of it come back? (owner, 14 Nov 2026: "Cancelled shows Rs 7, is
+  // it just cancelled or refunded as well?") A cancelled booking says
+  // nothing about money on its own — the guest may have had all of it back,
+  // part of it, Aerva credit instead, or nothing at all because a refund is
+  // still pending or failed. So the card says which, in money, every time.
+  //
+  // A failed refund is the one worth shouting about: the booking looks
+  // settled and the guest is still out of pocket.
+  function supMoneyLine(t){
+    const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
+    const back = Number(t.refunded) || 0, pending = Number(t.refundPending) || 0;
+    const failed = Number(t.refundFailed) || 0, credit = Number(t.creditGiven) || 0;
+    const bits = [];
+    if(back > 0) bits.push(inr(back) + ' refunded to the payment');
+    if(credit > 0) bits.push(inr(credit) + ' as Aerva credit');
+    if(pending > 0) bits.push('<span style="color:#b4761f;">' + inr(pending) + ' still going through</span>');
+    if(failed > 0) bits.push('<span style="color:#a3402f;"><strong>' + inr(failed) + ' failed</strong>' + (t.refundFailures > 1 ? ' after ' + Number(t.refundFailures) + ' tries' : '') + '</span>');
+    if(!bits.length){
+      // Nothing came back. Only worth saying on a booking that ended — on a
+      // live one it is simply the normal state.
+      const over = ['cancelled', 'refunded'].includes(String(t.booking_status || '').toLowerCase());
+      return over ? '<br><span class="tds-sub">Nothing refunded</span>' : '';
+    }
+    return '<br><span class="tds-sub">' + bits.join(' · ') + '</span>';
+  }
   // The facts row (person, timeline, request, booking, listing). Redrawn on
   // its own when a live update changes the status.
   function supFactsHtml(d){
@@ -3504,7 +3548,7 @@
       signedOut ? '' : `<div><strong>Person</strong><br>${escAdmin(t.person_name || 'Deleted account')}<br>${escAdmin(t.person_email || '')}${t.person_phone ? '<br>' + escAdmin(t.person_phone) : ''}${t.channel === 'chat' ? '<br><span class="sup-flag sup-wa">Chat</span> <span class="tds-sub">Your replies appear in their Aerva Support chat in Messages (and by email).</span>' : ''}${t.callback_phone ? `<br><strong style="color:#a3402f;">Call them back: <a href="tel:${escAdmin(String(t.callback_phone).replace(/[^\d+]/g, ''))}">${escAdmin(t.callback_phone)}</a></strong>` : ''}</div>`,
       t.timings ? `<div><strong>Timeline</strong><br>First reply: ${t.timings.firstResponseMinutes != null ? escAdmin(supDur(t.timings.firstResponseMinutes)) : `<span style="color:${new Date(t.timings.firstResponseDueAt) < new Date() ? '#a3402f' : 'inherit'};">due by ${escAdmin(supDate(t.timings.firstResponseDueAt))}</span>`}<br>Resolved: ${t.timings.resolvedMinutes != null ? 'after ' + escAdmin(supDur(t.timings.resolvedMinutes)) : '—'}</div>` : '',
       `<div><strong>Request</strong><br>${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}<br>Status: ${escAdmin(labels[t.status] || t.status)}<br>Raised ${escAdmin(supDate(t.created_at))}${t.first_response_at ? '<br>First reply ' + escAdmin(supDate(t.first_response_at)) : '<br><span style="color:#a3402f;">No reply yet</span>'}</div>`,
-      t.order_id ? `<div><strong>Booking #${Number(t.order_id)}</strong>${t.confirmation_code ? ' · ' + escAdmin(t.confirmation_code) : ''}<br>${escAdmin(t.suite_name || '')}<br>${escAdmin(day(t.arrival))} → ${escAdmin(day(t.departure))}<br>${escAdmin(t.booking_status || '')}${t.total != null ? ' · ₹' + Number(t.total).toLocaleString('en-IN') : ''}${t.booking_guest_id != null && Number(t.booking_guest_id) !== Number(t.guest_id) ? '<br><em>Raised by the host of this booking</em>' : ''}</div>` : '',
+      t.order_id ? `<div><strong>Booking #${Number(t.order_id)}</strong>${t.confirmation_code ? ' · ' + escAdmin(t.confirmation_code) : ''}<br>${escAdmin(t.suite_name || '')}<br>${escAdmin(day(t.arrival))} → ${escAdmin(day(t.departure))}<br>${escAdmin(t.booking_status || '')}${t.total != null ? ' · ₹' + Number(t.total).toLocaleString('en-IN') : ''}${supMoneyLine(t)}${t.booking_guest_id != null && Number(t.booking_guest_id) !== Number(t.guest_id) ? '<br><em>Raised by the host of this booking</em>' : ''}</div>` : '',
       t.property_name ? `<div><strong>Listing${t.listing_id ? ' #' + Number(t.listing_id) : ''}</strong><br>${escAdmin(t.property_name)}<br>${escAdmin(t.listing_status || '')}</div>` : '',
       supBookingsHtml(d)
     ].filter(Boolean).join('');
@@ -3535,6 +3579,32 @@
   // happened, so it cannot drift from the case below it. A stage that this
   // request never needed is struck through rather than hidden: "no money
   // on this one" is worth knowing at a glance.
+  // Whose request is this? (owner, 14 Nov 2026: "CR can't take action on
+  // other CR requests.") The server refuses either way; this is so the
+  // refusal is never a surprise — a representative looking at a colleague's
+  // request is told at the top that it is being worked on, instead of
+  // typing a reply and being turned away after.
+  //
+  // A reviewer is not shut out: they decide proposals, which hang off the
+  // request rather than belonging to whoever picked it up. A super admin
+  // stands outside it, as everywhere else.
+  function supMine(d){
+    const t = (d && d.ticket) || {};
+    const me = window.ADMIN_ME_INFO || {};
+    if(isSuperAdmin()) return true;
+    // Whoever may DECIDE proposals is a reviewer, whatever their role is
+    // called — the same test the server makes, so the two never disagree.
+    const decides = me.tabs ? me.tabs.indexOf('approvals_decide') >= 0 : (me.role === 'admin' || me.role === 'reviewer');
+    if(decides) return true;
+    if(t.assigned_to == null) return true;          // nobody has it yet
+    return Number(t.assigned_to) === Number(me.id);
+  }
+  function supLockedHtml(d){
+    if(supMine(d)) return '';
+    const who = (d.ticket && d.ticket.assigned_to_email) || 'Another representative';
+    return `<div class="sup-locked"><strong>${escAdmin(who)} is working on this request.</strong>
+      You can read it, but anything you send on it will be refused. Ask a super admin to move it to you.</div>`;
+  }
   function supHorizonHtml(d){
     const H = d.horizon;
     if(!H || !H.stages) return '';
@@ -3555,8 +3625,12 @@
     const cols = `grid-template-columns:repeat(${steps.length}, minmax(86px, 1fr));`;
     return `<div class="sup-horizon">
       <div class="sup-horizon-head"><strong>Where this is:</strong> ${escAdmin(H.where)}
-        ${d.ticket.assigned_to_email ? `<span class="tds-sub">· with ${escAdmin(d.ticket.assigned_to_email)}</span>
-          <button type="button" class="filter-clear" onclick="supAssign(${id}, null)" style="font-size:12px;">unassign</button>`
+        ${d.ticket.assigned_to_email
+          // Taking a request off somebody is a reassignment, and the owner
+          // gave that to super admins alone (14 Nov 2026). Everybody else
+          // is told who has it and nothing more.
+          ? `<span class="tds-sub">· with ${escAdmin(d.ticket.assigned_to_email)}</span>
+             ${isSuperAdmin() ? `<button type="button" class="filter-clear" onclick="supAssign(${id}, null)" style="font-size:12px;">unassign</button>` : ''}`
           : `<button type="button" class="approve-btn" onclick="supAssign(${id}, 'me')" style="padding:3px 10px; font-size:12px; margin-left:6px;">Assign to me</button>`}
       </div>
       <div class="hzh-scroll"><div class="hzh">
@@ -3785,7 +3859,30 @@
         ${n.outcome ? `<div class="sup-msg-body"><em>Outcome:</em> ${escAdmin(n.outcome)}</div>` : ''}
         <div class="sup-msg-body"><em>Behaviour:</em> ${escAdmin(who)} ${escAdmin(C[n.requester_conduct] || '—')}${d.otherParty ? ` · ${escAdmin(other)} ${escAdmin(C[n.other_party_conduct] || '—')}` : ''}${n.conduct_note ? ' — ' + escAdmin(n.conduct_note) : ''}</div>
       </div>`).join('');
-    const caseBox = `<div class="sup-case">
+    // A SUPER ADMIN READS THE CASE RECORD, THEY DO NOT WRITE IT (owner,
+    // 14 Nov 2026: "Super admin won't interact with the guest, so the case
+    // record needs correct design here and this should be displayed just a
+    // text with no need to update by super admin").
+    //
+    // It is the representative's account of what happened, in their words,
+    // and a super admin arrives at the end to judge the money. Giving them
+    // the same boxes invited them to rewrite somebody else's account of a
+    // conversation they were never part of. So they get it as it stands:
+    // who wrote it, when, and what it says.
+    const caseRO = isSuperAdmin();
+    const CX = { cooperative: 'Cooperative', neutral: 'Neutral', difficult: 'Difficult', abusive: 'Abusive', not_involved: 'Not involved' };
+    const roLine = (label, value) => `<div class="sup-ro-row"><span class="sup-ro-k">${escAdmin(label)}</span><span class="sup-ro-v">${value}</span></div>`;
+    const latest = (d.caseNotes || [])[0] || null;
+    const caseBox = caseRO ? `<div class="sup-case is-ro">
+        <h4 style="margin:0 0 4px;">Case record <span class="tds-sub">(written by the representative — you are reading it, not editing it)</span></h4>
+        ${feedback ? `<p style="margin:4px 0 10px; font-size:13.5px;">Feedback: ${feedback}</p>` : ''}
+        ${rec.summary || rec.outcome || rec.requester_conduct ? `
+          ${roLine('The issue', rec.summary ? escAdmin(rec.summary) : '<span class="tds-sub">Not written yet</span>')}
+          ${roLine('What was done', rec.outcome ? escAdmin(rec.outcome) : '<span class="tds-sub">Not written yet</span>')}
+          ${roLine('Behaviour', `${escAdmin(who)}: ${escAdmin(CX[rec.requester_conduct] || '—')}${d.otherParty ? ` · ${escAdmin(other)}: ${escAdmin(CX[rec.other_party_conduct] || '—')}` : ''}${rec.conduct_note ? ` — ${escAdmin(rec.conduct_note)}` : ''}`)}
+          ${latest ? `<p class="tds-sub" style="margin:8px 0 0;">Last saved ${escAdmin(supDate(latest.created_at))}${latest.admin_email ? ' by ' + escAdmin(latest.admin_email) : ''}${(d.caseNotes || []).length > 1 ? ` · ${(d.caseNotes || []).length} versions, all in the timeline below` : ''}</p>` : ''}`
+        : '<p class="tds-sub" style="margin:6px 0 0;">The representative has not written the case record yet.</p>'}
+      </div>` : `<div class="sup-case">
         <h4 style="margin:0 0 4px;">Case record <span class="tds-sub">(internal — never shown to the person; every save is kept)</span></h4>
         ${feedback ? `<p style="margin:4px 0 10px; font-size:13.5px;">Feedback: ${feedback}</p>` : ''}
         <label>Summary of the issue (as you understood it)<textarea id="caseSummary" rows="3">${escAdmin(rec.summary || '')}</textarea></label>
@@ -3801,6 +3898,7 @@
       </div>`;
     box.innerHTML = `<p><a href="#" onclick="loadSupport(); return false;">‹ All requests</a></p>
       <h3 style="margin:6px 0 2px;">${escAdmin(t.ref)} — ${escAdmin(t.subject)}</h3>
+      ${supLockedHtml(d)}
       ${supHorizonHtml(d)}
       <div class="sup-facts" id="supFacts">${facts}</div>
       ${supHostStepHtml(d)}
@@ -3838,7 +3936,14 @@
     supQuickReplies(t);
     loadSuggestions(t.id, false);
     supStartLive();
-    // Propose an action for a reviewer, from the request itself.
+    // Propose an action, from the request itself.
+    //
+    // Open to reviewers again (owner, 14 Nov 2026 afternoon: "CR and
+    // reviewers can propose a refund"), reversing the morning's rule 3,
+    // which refused a reviewer's proposal and left this form on screen for
+    // people the server would turn away on Send. Nobody decides their own
+    // proposal — review() refuses that — and money still stops at the
+    // super admin's gate.
     if(typeof mountPropose === 'function' && (t.order_id || t.listing_id || t.guest_id)) {
       mountPropose(document.getElementById('supPropose'), { ticketId: t.id, orderId: t.order_id || null,
         listingId: t.order_id ? null : (t.listing_id || null), guestId: t.order_id || t.listing_id ? null : (t.guest_id || null),
@@ -3990,7 +4095,9 @@
   function supDur(min){ const m = Math.round(Number(min) || 0); if(m < 60) return m + ' min'; if(m < 1440) return Math.floor(m / 60) + ' h' + (m % 60 ? ' ' + (m % 60) + ' min' : ''); return Math.floor(m / 1440) + ' d' + (Math.floor((m % 1440) / 60) ? ' ' + Math.floor((m % 1440) / 60) + ' h' : ''); }
   async function saveCase(id){
     const v = (x) => { const el = document.getElementById(x); return el ? el.value.trim() : ''; };
-    const err = document.getElementById('caseErr'); err.textContent = '';
+    // No form on screen for a super admin, so no error line either.
+    const err = document.getElementById('caseErr') || { textContent: '' };
+    err.textContent = '';
     try{
       const res = await fetch(API_BASE + '/api/get-pending-listings', { method: 'POST', headers: authHeaders(true),
         body: JSON.stringify({ supportCase: { ticketId: id, summary: v('caseSummary'), outcome: v('caseOutcome'), requesterConduct: v('caseReq') || null, otherConduct: v('caseOther') || null, conductNote: v('caseNote') } }) });
@@ -4715,8 +4822,15 @@ function lkBookingHtml(d){
   const guestName = [b.guest_first_name, b.guest_last_name].filter(Boolean).join(' ') || b.account_name || '—';
   const refundsHtml = (d.refunds || []).length ? d.refunds.map(r => lkKv(`${lkEsc(r.kind)} · ${lkDay(r.created_at)}`, `${lkInr(Number(r.amount) / 100)} ${lkChip(r.status)}`)).join('') : '<p class="lk-sub">No refunds.</p>';
   const payoutsHtml = (d.payouts || []).length ? d.payouts.map(p => lkKv(`${lkEsc(p.kind)} payout · ${lkDay(p.created_at)}`, `${lkInr(p.net != null ? p.net : p.gross)} ${lkChip(p.status)}`)).join('') : '<p class="lk-sub">No payout planned yet.</p>';
-  const canCancel = b.status === 'paid';
-  const canRefund = ['paid', 'cancelled'].includes(b.status) && b.razorpay_payment_id && Number(m.refundable) > 0;
+  // ONE ADMIN REFUND PER BOOKING (owner, 14 Nov 2026: "if refund is already
+  // processed, then cant see that option enabled either"). The server has
+  // always refused the second one — "This booking has already been
+  // refunded, so nothing more can be paid on it" — but the button stayed
+  // lit whenever anything was still technically refundable, so the only
+  // way to learn the rule was to press it and be turned away.
+  const alreadyRefunded = Number(m.refunded) > 0;
+  const canCancel = b.status === 'paid' && !alreadyRefunded;
+  const canRefund = ['paid', 'cancelled'].includes(b.status) && b.razorpay_payment_id && Number(m.refundable) > 0 && !alreadyRefunded;
   const sentPayout = (d.payouts || []).some(p => p.kind === 'booking' && !['due', 'failed'].includes(p.status));
   return `
     <div class="lk-head"><h2>${lkEsc(b.suite_name)}</h2>${lkChip(st)}${b.code || b.confirmation_code ? ` <code style="font-size:15px;">${lkEsc(b.confirmation_code || b.code)}</code>` : ''}</div>
@@ -4741,7 +4855,16 @@ function lkBookingHtml(d){
         ${b.charge_currency && b.charge_currency !== 'INR' ? lkKv('Charged in', lkEsc(b.charge_currency)) : ''}${lkKv('Policy', lkEsc(b.cancellation_policy || 'flexible'))}
         ${(d.linked || []).length ? lkKv('Same payment', d.linked.map(x => `<button type="button" class="lk-link" style="padding:2px 6px;" onclick="lkOpen('booking', ${Number(x.id)})">#${Number(x.id)} ${lkEsc(x.suite_name)}</button>`).join(' ')) : ''}</div>
     </div>
-    ${(window.ADMIN_ROLE || 'admin') === 'admin' && (canCancel || canRefund) ? `<div class="lk-actions"><h3>Act directly (admin)</h3><p>The guest and the host are emailed, and a note from Aerva is added to their message thread. Refunds go to the original payment method; Razorpay is checked first, so nothing is refunded twice.</p>
+    ${/* MONEY IS A SUPER ADMIN'S (owner, 14 Nov 2026: "Representative and
+          Reviewer won't be shown option to refund"). The gate used to read
+          the ROLE, which was wrong at both ends: a plain admin saw buttons
+          the server refuses under rule 1, and a super admin whose role is
+          reviewer or agent — the only person actually allowed — saw
+          nothing. It reads the super-admin flag now, the same thing the
+          server enforces on. */''}
+    ${!isSuperAdmin() && (canCancel || canRefund) ? `<p class="lk-sub" style="margin:14px 0 0;">Cancelling and refunding are a super admin's. To ask for money back on this booking, raise it on the request and a super admin signs it off.</p>` : ''}
+    ${alreadyRefunded && isSuperAdmin() ? `<p class="lk-sub" style="margin:14px 0 0;"><strong>This booking has already been refunded (${lkInr(m.refunded)}).</strong> A booking takes one admin refund, so there is nothing more to pay on it here.</p>` : ''}
+    ${isSuperAdmin() && (canCancel || canRefund) ? `<div class="lk-actions"><h3>Act directly (super admin)</h3><p>The guest and the host are emailed, and a note from Aerva is added to their message thread. Refunds go to the original payment method; Razorpay is checked first, so nothing is refunded twice.</p>
       ${canCancel ? `<div class="lk-act"><h4>Cancel this booking</h4>
         <p class="lk-hint">The deposit (if still held) is always returned in full. The percentage applies to the booking price and its GST; a part paid by coupon comes back as a coupon. Whatever is not refunded goes to the host, less commission.${(d.linked || []).length ? ' <strong>The linked booking on the same payment is cancelled with it.</strong>' : ''}${sentPayout ? ' <strong style="color:#a3402f;">The host has already been paid for this booking, so it cannot be cancelled here — use “Refund without cancelling”.</strong>' : ''}</p>
         <div class="lk-form">
@@ -4887,11 +5010,14 @@ function lkGroupCommitmentsHtml(list){
 }
 // Admin → Approvals → Group bookings: every group (split payment) and
 // organisers' unpaid commitments.
-async function loadGroupBookings(){
+async function loadGroupBookings(all){
   const body = document.getElementById('apGroupBody');
   if(!body) return;
   try{
-    const d = await lkGet('groupBookings=1');
+    // Only the ones that need attention (owner, 14 Nov 2026). A confirmed,
+    // fully paid group has no decision on it and does not belong on a page
+    // of decisions; the whole history is one click away.
+    const d = await lkGet('groupBookings=1' + (all ? '&scope=all' : ''));
     const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
     const ST = { starting: 'Starting', open: 'Collecting', awaiting_gap: 'Organiser paying the rest', awaiting_confirm: 'Organiser paying the rest', confirming: 'Confirming', confirmed: 'Confirmed', cancelled: 'Did not go ahead', failed: 'Not opened' };
     const commit = (d.commitments || []).length ? `<h4 style="margin:6px 0;">Unpaid commitments</h4><div class="lk-list">${d.commitments.map(c => `<div class="lk-row" data-group-commitment="${Number(c.id)}"><strong>${inr(c.commitmentUnpaid)}</strong> unpaid by ${lkEsc(c.organiser.name || c.organiser.email)} (${lkEsc(c.organiser.email)}) · G-${Number(c.id)} ${lkEsc(c.listing)} · ${lkEsc(c.arrival)} → ${lkEsc(c.departure)} · ${lkDay(c.commitmentUnpaidAt)} <button type="button" class="lk-btn lk-btn-sm" onclick="lkOpen('guest', ${Number(c.organiser.guestId)})">Open guest</button></div>`).join('')}</div>` : '<p class="lk-empty">No unpaid commitments.</p>';
@@ -4899,7 +5025,11 @@ async function loadGroupBookings(){
       <td>${lkEsc(x.organiser.name || '')}<br><small>${lkEsc(x.organiser.email)}</small></td><td>${lkEsc(ST[x.status] || x.status)}${x.rest != null ? `<br><small>rest ${inr(x.rest)}</small>` : ''}</td>
       <td>${Number(x.paidPlaces)} / ${Number(x.places)}<br><small>${Number(x.payers)} payer${x.payers === 1 ? '' : 's'}</small></td><td>${inr(x.paid)} of ${inr(x.total)}${x.refunded ? `<br><small>${inr(x.refunded)} refunded</small>` : ''}</td>
       <td>${x.bookingId ? '#' + Number(x.bookingId) : ''}${x.outcome ? `<br><small>${lkEsc(x.outcome)}</small>` : ''}${x.commitmentUnpaid != null ? `<br><small style="color:#a3402f;">commitment unpaid ${inr(x.commitmentUnpaid)}</small>` : ''}</td></tr>`).join('');
-    body.innerHTML = commit + (rows ? `<div style="overflow-x:auto;"><table class="tds-table"><thead><tr><th>Group</th><th>Stay</th><th>Organiser</th><th>Status</th><th>Places paid</th><th>Money</th><th>Outcome</th></tr></thead><tbody>${rows}</tbody></table></div>` : '<p class="lk-empty">No group bookings yet.</p>');
+    const empty = all ? 'No group bookings yet.' : 'No group bookings need attention.';
+    const link = all
+      ? '<p class="lk-sub" style="margin:8px 0 0;">Showing every group. <button type="button" class="lk-link" onclick="loadGroupBookings(false)">Only ones needing attention ›</button></p>'
+      : '<p class="lk-sub" style="margin:8px 0 0;">Groups that are confirmed or did not go ahead are not listed — nothing on them to decide. <button type="button" class="lk-link" onclick="loadGroupBookings(true)">Show all groups ›</button></p>';
+    body.innerHTML = commit + (rows ? `<div style="overflow-x:auto;"><table class="tds-table"><thead><tr><th>Group</th><th>Stay</th><th>Organiser</th><th>Status</th><th>Places paid</th><th>Money</th><th>Outcome</th></tr></thead><tbody>${rows}</tbody></table></div>` : `<p class="lk-empty">${empty}</p>`) + link;
   }catch(err){ body.innerHTML = `<p class="lk-empty">${lkEsc(err.message)}</p>`; }
 }
 // Raise a support request on the customer's behalf (server: raiseForCustomer).
@@ -5351,6 +5481,43 @@ async function logHostContact(id){
 }
 // ---- Check-in promise (api/_checkin-promise.js) ----
 const CP_STATUS = { open: 'Open — decide now', confirmed: 'Confirmed — move or refund the guest', rebooking: 'Moving the guest…', refunding: 'Refunding…', rebooked: 'Guest moved', refunded: 'Refunded in full', cleared: 'Not upheld' };
+// How long ago, in words. A list of things waiting on somebody is only
+// useful if it says how long they have been waiting.
+function cpAgo(at){
+  const t = new Date(at).getTime();
+  if(!isFinite(t)) return '';
+  const mins = Math.max(0, Math.round((Date.now() - t) / 60000));
+  if(mins < 60) return `${mins} min ago`;
+  const hrs = Math.round(mins / 60);
+  if(hrs < 48) return `${hrs} hour${hrs === 1 ? '' : 's'} ago`;
+  return `${Math.round(hrs / 24)} days ago`;
+}
+// HAS THE GUEST DONE ANYTHING? (owner, 14 Nov 2026: "where I see the guest
+// has taken any action.") Offers go out and then the card went quiet: it
+// looked the same whether the guest had not opened it, had picked a place
+// and was partway through paying, or had tried and the payment had failed.
+// Doing nothing is itself worth seeing, so "No answer yet" is said out
+// loud rather than left as a blank.
+function cpGuestAction(x, rupees){
+  const p = x.guest_pick;
+  const waited = x.offers_sent_at ? cpAgo(x.offers_sent_at) : '';
+  if(!p){
+    return `<p class="lk-sub" style="margin:4px 0 0; color:#8a6c39;"><strong>No answer from the guest yet.</strong>${waited ? ' Offered ' + lkEsc(waited) + '.' : ''} They have picked nothing and declined nothing.</p>`;
+  }
+  const where = p.name ? lkEsc(p.name) : 'one of the places';
+  const cost = p.difference > 0 ? ` — ${rupees(p.difference)} to pay` : p.difference < 0 ? ` — ${rupees(Math.abs(p.difference))} back to them` : ' — same price';
+  const when = p.at ? ' · ' + lkEsc(cpAgo(p.at)) : '';
+  if(p.status === 'awaiting_payment'){
+    return `<p class="lk-sub" style="margin:4px 0 0; color:#b4761f;"><strong>The guest picked ${where}${cost}, and has not paid it yet.</strong>${when} Nothing is booked until they do.</p>`;
+  }
+  if(p.status === 'failed'){
+    return `<p class="lk-sub" style="margin:4px 0 0; color:#a3402f;"><strong>The guest picked ${where} and the move failed.</strong>${when} They are still in the original booking — move them by hand or refund in full.</p>`;
+  }
+  if(p.status === 'withdrawn'){
+    return `<p class="lk-sub" style="margin:4px 0 0;">The guest picked ${where} and then changed their mind${when}. Waiting on them again.</p>`;
+  }
+  return `<p class="lk-sub" style="margin:4px 0 0;">The guest picked ${where}${cost}${when} · ${lkEsc(p.status || '')}</p>`;
+}
 async function loadCheckinPromise(){
   const body = document.getElementById('apCheckinBody');
   if(!body) return;
@@ -5384,7 +5551,8 @@ async function loadCheckinPromise(){
         <span>Host ${lkEsc(x.host_name || '')}${x.host_phone ? ' · <a href="tel:' + lkEsc(x.host_phone) + '">' + lkEsc(x.host_phone) + '</a>' : ''}${x.host_email ? ' · ' + lkEsc(x.host_email) : ''}</span>
         ${x.details ? `<div style="margin-top:8px; padding:8px 10px; background:#f7f3ee; border-radius:8px; font-size:13.5px;"><strong>Guest:</strong> ${lkEsc(x.details)}<br><small>${files(x.evidence)}</small></div>` : ''}
         ${x.status === 'open' ? `<div style="margin-top:6px; padding:8px 10px; border:1px solid #eee; border-radius:8px; font-size:13.5px;"><strong>Host:</strong> ${x.host_response ? lkEsc(x.host_response) + `<br><small>${files(x.host_evidence)}</small>` : '<span style="opacity:0.6;">No reply yet</span>'}</div>` : ''}
-        ${offers.length ? `<p class="lk-sub" style="margin:8px 0 0;"><strong>${offers.length} other place${offers.length === 1 ? '' : 's'} offered to the guest</strong> for the nights they have left — they pick one and pay the difference, or decline them all for a full refund:<br>${offers.map(o => `${lkEsc(o.name)} — ${o.difference > 0 ? 'guest pays ' + rupees(o.difference) + ' more' : o.difference < 0 ? rupees(Math.abs(o.difference)) + ' back to them as Aerva credit' : 'same price'}`).join('<br>')}</p>` : ''}
+        ${offers.length ? `<p class="lk-sub" style="margin:8px 0 0;"><strong>${offers.length} other place${offers.length === 1 ? '' : 's'} offered to the guest</strong>${x.offers_sent_at ? ' ' + cpAgo(x.offers_sent_at) : ''} for the nights they have left — they pick one and pay the difference, or decline them all for a full refund:<br>${offers.map(o => `${lkEsc(o.name)} — ${o.difference > 0 ? 'guest pays ' + rupees(o.difference) + ' more' : o.difference < 0 ? rupees(Math.abs(o.difference)) + ' back to them as Aerva credit' : 'same price'}`).join('<br>')}</p>
+          ${cpGuestAction(x, rupees)}` : ''}
         ${x.status === 'rebooked' ? `<p class="lk-sub" style="margin:8px 0 0;">Moved to booking #${Number(x.rebook_order_id)} · difference ${x.difference > 0 ? 'paid ' : 'credited '}${rupees(Math.abs(x.difference))}${Number(x.recovered_from_host) ? ' · ' + rupees(x.recovered_from_host) + ' to recover from the host' : ''}</p>` : ''}
         ${x.status === 'refunded' ? `<p class="lk-sub" style="margin:8px 0 0;">Refunded ${rupees(x.refund_amount)}${Number(x.recovered_from_host) ? ' · ' + rupees(x.recovered_from_host) + ' to recover from the host' : ''}</p>` : ''}
         ${x.decision_note ? `<p class="lk-sub" style="margin:6px 0 0;">Note: ${lkEsc(x.decision_note)}</p>` : ''}
@@ -5465,6 +5633,12 @@ async function loadApprovals(){
     body.innerHTML = d.actions.map(a => {
       const mine = Number(a.proposed_by) === meId;
       const pend = a.status === 'pending';
+      // Whose proposal is this? (owner, 14 Nov 2026: "Reveiwers cant take
+      // action on other reviewer request.") The first reviewer to act on a
+      // proposal keeps it, even after the representative has raised it
+      // again, so a second reviewer is shown who has it rather than
+      // buttons that would be refused. A super admin is not held by it.
+      const theirs = a.reviewer_owner != null && Number(a.reviewer_owner) !== meId && !isSuperAdmin();
       const stChip = { pending: 'is-due', approving: 'is-due', done: '', failed: 'is-failed', rejected: 'is-cancelled', withdrawn: 'is-completed', returned: 'is-due', awaiting_admin: 'is-due' }[a.status] || '';
       const stWord = { pending: 'Waiting for a reviewer', approving: 'Being carried out', done: 'Approved · done', failed: 'Approved · failed', rejected: 'Rejected', withdrawn: 'Withdrawn', returned: 'Sent back', awaiting_admin: 'Waiting for a super admin — nothing paid yet' }[a.status] || a.status;
       return `<div class="ap-card${pend ? ' is-pending' : ''}">
@@ -5486,14 +5660,15 @@ async function loadApprovals(){
           <div class="ap-thread-body"><p class="lk-sub" style="margin:8px 0 0;">Loading…</p></div></details>` : ''}
         ${a.status !== 'pending' && a.reviewed_by_email ? `<p class="lk-sub" style="margin-top:8px;">${a.status === 'withdrawn' ? 'Withdrawn' : 'Decided by ' + lkEsc(a.reviewed_by_email)} · ${lkWhen(a.reviewed_at)}${a.review_note ? ' — “' + lkEsc(a.review_note) + '”' : ''}${a.error ? `<br><span class="error">${lkEsc(a.error)}</span>` : ''}</p>` : ''}
         ${(a.params || {}).refundFee ? `<p class="lk-sub" style="color:#a3402f; margin-top:8px;"><strong>Refunds Aerva’s service fee</strong> — an exception; only an admin can approve. Why: ${lkEsc((a.params || {}).feeReason || '—')}</p>` : ''}
-        ${pend && canReview() && !mine && (!(a.params || {}).refundFee || isAdminRole()) ? `<div class="lk-form ap-decide">
+        ${pend && theirs ? `<p class="lk-sub" style="color:#8a6c39;"><strong>${lkEsc(a.reviewer_owner_email || 'Another reviewer')} has this one.</strong> They decided it before, so it stays with them. A super admin can step in.</p>` : ''}
+        ${pend && !theirs && canReview() && !mine && (!(a.params || {}).refundFee || isAdminRole()) ? `<div class="lk-form ap-decide">
             <label class="lk-wide">Note (required to reject; the representative sees it)<textarea id="apNote${Number(a.id)}" maxlength="1000"></textarea></label>
             <button type="button" class="lk-btn" onclick="apDecide(${Number(a.id)}, true)">Approve and carry out</button>
             ${a.kind === 'cancel_refund' || a.kind === 'partial_refund' ? `<button type="button" class="lk-btn" onclick="apChange(${Number(a.id)}, '${lkEsc(a.kind)}')">Change the amount and approve</button>` : ''}
             <button type="button" class="lk-btn is-ghost" onclick="apDecide(${Number(a.id)}, false, 'return')">Send back to them</button>
             <button type="button" class="lk-btn is-ghost" onclick="apDecide(${Number(a.id)}, false)">Reject</button></div><p class="lk-msg" id="apMsg${Number(a.id)}"></p>` : ''}
         ${pend && mine ? `<p class="lk-sub" style="color:#8a6c39;"><strong>You proposed this, so you cannot approve it.</strong> Money is never moved by one person alone: another admin or reviewer has to approve it. You can <button type="button" class="lk-link" onclick="apWithdraw(${Number(a.id)})">withdraw it</button> instead.</p>` : ''}
-        ${pend && !canReview() && !mine ? '<p class="lk-sub">Waiting for a reviewer.</p>' : ''}
+        ${pend && !theirs && !canReview() && !mine ? '<p class="lk-sub">Waiting for a reviewer.</p>' : ''}
         ${a.status === 'awaiting_admin' ? (supCanSignoff() ? `<div class="lk-form ap-decide">
             <p class="lk-sub" style="margin:0 0 6px;"><strong>Nothing has been paid.</strong> Money leaves Aerva only when you press Pay it.</p>
             <label class="lk-wide">Note (needed to reject or send back)<textarea id="gateNote${Number(a.id)}" maxlength="1000"></textarea></label>
@@ -5601,8 +5776,14 @@ async function loadTeam(){
     const iAmSuper = !!(ADMIN_ME_INFO && (ADMIN_ME_INFO.canManageTeam || ADMIN_ME_INFO.superAdmin));
     const row = (m) => `<div class="lk-item" style="cursor:default; grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) auto;">
         <span><strong>${lkEsc(m.name || m.email)}</strong>${Number(m.id) === meId ? ' <span class="lk-chip">You</span>' : ''}${m.super_admin ? ' <span class="lk-chip">Super admin</span>' : ''}<span class="lk-sub">${lkEsc(m.email)} · since ${lkDay(m.created_at)}</span></span>
-        <span><select id="role${Number(m.id)}" aria-label="Role of ${lkEsc(m.name || m.email || 'this member')}" style="padding:7px 8px; font:inherit;">${Object.keys(d.roles).map(r => `<option value="${r}"${m.role === r ? ' selected' : ''}>${lkEsc(d.roles[r])}</option>`).join('')}</select></span>
-        <span style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;"><button type="button" class="lk-btn" onclick="saveRole(${Number(m.id)})">Save</button>
+        <span>${iAmSuper
+          // Giving somebody a role is a super admin's alone (owner, 14 Nov
+          // 2026: "super admin can assign roles only. Not other kind can").
+          // Everybody else is shown the role as it stands, rather than a
+          // dropdown and a Save button that would be refused.
+          ? `<select id="role${Number(m.id)}" aria-label="Role of ${lkEsc(m.name || m.email || 'this member')}" style="padding:7px 8px; font:inherit;">${Object.keys(d.roles).map(r => `<option value="${r}"${m.role === r ? ' selected' : ''}>${lkEsc(d.roles[r])}</option>`).join('')}</select>`
+          : `<span class="lk-sub">${lkEsc(d.roles[m.role] || m.role)}</span>`}</span>
+        <span style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">${iAmSuper ? `<button type="button" class="lk-btn" onclick="saveRole(${Number(m.id)})">Save</button>` : ''}
           ${iAmSuper ? `<button type="button" class="lk-btn is-ghost" onclick="setSuperAdmin(${Number(m.id)}, ${m.super_admin ? 'false' : 'true'})">${m.super_admin ? 'Not a super admin' : 'Make super admin'}</button>` : ''}
           ${iAmSuper && Number(m.id) !== meId ? `<button type="button" class="lk-btn is-danger" onclick="removeTeamMember(${Number(m.id)}, '${lkEsc(m.name || m.email).replace(/'/g, "\\'")}')">Take off the team</button>` : ''}</span></div>`;
     const gone = (m) => `<div class="lk-item" style="cursor:default; opacity:0.75; grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) auto;">
@@ -5847,13 +6028,17 @@ function mountPropose(el, ctx){
   // Money needs a second person; nothing else does, for an admin
   // (owner, 12 Nov 2026).
   const MONEY = ['cancel_refund', 'partial_refund', 'deposit_refund'];
-  const atOnce = () => isAdminRole() && !MONEY.includes(sel.value);
+  // A super admin counts as an admin here (owner, 14 Nov 2026: "Super admin
+  // self-approves non-money actions too"). Before this the shortcut read
+  // only the role, so a super admin whose role was reviewer or agent was
+  // told to queue a refusal for somebody junior to them.
+  const atOnce = () => (isAdminRole() || isSuperAdmin()) && !MONEY.includes(sel.value);
   const show = () => {
     el.querySelectorAll('.pp-f').forEach(f => { f.style.display = f.dataset.for === sel.value && !(f.id === id + 'fwWrap' && !document.getElementById(id + 'fee').checked) ? '' : 'none'; });
     const note = document.getElementById(id + 'note'), go = document.getElementById(id + 'go');
     if(note) note.textContent = atOnce()
-      ? 'Nothing here moves money, so as an admin you can do it now. It is written up the same way: who did it, why, and on the request.'
-      : isAdminRole() ? 'This moves money, so another admin or reviewer approves it first. Nothing happens until they do.'
+      ? 'Nothing here moves money, so you can do it now. It is written up the same way: who did it, why, and on the request.'
+      : (isAdminRole() || isSuperAdmin()) ? 'This moves money, so it stops for a super admin to sign off. Nothing is paid until they do.'
       : 'Sent to a reviewer with a summary of the conversation; nothing happens until it is approved.';
     if(go) go.textContent = atOnce() ? 'Do it now' : 'Send for approval';
     const reason = el.querySelector('label.lk-wide:last-of-type');

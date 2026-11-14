@@ -1317,8 +1317,20 @@ async function decorateBookings(sql, guestId, bookings) {
 }
 
 // ---- Admin: the groups list, and organisers' unpaid commitments ----
-async function adminList(sql, { limit = 100 } = {}) {
-  if (!(await ready(sql))) return { notReady: true, groups: [], commitments: [] };
+//
+// A finished group has nothing on it to do: it is confirmed and paid, or it
+// did not go ahead and everyone was refunded. Listing those on the Approvals
+// page put rows in front of a reviewer that carried no decision (owner,
+// 14 Nov 2026, on seeing a confirmed, fully-paid group sitting there).
+//
+// So the default is the ones that need attention: still collecting or
+// waiting on the organiser, plus any organiser who did not pay a commitment
+// they agreed to. scope: 'all' gives the whole history back, for the panel's
+// own "Show all" and anything else that wants it.
+const OPEN_STATUSES = ['starting', 'open', 'awaiting_gap', 'awaiting_confirm', 'confirming'];
+async function adminList(sql, { limit = 100, scope = 'open' } = {}) {
+  if (!(await ready(sql))) return { notReady: true, groups: [], commitments: [], scope };
+  const open = scope !== 'all';
   const rows = await sql`
     SELECT g.id, g.token, g.status, g.places, g.total, g.listing_id, g.arrival, g.departure, g.organiser_guest_id, g.organiser_first_name, g.organiser_last_name, g.organiser_email,
            g.outcome, g.order_id, g.created_at, g.closes_at, g.confirm_by, g.gap, g.commitment_at, g.commitment_unpaid, g.commitment_unpaid_at, l.property_name,
@@ -1327,6 +1339,7 @@ async function adminList(sql, { limit = 100 } = {}) {
            (SELECT count(DISTINCT c.guest_id)::int FROM group_claims c WHERE c.group_id = g.id AND c.status = 'paid') AS payers,
            (SELECT COALESCE(sum(c.refund_amount), 0)::int FROM group_claims c WHERE c.group_id = g.id AND c.refund_status IN ('processed', 'pending')) AS refunded_paise
     FROM group_bookings g LEFT JOIN listings l ON l.id = g.listing_id
+    WHERE ${open} = false OR g.status = ANY(${OPEN_STATUSES}::text[]) OR g.commitment_unpaid IS NOT NULL
     ORDER BY g.id DESC LIMIT ${Math.min(500, Math.max(1, Number(limit) || 100))}`;
   const groups = rows.map(r => ({ id: r.id, token: r.token, status: r.status, listing: r.property_name || '', listingId: r.listing_id, arrival: dateStr(r.arrival), departure: dateStr(r.departure),
     places: r.places, paidPlaces: r.paid_places, payers: r.payers, total: Number(r.total), paid: Number(r.paid), refunded: Math.round(Number(r.refunded_paise) / 100),
@@ -1334,7 +1347,7 @@ async function adminList(sql, { limit = 100 } = {}) {
     committedAt: r.commitment_at, rest: ['awaiting_gap', 'awaiting_confirm'].includes(r.status) ? Number(r.gap) || 0 : null, payBy: r.confirm_by, closesAt: r.closes_at,
     outcome: r.outcome, bookingId: r.order_id, createdAt: r.created_at,
     commitmentUnpaid: r.commitment_unpaid != null ? Number(r.commitment_unpaid) : null, commitmentUnpaidAt: r.commitment_unpaid_at }));
-  return { groups, commitments: groups.filter(x => x.commitmentUnpaid != null) };
+  return { groups, commitments: groups.filter(x => x.commitmentUnpaid != null), scope: open ? 'open' : 'all' };
 }
 // One organiser's unpaid commitments (Admin → Lookup → guest).
 async function commitmentsOf(sql, guestId) {
