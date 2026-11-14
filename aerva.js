@@ -16827,7 +16827,7 @@ function openReportProblem(orderId, listingName, arrivalOnly){
     <h2 style="font-family:'Bodoni Moda', Georgia, serif; font-weight:500; font-size:24px; margin:4px 0 6px;">Report a problem</h2>
     <p class="payout-muted" style="margin:0 0 14px;">${esc(listingName)}</p>
     <p class="step-help">Tell your host and Aerva what is wrong, with photos. Aerva decides after hearing your host.</p>
-    <p class="step-help" id="rpPromise" style="background:#f4eadc; border-radius:8px; padding:10px 12px;"><strong>Aerva’s check-in promise:</strong> if the place does not exist, or is not as listed or not available when you arrive, report it now, on your check-in day (no later than 10 AM the next day). Waiting can cost you your booking payment. Aerva treats it as urgent. If Aerva confirms it, you are offered other places nearby (you pay only any difference; if it costs less, the difference comes back as Aerva credit) — or everything you paid is refunded in full, including Aerva’s service fee.</p>
+    <p class="step-help" id="rpPromise" style="background:#f4eadc; border-radius:8px; padding:10px 12px;"><strong>Aerva’s check-in promise:</strong> if the place does not exist, or is not as listed or not available when you arrive, report it now, on your check-in day (no later than 10 AM the next day). Waiting can cost you your booking payment. Aerva treats it as urgent. If Aerva confirms it, you are offered other places nearby (you pay only the difference in price and GST; if it costs less, the difference comes back as Aerva credit) — or everything you paid is refunded in full, including Aerva’s service fee.</p>
     <label class="payout-label" for="rpReason">What is the problem?</label>
     <select id="rpReason" style="${field}">
       <option value="arrival_fake">On arrival: the property does not exist</option>
@@ -17382,7 +17382,7 @@ function aervaBookingGlance(b){
     }
     if(b.can_change !== false) items.push(`Change dates, guests or add-ons${b.group ? ' (guests can only be added)' : ', or move nights to another property of this host'}: until 10 AM on ${next} (the property’s time). Before check-in a cheaper change refunds the difference; leaving early after check-in gives nothing back for the nights you don’t stay.`);
     if(!b.stay_window_closed) items.push(`Report a problem during the stay: by 10 AM on ${next}, with photos.`);
-    items.push('Aerva’s check-in promise: if on arrival the place does not exist, or is not as listed or not available, report it on your check-in day, no later than 10 AM the next day (with a photo) — waiting can cost you your booking payment. Aerva moves you to another place (you pay only any difference) or refunds everything, including the service fee.');
+    items.push('Aerva’s check-in promise: if on arrival the place does not exist, or is not as listed or not available, report it on your check-in day, no later than 10 AM the next day (with a photo) — waiting can cost you your booking payment. Aerva moves you to another place (you pay only the difference in price and GST) or refunds everything, including the service fee.');
   }
   return `<details class="booking-glance" style="margin:8px 0 0; font-size:13.5px;" onclick="event.stopPropagation()">
     <summary style="cursor:pointer; color:var(--gold-text);">Your booking at a glance</summary>
