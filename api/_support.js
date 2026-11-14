@@ -538,6 +538,30 @@ async function adminGet(sql, id) {
     LEFT JOIN orders o ON o.id = t.order_id LEFT JOIN listings l ON l.id = COALESCE(t.listing_id, o.listing_id)
     WHERE t.id = ${Number(id) || 0}`)[0];
   if (!t) throw userError('Request not found.', 404);
+  // WHAT CAME BACK, not just that it was cancelled (owner, 14 Nov 2026:
+  // "Cancelled shows Rs 7, is it just cancelled or refunded as well?").
+  // A cancelled booking says nothing about money on its own: the guest may
+  // have had it all back, part of it, Aerva credit instead, or nothing yet
+  // because a refund is still pending or failed. Read from the refunds
+  // table rather than from the booking's status, which cannot know.
+  if (t.order_id) {
+    const money = (await sql`SELECT
+          COALESCE(sum(amount) FILTER (WHERE status NOT IN ('failed')), 0)::bigint AS back,
+          COALESCE(sum(amount) FILTER (WHERE status = 'pending'), 0)::bigint AS pending,
+          COALESCE(sum(amount) FILTER (WHERE status = 'failed'), 0)::bigint AS failed,
+          count(*) FILTER (WHERE status = 'failed')::int AS failures
+        FROM refunds WHERE order_id = ${t.order_id}`.catch(() => [{}]))[0] || {};
+    const paise = (v) => Math.round(Number(v || 0) / 100);
+    t.refunded = paise(money.back);
+    t.refundPending = paise(money.pending);
+    t.refundFailed = paise(money.failed);
+    t.refundFailures = Number(money.failures || 0);
+    // Aerva credit given INSTEAD of money going back to the card — the
+    // natural-disaster path does this, and a booking that got credit looks
+    // identical to one that got nothing if you only read the refunds table.
+    t.creditGiven = Math.round(Number(((await sql`SELECT COALESCE(sum(amount), 0)::int AS n FROM fee_credits
+                                                  WHERE source_order_id = ${t.order_id}`.catch(() => [{ n: 0 }]))[0] || {}).n) || 0);
+  }
   const msgs = await sql`SELECT m.id, m.sender, m.internal, m.admin_email, m.body, m.attachments, m.created_at, to_jsonb(m)->>'via' AS via
                          FROM support_messages m WHERE m.ticket_id = ${t.id} ORDER BY m.created_at, m.id`;
   // The timeline in numbers: how long until the first reply, and until resolved.
@@ -1216,11 +1240,18 @@ function horizon(t, acts, host) {
   else if (money.some(x => ['done', 'failed'].includes(x.status))) put('admin', 'done', money.map(x => x.signoffBy ? 'Decided by ' + x.signoffBy : 'Decided').join(' · '));
   else put('admin', 'later', 'It will come here once a reviewer approves');
 
-  // Paid or not, said plainly — the owner asked for exactly this.
+  // Paid or not, said plainly — the owner asked for exactly this, and then
+  // for WHAT was paid (14 Nov 2026: "What is paid, not shown"). The word
+  // "Paid" on its own left the reader to go and find the amount. Each
+  // action already describes itself, so the stage says which ones went
+  // through rather than that something did.
+  const what = (list) => list.map(x => x.what).filter(Boolean).join(' · ') || null;
+  const didPay = money.filter(x => x.status === 'done');
+  const didNot = money.filter(x => x.status === 'failed');
   if (!money.length) put('money', 'skipped', 'No money on this request');
-  else if (money.some(x => x.status === 'done')) put('money', 'done', 'Paid');
-  else if (money.some(x => x.status === 'failed')) put('money', 'now', 'Tried and did not go through');
-  else put('money', 'later', 'Not paid');
+  else if (didPay.length) put('money', 'done', what(didPay) || 'Paid');
+  else if (didNot.length) put('money', 'now', 'Tried and did not go through: ' + (what(didNot) || 'the payment failed'));
+  else put('money', 'later', what(money) ? 'Not paid yet — ' + what(money) : 'Not paid');
 
   put('resolved', ['resolved', 'closed'].includes(t.status) ? 'done' : 'later',
       ['resolved', 'closed'].includes(t.status) ? null : 'The person has not been given an answer yet', at(t.resolved_at));
@@ -1303,9 +1334,26 @@ function horizon(t, acts, host) {
 }
 
 // Picking up a request. By hand for now; the queue will call this too.
-async function assignRequest(sql, { id, adminId, adminEmail, byEmail = 'admin', audit = {} }) {
-  const t = (await sql`SELECT id FROM support_tickets WHERE id = ${Number(id) || 0}`)[0];
+async function assignRequest(sql, { id, adminId, adminEmail, byEmail = 'admin', audit = {}, actor = null }) {
+  const t = (await sql`SELECT id, assigned_to, assigned_to_email FROM support_tickets WHERE id = ${Number(id) || 0}`)[0]
+         || (await sql`SELECT id, NULL::int AS assigned_to, NULL::text AS assigned_to_email FROM support_tickets WHERE id = ${Number(id) || 0}`)[0];
   if (!t) throw userError('Support request not found.', 404);
+  // RULE C (owner, 14 Nov 2026): "Super Admin can reassign then only they
+  // can." Picking up a request nobody holds is not reassigning — that is
+  // the queue working, and without it no representative could ever start.
+  // Taking one off somebody, or handing it to a third person, is a super
+  // admin's alone.
+  if (actor) {
+    const r = require('./_ownership').mayAssign({ current: t.assigned_to, to: adminId, actor });
+    if (!r.ok) {
+      // Written down: an attempt to move a request off somebody is worth a
+      // super admin seeing, whether or not it got anywhere.
+      await logAudit(sql, { action: 'reassign_refused', success: false, actorType: 'admin', ...audit,
+        targetType: 'support_ticket', targetId: t.id,
+        metadata: { heldBy: t.assigned_to_email || null, wanted: adminId == null ? 'nobody' : Number(adminId), by: byEmail } }).catch(() => {});
+      throw userError(r.why, 403);
+    }
+  }
   try {
     if (adminId == null) {
       await sql`UPDATE support_tickets SET assigned_to = NULL, assigned_to_email = NULL, assigned_at = NULL WHERE id = ${t.id}`;

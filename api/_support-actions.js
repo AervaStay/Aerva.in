@@ -57,7 +57,16 @@ const MONEY_KINDS = ['cancel_refund', 'partial_refund', 'deposit_refund'];
 // Still to be decided by somebody: the reviewer's queue and the super
 // admin's gate both count as waiting (owner, 14 Nov 2026).
 const OPEN_STATES = ['pending', 'awaiting_admin'];
-const needsReview = (kind, role) => MONEY_KINDS.includes(kind) || (role || 'admin') !== 'admin';
+// Does this need a second pair of eyes?
+//
+// Money always does — rule 1, and nothing below weakens it. Anything else
+// does only when the person raising it is not an admin, and, since
+// 14 Nov 2026, not a super admin either (owner: "Super admin self-approves
+// non-money actions too"). Before that, super admin was a flag sitting on
+// top of a role, and the shortcut only ever read the role: a plain admin
+// could turn a request down on their own word while a super admin whose
+// role was reviewer had to queue it for somebody junior to them.
+const needsReview = (kind, role, isSuper) => MONEY_KINDS.includes(kind) || (!isSuper && (role || 'admin') !== 'admin');
 
 const GROUNDS = {
   policy: 'The booking’s policy does not allow it',
@@ -68,6 +77,25 @@ const GROUNDS = {
   already_settled: 'Already settled on an earlier request',
   no_evidence: 'Not enough to go on',
   other: 'Something else (written out in full)'
+};
+
+// The same grounds as a CLAUSE, to follow "turned down because …".
+//
+// GROUNDS above are picker labels, written to stand alone in a dropdown.
+// Dropped into a sentence they came out as "turned down on the ground that
+// Already settled on an earlier request" — which is what a reviewer was
+// reading on the card (owner, 14 Nov 2026, screenshot of SR-36302230).
+// Lower-casing the label was not enough: most of them are not clauses at
+// all. So each ground is written twice, once to choose and once to read.
+const GROUND_CLAUSE = {
+  policy: 'the booking’s policy does not allow it',
+  too_late: 'it was asked for after the time allowed',
+  host_decided: 'the host’s decision stands',
+  nothing_wrong: 'nothing was found to be wrong',
+  not_aerva: 'it is not something Aerva decides',
+  already_settled: 'it was already settled on an earlier request',
+  no_evidence: 'there is not enough to go on',
+  other: 'of the reason set out below'
 };
 
 // ---------------------------------------------------------------- roles
@@ -416,7 +444,7 @@ async function propose(sql, { kind, params = {}, reason, ticketId = null, admin,
   // forward; raising it themselves would leave nothing for anyone to
   // review, and the second pair of eyes is the whole point of the step.
   {
-    const r = require('./_money-gate').canPropose({ role: admin && admin.role });
+    const r = require('./_money-gate').canPropose({ role: admin && admin.role, isSuper: !!(admin && admin.isSuper) });
     if (!r.ok) throw userError(r.why, 403);
   }
   if (!KINDS[kind]) throw userError('Choose what should be done.');
@@ -467,7 +495,7 @@ async function propose(sql, { kind, params = {}, reason, ticketId = null, admin,
     metadata: { kind, orderId: row.order_id, ticketId: tid, params: c.params } });
   // An admin doing something that pays nothing: done as they send it, with
   // the same record as an approved one (who, why, what, on the request).
-  if (!needsReview(kind, admin.role)) {
+  if (!needsReview(kind, admin.role, admin.isSuper)) {
     const done = await review(sql, admin.razorpay || null, { id: row.id, approve: true, note: 'Done by the admin who proposed it (no money involved, so no second approval is needed).',
       admin: Object.assign({}, admin, { selfApproveAllowed: true }), audit });
     const after = (await sql`SELECT * FROM support_actions WHERE id = ${row.id}`)[0];
@@ -484,7 +512,7 @@ function describe(kind, p, pv = {}) {
   // Written as what WOULD happen. It used to read "Turned down — …" on a
   // proposal nobody had approved yet, so a card marked WAITING described
   // itself in the past tense (owner, 14 Nov 2026).
-  if (kind === 'decline') return `The request is turned down on the ground that ${(GROUNDS[pv.ground || p.ground] || 'a ground on the record').replace(/^The /, 'the ')}. No money is paid and nothing on the booking changes. The person is sent these words: “${(pv.message || p.message || '').slice(0, 300)}”`;
+  if (kind === 'decline') return `The request is turned down because ${GROUND_CLAUSE[pv.ground || p.ground] || 'of a ground on the record'}. No money is paid and nothing on the booking changes. The person is sent these words: “${(pv.message || p.message || '').slice(0, 300)}”`;
   return pv.person ? `About ${pv.person}${pv.listing ? ' at ' + pv.listing : ''}.` : '';
 }
 async function notifyReviewers(sql, row) {
@@ -609,6 +637,27 @@ async function unblockGuest(sql, { listingId, guestId, audit }) {
   return { ok: true };
 }
 
+// Who a proposal BELONGS to, as opposed to who last decided it.
+//
+// Owner, 14 Nov 2026: "Reveiwers cant take action on other reviewer
+// request." reviewed_by and returned_by both move as a proposal goes round —
+// a repropose clears returned_by, and a super admin's gate run leaves
+// reviewed_by in place on purpose — so neither survives a round trip. A
+// reviewer could send one back, the representative could raise it again, and
+// a DIFFERENT reviewer could then decide it. reviewer_owner is claimed by
+// the first reviewer to touch it and is never moved; _ownership.js reads it.
+//
+// Best-effort on purpose: the column arrives with
+// 2026-11-14-08-action-reviewer-owner.sql, and until that is run a failed
+// claim must not fail the review it belongs to. Reviews then work exactly as
+// they did yesterday, and the rule switches itself on with the migration.
+async function claimReviewer(sql, id, admin) {
+  if (!admin || !admin.id || admin.gatePassed) return;
+  await sql`UPDATE support_actions SET reviewer_owner = COALESCE(reviewer_owner, ${admin.id}),
+              reviewer_owner_email = COALESCE(reviewer_owner_email, ${admin.email})
+            WHERE id = ${id}`.catch(() => {});
+}
+
 // The reviewer's three ways out (owner, 14 Nov 2026):
 //   approve  — as proposed, or CHANGED first. A reviewer may change the
 //              action and approve it in one go: the owner chose that over
@@ -631,6 +680,7 @@ async function review(sql, razorpay, { id, approve, action, note, changes, admin
                           returned_at = now(), review_note = ${why}
                         WHERE id = ${a.id} AND status = 'pending' RETURNING id`;
     if (!r.length) throw userError('This proposal has already been decided.', 409);
+    await claimReviewer(sql, a.id, admin);
     await logAudit(sql, { action: 'support_action_returned', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id,
       metadata: { kind: a.kind, note: why, proposedBy: a.proposed_by_email } });
     return { status: 'returned' };
@@ -647,6 +697,7 @@ async function review(sql, razorpay, { id, approve, action, note, changes, admin
     const r = await sql`UPDATE support_actions SET status = 'rejected', reviewed_by = ${admin.id}, reviewed_by_email = ${admin.email}, reviewed_at = now(), review_note = ${why}
                         WHERE id = ${a.id} AND status = 'pending' RETURNING id`;
     if (!r.length) throw userError('This proposal has already been decided.', 409);
+    await claimReviewer(sql, a.id, admin);
     if (a.ticket_id) await sql`INSERT INTO support_messages (ticket_id, sender, internal, admin_email, body) VALUES (${a.ticket_id}, 'support', true, ${admin.email}, ${`Proposal #${a.id} rejected: ${why}`})`;
     await logAudit(sql, { action: 'support_action_rejected', success: true, actorType: 'admin', ...audit, targetType: 'support_action', targetId: a.id, metadata: { kind: a.kind, note: why } });
     return { status: 'rejected' };
@@ -694,6 +745,7 @@ async function review(sql, razorpay, { id, approve, action, note, changes, admin
                              reviewed_at = now(), review_note = ${why || null}
                            WHERE id = ${a.id} AND status = 'pending' RETURNING id`;
     if (!held.length) throw userError('This proposal has already been decided.', 409);
+    await claimReviewer(sql, a.id, admin);
     if (a.ticket_id) await sql`INSERT INTO support_messages (ticket_id, sender, internal, admin_email, body)
                                VALUES (${a.ticket_id}, 'support', true, ${admin.email},
                                        ${`Proposal #${a.id} approved by the reviewer and sent to a super admin. Nothing is paid until they decide.`})`;
@@ -717,6 +769,7 @@ async function review(sql, razorpay, { id, approve, action, note, changes, admin
     : await sql`UPDATE support_actions SET status = 'approving', reviewed_by = ${admin.id}, reviewed_by_email = ${admin.email}, reviewed_at = now(), review_note = ${why || null}
                 WHERE id = ${a.id} AND status = 'pending' RETURNING id`;
   if (!claim.length) throw userError('This proposal has already been decided.', 409);
+  await claimReviewer(sql, a.id, admin);
   const p = a.params || {};
   const label = `${admin.email} (approved #${a.id}, proposed by ${a.proposed_by_email})`;
   let result;

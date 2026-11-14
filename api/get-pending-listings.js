@@ -575,7 +575,7 @@ module.exports = async (req, res) => {
   // direct money route cannot be reached by a role that merely holds the
   // tab it lives on — nor by a plain Admin.
   try {
-    const moved = await require('./_money-gate').check(req, { isSuper: await isSuperNow() });
+    const moved = await require('./_money-gate').check(req, { isSuper: await isSuperNow(), sql });
     if (moved) {
       await logAudit(sql, { action: 'money_move_by_super_admin', success: true, actorType: 'admin',
         actorIdentifier: ADMIN_ACTOR, targetType: 'request', targetId: null, metadata: { key: moved }, ...ADMIN_AUDIT }).catch(() => {});
@@ -593,6 +593,37 @@ module.exports = async (req, res) => {
     return res.status(403).json({ error: `Your role (${actions.ROLES[ADMIN_ROLE] || 'none'}) cannot do this. Ask an admin.`, role: ADMIN_ROLE });
   }
   const ADMIN_ME = { id: sessionPayload ? Number(sessionPayload.listingId) : 0, email: ADMIN_ACTOR, role: ADMIN_ROLE };
+
+  // WHO OWNS IT (owner, 14 Nov 2026): a representative may not act on
+  // another representative's request, and a reviewer may not act on a
+  // proposal another reviewer has already decided. A super admin stands
+  // outside both, because somebody has to be able to unstick a request
+  // when a person is away. See _ownership.js.
+  try {
+    // decides: may this role decide proposals? Read from the role's tabs
+    // and not from the word 'reviewer', because the owner can create roles
+    // and call them anything (see _ownership.js).
+    let decides = ADMIN_ROLE === 'admin' || ADMIN_ROLE === 'reviewer';
+    try {
+      const roles = require('./_roles');
+      if (await roles.ready(sql)) decides = (await roles.tabsFor(sql, ADMIN_ROLE)).includes('approvals_decide');
+    } catch (err) { /* older database: the role names stand in */ }
+    // Carried on ADMIN_ME from here on: a super admin self-approves
+    // non-money actions and is not held by rule 3 (owner, 14 Nov 2026).
+    // Everything downstream reads it from the one place.
+    ADMIN_ME.isSuper = await isSuperNow();
+    await require('./_ownership').check(sql, req, {
+      id: ADMIN_ME.id, email: ADMIN_ACTOR, role: ADMIN_ROLE, decides, isSuper: ADMIN_ME.isSuper
+    });
+  } catch (err) {
+    if (err.isUserFacing) {
+      await logAudit(sql, { action: 'acted_on_someone_elses', success: false, actorType: 'admin',
+        actorIdentifier: ADMIN_ACTOR, targetType: 'request', targetId: null,
+        metadata: { role: ADMIN_ROLE, keys: Object.keys(req.body || {}) }, ...ADMIN_AUDIT }).catch(() => {});
+      return res.status(err.status).json({ error: err.message });
+    }
+    throw err;
+  }
 
   // GET ?adminMe=1 — who is signed in, and their role (the page shows only what it allows)
   if (req.method === 'GET' && req.query.adminMe === '1') {
@@ -805,7 +836,7 @@ module.exports = async (req, res) => {
       const x = req.body.assignRequest;
       const to = x.adminId === null || x.adminId === undefined ? null : (String(x.adminId) === 'me' ? ADMIN_ME.id : Number(x.adminId));
       const email = to === ADMIN_ME.id ? ADMIN_ME.email : null;
-      return res.status(200).json({ success: true, ...(await support.assignRequest(sql, { id: x.id, adminId: to, adminEmail: email, byEmail: ADMIN_ACTOR, audit: ADMIN_AUDIT })) });
+      return res.status(200).json({ success: true, ...(await support.assignRequest(sql, { id: x.id, adminId: to, adminEmail: email, byEmail: ADMIN_ACTOR, audit: ADMIN_AUDIT, actor: { id: ADMIN_ME.id, email: ADMIN_ACTOR, role: ADMIN_ROLE, isSuper: await isSuperNow() } })) });
     } catch (err) {
       if (!err.isUserFacing) console.error('assignRequest failed:', err);
       return res.status(err.isUserFacing ? (err.status || 400) : 500).json({ error: err.isUserFacing ? err.message : 'Could not do this right now.' });
@@ -947,11 +978,13 @@ module.exports = async (req, res) => {
     }
   }
 
-  // GET ?groupBookings=1 — Admin → Group bookings: every group (split
-  // payment) with its status and money, and organisers' unpaid commitments
-  // (the rest they agreed to pay at 2 hours and did not; _group-bookings.js).
+  // GET ?groupBookings=1[&scope=all] — Admin → Group bookings. By default
+  // the groups that need attention: still collecting or waiting on the
+  // organiser, plus organisers' unpaid commitments (the rest they agreed to
+  // pay at 2 hours and did not). scope=all gives the whole history, which
+  // is what the panel's "Show all" asks for (_group-bookings.js).
   if (req.method === 'GET' && req.query.groupBookings === '1') {
-    try { return res.status(200).json(await require('./_group-bookings').adminList(sql, { limit: Number(req.query.limit) || 100 })); }
+    try { return res.status(200).json(await require('./_group-bookings').adminList(sql, { limit: Number(req.query.limit) || 100, scope: req.query.scope === 'all' ? 'all' : 'open' })); }
     catch (err) { console.error('groupBookings failed:', err); return res.status(500).json({ error: 'Could not load group bookings.' }); }
   }
 
@@ -1394,6 +1427,29 @@ module.exports = async (req, res) => {
   if (req.method === 'POST' && req.body && req.body.supportReply) {
     try {
       const b = req.body.supportReply;
+      // THE REPRESENTATIVE CLOSES THEIR OWN CASE (owner, 14 Nov 2026:
+      // "once done, ticket should be marked to resolved by CR only").
+      //
+      // Answering the person is the representative's job and the last step
+      // of it. A reviewer decided the proposal and a super admin released
+      // the money; neither of them spoke to the guest, so neither of them
+      // is in a position to say the guest has been answered.
+      //
+      // Enforced here rather than in adminReply, because the system marks a
+      // request resolved itself when an approved refusal or a full refund
+      // is carried out — that is Aerva answering, not a person, and it must
+      // keep working. If a representative has left, a super admin moves the
+      // request to somebody else, who can then close it.
+      if (String(b.status || '') === 'resolved') {
+        const t = (await sql`SELECT assigned_to, assigned_to_email FROM support_tickets WHERE id = ${Number(b.ticketId) || 0}`.catch(() => []))[0];
+        const holder = t && t.assigned_to != null ? Number(t.assigned_to) : null;
+        if (holder !== null && holder !== Number(ADMIN_ME.id)) {
+          await logAudit(sql, { action: 'resolve_refused_not_holder', success: false, actorType: 'admin',
+            actorIdentifier: ADMIN_ACTOR, targetType: 'support_ticket', targetId: Number(b.ticketId) || 0,
+            metadata: { heldBy: t.assigned_to_email || null, role: ADMIN_ROLE }, ...ADMIN_AUDIT }).catch(() => {});
+          return res.status(403).json({ error: `${t.assigned_to_email || 'The representative who has this request'} answers the person and closes it. Ask them, or ask a super admin to move the request to you.` });
+        }
+      }
       const out = await support.adminReply(sql, { id: Number(b.ticketId) || 0, text: b.text, status: b.status || null, internal: b.internal === true,
         adminEmail: ADMIN_ACTOR, audit: ADMIN_AUDIT });
       return res.status(200).json({ success: true, ...out });

@@ -250,7 +250,18 @@
         if(store('aerva_profile_prompt_seen') === mark){ then(false); return; }
         store('aerva_profile_prompt_seen', mark);
       }
-      if(!openProfilePrompt(lastPrompt, { then: then })) return;
+      // A BOOKING CANNOT GO ON WITHOUT THIS (owner, 14 Nov 2026: the pay
+      // button did nothing, over and over). For 'login' the prompt is a
+      // courtesy and "Do it later" is honest. On a booking it is not: the
+      // name goes to the host, create-order refuses without it, and "Do it
+      // later" was an escape that led straight back to a pay button which
+      // silently refused again. A booking gets the required wording —
+      // "Back to the form" — and is told why.
+      var booking = opts.reason === 'booking';
+      if(!openProfilePrompt(lastPrompt, booking
+        ? { then: then, required: true,
+            lead: 'Your first and last name, as on your government ID. Your host checks it at check-in, so a booking cannot be made without it.' }
+        : { then: then })) return;
     }catch(e){ then(false); }
   }
 

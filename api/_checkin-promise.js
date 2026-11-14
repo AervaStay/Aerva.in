@@ -1083,6 +1083,33 @@ async function adminView(sql) {
     ORDER BY o.arrival LIMIT 100`;
   const blockedListings = await sql`SELECT l.id, l.property_name, l.city, l.status, l.checkin_blocked_at, h.name AS host_name FROM listings l LEFT JOIN hosts h ON h.id = l.host_id
                                     WHERE l.checkin_blocked_at IS NOT NULL ORDER BY l.checkin_blocked_at DESC LIMIT 100`;
+  // HAS THE GUEST DONE ANYTHING? (owner, 14 Nov 2026: "where I see the
+  // guest has taken any action.")
+  //
+  // Between "places offered" and a finished move or refund the card read
+  // the same whether the guest had not opened it, had picked a place and
+  // was halfway through paying, or had tried and the payment had failed.
+  // All of it was already recorded — in booking_changes, and in when the
+  // offers went out — and none of it reached the screen. One query turns a
+  // silent wait into a visible one.
+  try {
+    const waiting = reports.filter(r => r.status === 'confirmed' && (r.offers || []).length).map(r => Number(r.order_id));
+    if (waiting.length) {
+      const picks = await sql`SELECT DISTINCT ON (order_id) order_id, id, status, requested, difference, created_at, accepted_at
+                                FROM booking_changes
+                               WHERE order_id = ANY(${waiting}) AND requested->>'kind' = 'rebook'
+                               ORDER BY order_id, id DESC`;
+      const by = new Map(picks.map(p => [Number(p.order_id), p]));
+      for (const r of reports) {
+        const p = by.get(Number(r.order_id));
+        if (!p) continue;
+        const n = Number((p.requested || {}).option);
+        const chosen = (r.offers || []).find(o => Number(o.n) === n) || null;
+        r.guest_pick = { option: n, name: chosen ? chosen.name : null, difference: Number(p.difference) || 0,
+                         status: p.status, at: p.accepted_at || p.created_at };
+      }
+    }
+  } catch (e) { /* booking_changes not there yet: the card simply says nothing */ }
   return { ready: true, maxOffers: MAX_OFFERS, reasons: { fake: REASONS.arrival_fake, not_as_listed: REASONS.arrival_failed }, reports, listingBookings, blockedListings, balances: await balances(sql) };
 }
 // What hosts owe Aerva (paid out, then no longer owed): deducted from their later payouts.

@@ -1440,6 +1440,21 @@
       const searchPlaceInput = document.getElementById('searchCity');
       const placeSuggestionsEl = document.getElementById('placeSuggestions');
       if(!searchPlaceInput || !placeSuggestionsEl) return;
+      // A name the browser has never saved anything against, so its
+      // "fill the contact details in" heuristic has nothing to match on.
+      // A guest who had just registered was getting their own email
+      // address put into "Where" (owner, 14 Nov 2026); the attributes in
+      // index.html do most of the work, and this closes the last way in.
+      try{
+        searchPlaceInput.setAttribute('name', 'where-' + Math.random().toString(36).slice(2, 10));
+        // Safari fills on the first focus after a sign-up; if something
+        // that is plainly not a place lands here, it is thrown away.
+        searchPlaceInput.addEventListener('input', function(){
+          if(/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(searchPlaceInput.value.trim())){
+            searchPlaceInput.value = '';
+          }
+        });
+      }catch(e){}
 
       // Directly controls the animated hint's visibility via JS, rather
       // than relying solely on the :placeholder-shown CSS selector — that
@@ -8232,9 +8247,13 @@
         // arrival, the places Aerva offers, "Is this place real?", and the
         // one summary of a booking Aerva moved.
         const promiseHtml = aervaCheckinPromiseHtml(b);
-        const codeHtml = b.confirmation_code && b.status === 'paid'
-          ? `<div class="confirm-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${escapeMessageHtml(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" data-copy-code="${escapeMessageHtml(b.confirmation_code)}">Copy</button></div>`
-          : '';
+        // A code for a stay that has ended is spent (owner, 14 Nov 2026).
+        // It stays on the card as the booking's reference, marked plainly,
+        // with nothing to copy and nobody to show it to.
+        const codeHtml = !(b.confirmation_code && b.status === 'paid') ? ''
+          : completed
+            ? `<div class="confirm-code is-expired"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${escapeMessageHtml(b.confirmation_code)}</span><span class="bk-code-expired">Expired</span></div>`
+            : `<div class="confirm-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${escapeMessageHtml(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" data-copy-code="${escapeMessageHtml(b.confirmation_code)}">Copy</button></div>`;
         const inStay = !!localToday && (b.listing_type || 'stay') === 'stay' && String(b.arrival).slice(0, 10) <= localToday && localToday < String(b.departure).slice(0, 10);
         const reportHtml = inStay && b.can_report !== false ? `<button type="button" class="filter-clear" data-report-problem="${b.id}" data-listing-name="${escapeMessageHtml(b.suite_name || '')}">Report a problem</button>` : '';
         const requestHtml = !upcoming ? ''
@@ -12177,12 +12196,30 @@
   // booking is started, while the account has no first name, last name or
   // phone. Saved or "Do it later": the booking then carries on by itself.
   // Returns true when the pop-up was opened (the caller stops; resume runs after).
-  function aervaProfilePromptFirst(resume){
+  // The profile prompt stands between the pay button and the payment when
+  // a name or phone number is missing. It MUST NOT be silent about it
+  // (owner, 14 Nov 2026: "I am not able to proceed - it keeps on staying
+  // there"). Before this, closing the prompt returned to the same screen
+  // with nothing said, and the next tap did the same thing again.
+  //
+  //   errorEl   the booking form's own error line, so the reason lands
+  //             where the person is looking
+  function aervaProfilePromptFirst(resume, errorEl){
     const GV = window.AervaGuestVerify;
     if(!GV || typeof GV.pending !== 'function') return false;
     if(aervaProfilePromptFirst.passed){ aervaProfilePromptFirst.passed = false; return false; }
     if(!GV.pending()) return false;
-    GV.promptIfNeeded({ reason: 'booking', then: () => {
+    GV.promptIfNeeded({ reason: 'booking', then: (saved) => {
+      if(!saved){
+        // Closed without saving. Say so, rather than leaving a pay button
+        // that will refuse again for a reason nobody can see.
+        if(errorEl){
+          errorEl.textContent = 'Your first and last name are needed before a booking can be made — your host checks them at check-in. Add them above, or tap the button again to fill them in.';
+          errorEl.style.display = 'block';
+          try{ errorEl.scrollIntoView({ block: 'center', behavior: 'smooth' }); }catch(e){}
+        }
+        return;
+      }
       aervaProfilePromptFirst.passed = true;
       // The name just saved goes into "Your details" before the booking
       // carries on (it used to carry on with the fields still empty).
@@ -12207,7 +12244,7 @@
       requireLoginForBooking(() => handleListingBookNow(listing));
       return;
     }
-    if(aervaProfilePromptFirst(() => handleListingBookNow(listing))) return;
+    if(aervaProfilePromptFirst(() => handleListingBookNow(listing), errorEl)) return;
 
     const dates = (renderAvailabilityCalendar._lgDates || {})[listing.id] || {};
     if(!dates.arrival || !dates.departure){
@@ -12647,7 +12684,7 @@
       requireLoginForBooking(() => handleResortBookNow(listing));
       return;
     }
-    if(aervaProfilePromptFirst(() => handleResortBookNow(listing))) return;
+    if(aervaProfilePromptFirst(() => handleResortBookNow(listing), errorEl)) return;
     const selected = Object.values(resortSelectedRooms);
     if(!selected.length){
       errorEl.textContent = 'Please select at least one room.';
@@ -13196,7 +13233,7 @@
       requireLoginForBooking(() => handleExperienceBookNow(exp));
       return;
     }
-    if(aervaProfilePromptFirst(() => handleExperienceBookNow(exp))) return;
+    if(aervaProfilePromptFirst(() => handleExperienceBookNow(exp), errorEl)) return;
 
     // One date: the day it starts. The end comes from the host's own
     // duration, on the server as on this page.
@@ -13532,7 +13569,15 @@
       <p class="bk-sub"><span class="bk-status is-${esc(isCompleted ? 'completed' : b.status)}">${esc(statusWordGuest(isCompleted ? 'completed' : b.status))}</span>${place ? `<span class="bk-place">${esc(place)}</span>` : ''}</p>
       ${b.status === 'cancelled' || b.status === 'refunded' ? `<div class="bk-cancelled">This booking was cancelled${b.cancelled_at ? ` on ${esc(new Date(b.cancelled_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }))}` : ''}.${b.cancellation_reason ? ` Reason: ${esc(b.cancellation_reason)}.` : ''}${refund ? ` ${inr(refund.amount)} ${refund.pending ? 'is being refunded' : 'was refunded'} ${b.group ? 'to the people who paid, each to their own payment method' : 'to your original payment method'}.` : ''}${Number(b.credit_back) > 0 ? ` ${inr(Number(b.credit_back))} is held for you as Aerva credit — use it on another booking, or have it refunded to your payment method any time from your Aerva wallet.` : ''}${Number(b.coupon_back) > 0 ? ` ${inr(Number(b.coupon_back))} came back to you as an Aerva coupon.` : ''}</div>` : ''}
       ${bookingNowHtml(b, refund, inr)}
-      ${b.confirmation_code && b.status === 'paid' ? `<div class="confirm-code bk-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${esc(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" id="bkCopyCode">Copy</button><span class="bk-code-hint">Show this to your host at ${isExp ? 'the start' : 'check-in'}</span></div>` : ''}
+      ${/* A code for a stay that has ended is spent (owner, 14 Nov 2026:
+            "confirmation code, should be expired or shown as expired"). It
+            still shows, because it is the booking's reference on a receipt
+            and in any message about it — but plainly as something that is
+            done, with no instruction to present it to anybody and nothing
+            to copy. */''}
+      ${b.confirmation_code && b.status === 'paid' ? (isCompleted
+        ? `<div class="confirm-code bk-code is-expired"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${esc(b.confirmation_code)}</span><span class="bk-code-expired">Expired</span><span class="bk-code-hint">${isExp ? 'This experience has taken place' : 'This stay has ended'} — the code is no longer needed.</span></div>`
+        : `<div class="confirm-code bk-code" title="Show this at check-in"><span class="confirm-code-label">Confirmation code</span><span class="confirm-code-value">${esc(b.confirmation_code)}</span><button type="button" class="confirm-code-copy" id="bkCopyCode">Copy</button><span class="bk-code-hint">Show this to your host at ${isExp ? 'the start' : 'check-in'}</span></div>`) : ''}
       <div class="bk-facts">${facts.filter(Boolean).map(([k, v]) => `<div><span>${k}</span><strong>${v}</strong></div>`).join('')}</div>
       ${isExp && (b.meeting_point_address || b.meeting_point_details) ? `<p class="bk-note bk-meet"><strong>Meeting point:</strong> ${esc(b.meeting_point_address || '')}${b.meeting_point_details ? ` — ${esc(b.meeting_point_details)}` : ''}</p>` : ''}
       <div class="bk-actions">${actions.join('')}</div>
@@ -17151,7 +17196,11 @@ function bookingNowHtml(b, refund, inr){
   } else if(b.status === 'paid' && days != null && days < 0 && b.review_state === 'open'){
     now = 'Your stay is over.';
     next = b.review_days_left != null
-      ? `You can review it for ${b.review_days_left} more day${b.review_days_left === 1 ? '' : 's'} — after that the chance has gone, for both sides.`
+      // What the host gets, and how long the host has, is not the guest's
+      // business (owner, 14 Nov 2026: "keep the comment in accordance with
+      // guest. What host will get and time is not guest business"). The
+      // guest is told about their own window and nothing else.
+      ? `You can review it for ${b.review_days_left} more day${b.review_days_left === 1 ? '' : 's'} — after that the chance has gone.`
       : 'You can still review it.';
   } else if(b.status === 'paid' && days != null && days < 0){
     now = 'Your stay is over.';

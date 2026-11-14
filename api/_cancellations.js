@@ -384,6 +384,24 @@ async function executePolicyCancellation(sql, razorpay, { orderId, pct, by, note
   if (!main) throw Object.assign(new Error('Booking not found.'), { isUserFacing: true, status: 404 });
   if (main.status !== 'paid') throw Object.assign(new Error('This booking has already been cancelled.'), { isUserFacing: true, status: 409 });
   const percent = Math.max(0, Math.min(100, Math.round(Number(pct) || 0)));
+  // ONE REFUND PER BOOKING, FROM EVERY SCREEN (owner, 14 Nov 2026: "if
+  // action of refund is taken already, no other tab will be allowed to
+  // send again").
+  //
+  // The rule was enforced at two call sites — Lookup's direct refund, and
+  // the proposal chain when a representative raises one — so every other
+  // way in walked round it: the check-in promise's "Refund in full", a
+  // natural-disaster cancellation, a group cancellation. All of them end
+  // up here, which is the one place a cancellation refund is actually
+  // sent, so this is where the rule belongs.
+  //
+  // A preview computes figures and sends nothing, so it is not stopped.
+  // A refund of 0% sends nothing either. A deposit already returned does
+  // not count as the booking having been refunded (see refundsOn).
+  if (!preview && percent > 0) {
+    const stop = await require('./_refunds').refuseSecondRefund(sql, main.id, { by: adminLabel || by || null });
+    if (stop) throw stop;
+  }
   // The host's share can only be recorded once migration_cancellation_policy.sql
   // has run. Checked BEFORE any money moves, never after.
   try { await sql`SELECT refund_percent, payout_on_cancel, cancel_claim FROM orders LIMIT 0`; }

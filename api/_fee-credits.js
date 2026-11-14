@@ -115,9 +115,37 @@ async function giveBack(sql, orderId, amount = Infinity) {
                               restored_at = CASE WHEN COALESCE(restored_amount, 0) + ${take} >= amount THEN now() ELSE restored_at END
                             WHERE id = ${u.id} AND COALESCE(restored_amount, 0) + ${take} <= amount RETURNING id`;
       if (!got.length) continue;
-      await sql`UPDATE fee_credits SET remaining = remaining + ${take}, status = 'active',
+      // NEVER REPORT MONEY THAT DID NOT MOVE (owner, 14 Nov 2026: a guest
+      // was told "₹6 back on their Aerva credit" and their wallet was
+      // empty).
+      //
+      // This UPDATE only matches a credit whose status is 'active' or
+      // 'used'. One being refunded to a card, already refunded, or
+      // cancelled matches nothing — and the result was never read, so the
+      // claim above stood, `back` counted the money as returned, and the
+      // guest was told it had come back. The claim also made it
+      // unretryable: the use row said restored, so nothing would ever put
+      // it right.
+      //
+      // The claim is released when the credit cannot take it. The money
+      // stays where it is, the guest is told the true figure, and the case
+      // is logged loudly for somebody to settle by hand.
+      const put = await sql`UPDATE fee_credits SET remaining = remaining + ${take}, status = 'active',
                   expires_at = GREATEST(expires_at, now() + make_interval(days => ${FEE_CREDIT_DAYS}))
-                WHERE id = ${u.credit_id} AND status IN ('active', 'used')`;
+                WHERE id = ${u.credit_id} AND status IN ('active', 'used') RETURNING id`;
+      if (!put.length) {
+        await sql`UPDATE fee_credit_uses SET restored_amount = GREATEST(0, COALESCE(restored_amount, 0) - ${take}),
+                    restored_at = CASE WHEN COALESCE(restored_amount, 0) - ${take} <= 0 THEN NULL ELSE restored_at END
+                  WHERE id = ${u.id}`.catch(() => {});
+        const why = (await sql`SELECT status FROM fee_credits WHERE id = ${u.credit_id}`.catch(() => []))[0];
+        console.error('Aerva credit NOT given back — the credit cannot take it:',
+          { orderId, creditId: u.credit_id, amount: take, creditStatus: why && why.status });
+        await require('./_audit-log').logAudit(sql, { action: 'credit_giveback_failed', success: false, actorType: 'system',
+          actorIdentifier: 'giveBack', targetType: 'order', targetId: Number(orderId),
+          metadata: { creditId: u.credit_id, amount: take, creditStatus: why ? why.status : null } }).catch(() => {});
+        left -= take;              // nothing further to try against this use
+        continue;                  // and it is NOT counted as given back
+      }
       await entry(sql, u.credit_id, 'given_back', take, { orderId });
       back += take; left -= take;
     }
