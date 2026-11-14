@@ -76,7 +76,16 @@ async function roleOf(sql, sessionPayload, hasValidSecret) {
   if (!sessionPayload) return hasValidSecret ? 'admin' : null;
   const r = (await soft(sql`SELECT to_jsonb(a)->>'role' AS role FROM admins a WHERE a.id = ${Number(sessionPayload.listingId) || 0}`))[0];
   const role = r && r.role;
-  return ROLES[role] ? role : 'admin';      // before the migration: everyone is an admin
+  if (!role) return 'admin';                // before the migration: everyone is an admin
+  // A role the code does not recognise used to be treated as 'admin', which
+  // meant that creating a role called anything at all handed its holders
+  // every power in Admin. Now the roles table decides, and a role that is
+  // not in it gets nothing (owner, 14 Nov 2026).
+  try {
+    const roles = require('./_roles');
+    if (await roles.ready(sql)) return (await roles.get(sql, role)) ? role : null;
+  } catch (err) { /* fall through to the built-in three */ }
+  return ROLES[role] ? role : 'admin';
 }
 
 // What each role may call on get-pending-listings.js. Admin: everything.
@@ -84,13 +93,37 @@ async function roleOf(sql, sessionPayload, hasValidSecret) {
 const MODIFIERS = new Set(['q', 'status', 'subject', 'limit', 'offset', 'before', 'ref', 'mine']);
 const AGENT_GET = new Set(['cancellationRequests', 'adminNotes', 'adminSummary', 'adminMe', 'supportCategories', 'supportTickets', 'supportTicket', 'supportTicketLive', 'lookup', 'lookupBooking', 'lookupGuest', 'lookupListing', 'supportActions', 'priceReviews',
   // Approvals also shows these two lists to every role (read only; the page offers the check-in actions to admins alone and the POSTs stay admin-only).
-  'checkinPromise', 'groupBookings']);
+  'checkinPromise', 'groupBookings',
+  // Their own AI credit, and their switch for it (owner, 14 Nov 2026). Every
+  // role sees this, because every role spends it.
+  'aiBudget']);
 // reproposeAction: a proposal the reviewer sent back, put right and sent
 // again. It is the representative's own work, so it belongs to them
 // (owner, 14 Nov 2026). signoffAction is NOT here for anyone: the function
 // itself allows only a super admin.
-const AGENT_POST = new Set(['supportReply', 'supportCase', 'supportSuggest', 'raiseForCustomer', 'proposeAction', 'withdrawAction', 'reproposeAction', 'hostStep', 'hostReply', 'assignRequest', 'messageHost', 'adminSignOutEverywhere']);
+// supportHostDraft / supportHostSuggest: the AI's summary for a host and
+// the reply cards for that channel. A representative is who these are FOR
+// (owner, 14 Nov 2026), so they belong here — without them the feature
+// answered 403 to the only people meant to use it.
+// aiToggle: their own AI switch. The function behind it allows a person to
+// set their own and a super admin to set anybody's, so it is safe for every
+// role to reach.
+const AGENT_POST = new Set(['supportReply', 'supportCase', 'supportSuggest', 'supportHostDraft', 'supportHostSuggest', 'raiseForCustomer', 'proposeAction', 'withdrawAction', 'reproposeAction', 'hostStep', 'hostReply', 'assignRequest', 'messageHost', 'adminSignOutEverywhere', 'aiToggle']);
 const REVIEWER_POST = new Set([...AGENT_POST, 'reviewAction', 'decidePriceReview', 'decideCancellationRequest']);
+// The roles table decides this once the migration has been run: a role is a
+// list of tabs, and the requests it may make are worked out from those tabs
+// (see _roles.js). The hard-coded sets above are what happens before then,
+// so nothing changes on an older database.
+async function allowedFor(sql, role, req) {
+  if (role === 'admin') return true;
+  if (!role) return false;
+  try {
+    const roles = require('./_roles');
+    if (await roles.ready(sql)) return roles.allows(await roles.tabsFor(sql, role), req);
+  } catch (err) { /* fall through to the built-in sets */ }
+  return allowed(role, req);
+}
+
 function allowed(role, req) {
   if (role === 'admin') return true;
   if (!ROLES[role]) return false;
@@ -105,8 +138,20 @@ function allowed(role, req) {
 
 async function me(sql, sessionPayload, role) {
   const a = sessionPayload ? (await soft(sql`SELECT id, email, name FROM admins WHERE id = ${Number(sessionPayload.listingId) || 0}`))[0] : null;
-  return { id: a ? a.id : null, email: a ? a.email : 'master secret', name: a ? a.name : null, role, roleLabel: ROLES[role] || role, kinds: KINDS,
-           canManageTeam: await isSuper(sql, a ? a.id : null) };
+  // The tabs come from the role, which the owner can change, so the page is
+  // told them rather than keeping a copy of its own that would go stale the
+  // moment a role was edited.
+  let tabs = null, roleLabel = ROLES[role] || role;
+  try {
+    const roles = require('./_roles');
+    if (await roles.ready(sql)) {
+      tabs = await roles.tabsFor(sql, role);
+      const rec = await roles.get(sql, role);
+      if (rec) roleLabel = rec.label;
+    }
+  } catch (err) { /* older database: the page falls back to its own list */ }
+  return { id: a ? a.id : null, email: a ? a.email : 'master secret', name: a ? a.name : null, role, roleLabel, kinds: KINDS,
+           tabs, canManageTeam: await isSuper(sql, a ? a.id : null) };
 }
 
 // Who is on the team, and who has been taken off it. A removed member's row
@@ -214,7 +259,20 @@ async function setSuper(sql, { adminId, isSuper: want, byId, audit }) {
   return team(sql);
 }
 async function setRole(sql, { adminId, role, byId, audit }) {
-  if (!ROLES[role]) throw userError('Choose a role.');
+  // Putting somebody ON a role is a super admin's alone (owner, 14 Nov
+  // 2026: "super admin can assign roles only. Not other kind can"). Before
+  // this, anybody holding the Admin role could move people between roles,
+  // which is the same power as granting permissions.
+  if (!(await isSuper(sql, byId))) throw userError('Only a super admin can put somebody on a role.', 403);
+  // The role has to exist. This used to check the three names written into
+  // the code, which meant a role the owner created could never be given to
+  // anybody — the Roles screen would make it and Team could not use it.
+  let known = !!ROLES[role];
+  try {
+    const roles = require('./_roles');
+    if (await roles.ready(sql)) known = !!(await roles.get(sql, role));
+  } catch (err) { /* older database: the three built-in names */ }
+  if (!known) throw userError('Choose a role.');
   const target = (await sql`SELECT id, email, COALESCE(to_jsonb(a)->>'role', 'admin') AS role FROM admins a WHERE id = ${Number(adminId) || 0}`)[0];
   if (!target) throw userError('Team member not found.', 404);
   if (target.role === 'admin' && role !== 'admin') {
@@ -253,7 +311,11 @@ async function summarise(sql, { ticketId, orderId, reason, kind }) {
         // own jargon, and end by asking the reviewer which booking was
         // meant — because it had been handed an internal row number as if
         // it were a booking reference (owner, 14 Nov 2026).
-        system: 'You summarise an Aerva customer-support conversation for a reviewer who must approve or reject an action. Write 2 to 4 plain sentences, at most 100 words, in ordinary English a person could read aloud. Say what the customer reported, what was established, and what they are asking for. PLAIN TEXT ONLY: no markdown, no asterisks, no headings, no bullet points, no labels like "Summary:". Never ask the reviewer a question and never ask for clarification — if something is unclear, say what is known and stop. Do not recommend a decision. Refer to a booking only by its confirmation code or the property name, never by a number you were not given.',
+        // Short (owner, 14 Nov 2026: "Shorten the AI conversation
+        // summary"). A reviewer is deciding, not reading a report, and the
+        // whole conversation is one click away underneath — so this says
+        // only what they need to hold in their head while they decide.
+        system: 'You summarise an Aerva customer-support conversation for a reviewer who must approve or reject an action. The reviewer can open the whole conversation themselves, so be SHORT: at most 3 sentences and at most 45 words in total. Say only what the customer reported, what was established, and what they are asking for. Leave out dates, amounts, names and detail they can read for themselves unless the decision turns on them. PLAIN TEXT ONLY: no markdown, no asterisks, no headings, no bullet points, no labels like "Summary:". Never ask the reviewer a question and never ask for clarification — if something is unclear, say what is known and stop. Do not recommend a decision. Refer to a booking only by its confirmation code or the property name, never by a number you were not given.',
         messages: [{ role: 'user', content: `Proposed action: ${KINDS[kind]}.\nAgent's reason: ${reason}\n\nConversation:\n${timeline.slice(0, 24000)}` }] }) });
     clearTimeout(timer);
     const d = await r.json().catch(() => ({}));
@@ -349,6 +411,14 @@ async function checkAndPreview(sql, kind, p) {
 }
 
 async function propose(sql, { kind, params = {}, reason, ticketId = null, admin, audit }) {
+  // RULE 3 (owner, 14 Nov 2026): "Reviewer cant directly pitch in without
+  // going through CR review." A reviewer decides what a representative puts
+  // forward; raising it themselves would leave nothing for anyone to
+  // review, and the second pair of eyes is the whole point of the step.
+  {
+    const r = require('./_money-gate').canPropose({ role: admin && admin.role });
+    if (!r.ok) throw userError(r.why, 403);
+  }
   if (!KINDS[kind]) throw userError('Choose what should be done.');
   const why = String(reason || '').trim().slice(0, 1500);
   if (why.length < 10) throw userError('Explain why, in a sentence or two — the reviewer decides on it.');
@@ -810,7 +880,14 @@ async function signoff(sql, razorpay, { id, decision, note, admin, audit }) {
 async function repropose(sql, { id, kind, params = {}, reason, admin, audit }) {
   const a = (await sql`SELECT * FROM support_actions WHERE id = ${Number(id) || 0}`)[0];
   if (!a) throw userError('Proposal not found.', 404);
-  if (a.status !== 'returned') throw userError('Only a proposal that was sent back can be sent again.', 409);
+  // RULE 2 (owner, 14 Nov 2026): "CR can't overturn reviewer action but
+  // reviewer can overturn." A proposal the reviewer SENT BACK is meant to
+  // be done again — that is the reviewer asking for it. Anything else they
+  // decided is theirs, and a representative does not get to reopen it.
+  if (a.status !== 'returned') {
+    const over = require('./_money-gate').canOverturn(a, { role: admin && admin.role, isSuper: !!(admin && admin.isSuper) });
+    throw userError(over.ok ? 'Only a proposal that was sent back can be sent again.' : over.why, 409);
+  }
   const newKind = kind ? String(kind) : a.kind;
   if (!KINDS[newKind]) throw userError('Choose what should be done.');
   const why = String(reason || a.reason || '').trim().slice(0, 1500);
@@ -857,4 +934,4 @@ async function isBlocked(sql, guestId, listingId) {
   return (await soft(sql`SELECT 1 FROM listing_guest_blocks WHERE guest_id = ${guestId} AND listing_id = ${listingId}`)).length > 0;
 }
 
-module.exports = { GROUNDS, ROLES, KINDS, roleOf, allowed, me, team, setRole, isSuper, removeMember, restoreMember, setSuper, propose, withdraw, list, review, signoff, repropose, SIGNOFFS, describe, forTicket, recordsFor, blockGuest, unblockGuest, blockedListingIds, isBlocked, addReport };
+module.exports = { GROUNDS, ROLES, KINDS, roleOf, allowed, allowedFor, me, team, setRole, isSuper, removeMember, restoreMember, setSuper, propose, withdraw, list, review, signoff, repropose, SIGNOFFS, describe, forTicket, recordsFor, blockGuest, unblockGuest, blockedListingIds, isBlocked, addReport };

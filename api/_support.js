@@ -1158,15 +1158,20 @@ async function recordHostReply(sql, { id, reply, noAnswer, adminEmail = 'admin',
 // Every stage is READ from something that already happened — the request's
 // status, the host step, the proposals and their sign-off. Nothing here is
 // a second source of truth that could drift from the first.
+// Each stage has two names. `label` is what it is called once it is behind
+// you — "Paid", "Answered" — and `waiting` is what it is called while the
+// request is sitting at it. Without the second, the line read "Where this
+// is: Answered" about a request nobody had answered (owner, 14 Nov 2026:
+// "This is not clear to me").
 const STAGES = [
-  { key: 'raised',    label: 'Raised' },
-  { key: 'assigned',  label: 'With a representative' },
-  { key: 'host',      label: 'Host asked' },
-  { key: 'reviewer',  label: 'With a reviewer' },
-  { key: 'admin',     label: 'With a super admin' },
-  { key: 'money',     label: 'Paid' },
-  { key: 'resolved',  label: 'Answered' },
-  { key: 'closed',    label: 'Closed' }
+  { key: 'raised',    label: 'Raised',                 waiting: 'Just raised' },
+  { key: 'assigned',  label: 'With a representative',  waiting: 'Waiting to be picked up' },
+  { key: 'host',      label: 'Host asked',             waiting: 'Waiting on the host step' },
+  { key: 'reviewer',  label: 'With a reviewer',        waiting: 'Waiting for a reviewer' },
+  { key: 'admin',     label: 'With a super admin',     waiting: 'Waiting for a super admin' },
+  { key: 'money',     label: 'Paid',                   waiting: 'Waiting to be paid' },
+  { key: 'resolved',  label: 'Answered',               waiting: 'Waiting to be answered' },
+  { key: 'closed',    label: 'Closed',                 waiting: 'Waiting to be closed' }
 ];
 const MONEY = ['cancel_refund', 'partial_refund', 'deposit_refund'];
 
@@ -1189,11 +1194,15 @@ function horizon(t, acts, host) {
   out.push({ key: 'assigned', label: who ? 'With a representative' : 'Waiting to be assigned',
              state: who ? 'done' : 'now', note: who || 'Nobody has picked this up yet', at: at(t.assigned_at) });
 
-  // The host step only exists on a request about a booking.
+  // The host step only exists on a request about a booking. Its LABEL moves
+  // with its state as well: "Host asked · Not decided yet" is a plain
+  // contradiction, and it read as one on screen.
   if (!host || !host.hasBooking) put('host', 'skipped', 'No booking on this request, so there is no host to ask');
-  else if (!host.answered) put('host', who ? 'now' : 'later', 'Not decided yet');
-  else if (host.needed === false) put('host', 'skipped', host.whyNot);
-  else put('host', host.reply || host.noAnswer ? 'done' : 'now', host.reply ? 'They answered' : host.noAnswer ? 'They did not answer' : 'Waiting for the host', at(host.askedAt));
+  else if (!host.answered) out.push({ key: 'host', label: 'Do we need the host?', state: who ? 'now' : 'later', note: 'Nobody has decided yet', at: null });
+  else if (host.needed === false) put('host', 'skipped', host.whyNot || 'The host was not needed on this');
+  else if (host.reply) put('host', 'done', 'The host answered', at(host.askedAt));
+  else if (host.noAnswer) put('host', 'done', 'The host did not answer in time', at(host.askedAt));
+  else out.push({ key: 'host', label: 'Waiting for the host', state: 'now', note: 'Asked, no reply yet', at: at(host.askedAt) });
 
   // A reviewer has it from the moment something is proposed.
   if (!live.length) put('reviewer', 'later', 'Nothing proposed yet');
@@ -1217,9 +1226,80 @@ function horizon(t, acts, host) {
       ['resolved', 'closed'].includes(t.status) ? null : 'The person has not been given an answer yet', at(t.resolved_at));
   put('closed', t.status === 'closed' ? 'done' : 'later', t.status === 'closed' ? (t.auto_closed ? 'Closed by itself' : null) : null, at(t.closed_at));
 
+  // ------------------------------------------------------------------
+  // MAKE IT READ AS A TIMELINE (owner, 14 Nov 2026: "This is not clear
+  // to me").
+  //
+  // Up to here every stage judged itself from whichever action it cared
+  // about. A request carrying two actions — one paid, one still waiting —
+  // then produced a line that said "Paid ✓" AFTER "With a reviewer ●",
+  // with two stages marked current at once. Read left to right that is
+  // nonsense: nothing is paid before a reviewer has seen it.
+  //
+  // A timeline only reads if it goes forward, so the front edge is the
+  // furthest stage actually reached: everything before it is done, that
+  // one is where this is, everything after is still to come. A stage that
+  // does not apply stays skipped wherever it sits.
+  //
+  // Work still open behind that edge is not thrown away — it is listed in
+  // `alsoWaiting` and shown as its own line, so "this went through, and
+  // something else on it is still open" is said in words rather than by
+  // two dots that contradict each other.
+  const applies = (s) => s.state !== 'skipped';
+  const nameWhileWaiting = (s) => {
+    const st = STAGES.find(x => x.key === s.key);
+    // A stage whose label was already rewritten for its state (the host
+    // step does this) keeps the name it was given.
+    return st && s.label === st.label && st.waiting ? st.waiting : s.label;
+  };
+
+  // Everything still open, earliest first. The FIRST of these is what
+  // actually needs doing next, and that is what "Where this is" should
+  // say — not the furthest point reached, which may be a payment that
+  // went through while the host step behind it was never settled.
+  // "Open" means actively waiting on somebody now — state 'now' before any
+  // of this runs. A stage still marked 'later' has not been reached yet and
+  // is nobody's job, so listing it as outstanding is noise.
+  const asOpen = (s) => {
+    const name = nameWhileWaiting(s);
+    // Drop a note that just repeats the name back.
+    return { key: s.key, name, note: s.note && s.note.toLowerCase() !== name.toLowerCase() ? s.note : null };
+  };
+  let open = out.filter(s => applies(s) && s.state === 'now').map(asOpen);
+  // Nothing actively waiting, but the request is not finished either: the
+  // next thing to do is simply the next stage. Without this, a request that
+  // had been paid showed every stage done or "not yet" and nothing at all
+  // saying "now answer the person", which is exactly what is owed next.
+  if (!open.length) {
+    const next = out.find(s => applies(s) && s.state === 'later');
+    if (next) open = [asOpen(next)];
+  }
+
+  // These eight are a CHECKLIST, not a pipeline. A request can carry two
+  // actions at once — one paid, one still waiting — so more than one thing
+  // can be open, and forcing them into a single front-to-back line is what
+  // produced "Paid ✓" sitting after "With a reviewer ●", which is what the
+  // owner could not read.
+  //
+  // So nothing is rewritten to pretend otherwise. Each stage keeps its true
+  // state; the FIRST thing still open is marked as what needs doing next
+  // and named in the headline, and anything else open is marked plainly as
+  // also open rather than as a second current stage.
+  const firstOpenKey = open.length ? open[0].key : null;
+  out.forEach((s) => {
+    if (!applies(s) || s.state === 'done') return;
+    if (s.key === firstOpenKey) { s.state = 'now'; s.label = nameWhileWaiting(s); }
+    else if (s.state === 'now') { s.state = 'open'; s.label = nameWhileWaiting(s); }
+  });
+
+  // A note that only repeats its own label is noise on the row.
+  out.forEach(s => { if (s.note && s.note.toLowerCase() === String(s.label).toLowerCase()) s.note = null; });
+
   const nowAt = out.findIndex(x => x.state === 'now');
+  const finished = !open.length;
   return { stages: out, atStage: nowAt === -1 ? out.length - 1 : nowAt,
-           where: nowAt === -1 ? (t.status === 'closed' ? 'Closed' : 'Answered') : out[nowAt].label };
+           where: finished ? (t.status === 'closed' ? 'Closed' : 'Answered') : open[0].name,
+           alsoWaiting: open.slice(1).filter(o => o.key !== firstOpenKey).map(o => (o.note ? `${o.name} — ${o.note}` : o.name)) };
 }
 
 // Picking up a request. By hand for now; the queue will call this too.

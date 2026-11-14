@@ -41,7 +41,10 @@ const { logAudit } = require('./_audit-log');
 const MAX_FILES = 8;
 const MAX_WHAT = 1200;
 const userError = (message, status = 400) => Object.assign(new Error(message), { isUserFacing: true, status });
-const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+// No HTML escaping helper and no email() here any more, deliberately: this
+// flow sends the host nothing (owner, 14 Nov 2026 — a listing that needs
+// updating is a recommendation on the listing, not a message to the host).
+// Anything that needs either of those has been added back by mistake.
 
 // Same rule as the other reports: only our own blob storage, capped.
 function cleanFiles(list) {
@@ -60,15 +63,6 @@ async function ready(sql) {
     tableReady = r.length > 0;
   } catch (err) { tableReady = false; }
   return tableReady;
-}
-
-async function email(to, subject, html) {
-  if (!process.env.RESEND_API_KEY || !to) return;
-  try {
-    await fetch('https://api.resend.com/emails', { method: 'POST',
-      headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
-      body: JSON.stringify({ from: 'Aerva <hello@aerva.in>', to, subject, html: `<div style="font-family:sans-serif; max-width:480px;">${html}</div>` }) });
-  } catch (err) { console.error('correction email failed:', err.message); }
 }
 
 // ---------------------------------------------------------------------
@@ -105,16 +99,20 @@ async function create(sql, { orderId, guestId, what, photos, source = 'guest', r
   // NOTHING goes into the booking thread (owner, 14 Nov 2026). A line in
   // that thread is tied to that booking, so however it is worded the host
   // can see which guest it came from — and a guest still sleeping in their
-  // house should not be identifiable as the one who said something. The
-  // host hears about it away from the booking: an email and a bell notice
-  // on the listing, in Aerva's own voice, as an improvement to make rather
-  // than a complaint to answer.
-  await email(o.host_email, `Keep the photos matching ${o.property_name || o.suite_name || 'your place'}`,
-    `<h2 style="font-family:Georgia,serif;">One thing to update on your listing</h2>
-     <p>Aerva keeps its listings matched to the places themselves. On <strong>${esc(o.property_name || o.suite_name || 'your place')}</strong>, one detail in the listing no longer matches:</p>
-     <p style="padding:10px 12px; background:#f4eadc; border-radius:8px;">${esc(text)}</p>
-     <p>Please update the photos or the description so they show the place as it is today. Guests book what they see, and a listing that matches gets better reviews and fewer questions on arrival.</p>
-     <p><strong>Nothing is held against you, no booking is affected and no payout is held.</strong> There is no deadline — it is only so the listing shows the real thing.</p>`);
+  // house should not be identifiable as the one who said something.
+  //
+  // AND NO EMAIL EITHER (owner, 14 Nov 2026): "If there is some changes
+  // required in the listing, email to host won't be send but a
+  // recommendation to update the listing and photos as per the listing."
+  // An email goes only where the place could not be found as listed, which
+  // is the report flow in _checkin-promise.js, not this one.
+  //
+  // So a listing that merely needs updating produces a RECOMMENDATION and
+  // nothing else: the bell notice on the listing (bellNotifications below),
+  // which appears once Aerva has reviewed the correction and agreed with
+  // it. That also closes a gap this flow had — the email used to carry the
+  // guest's own sentence, unreviewed, to the host over Aerva's name.
+  // Nothing a guest writes now reaches a host from here at all.
 
   await logAudit(sql, { action: 'listing_correction_filed', success: true,
     actorType: source === 'guest' ? 'guest' : 'admin', actorIdentifier: source === 'guest' ? String(guestId) : String(adminLabel || 'admin'),
@@ -169,42 +167,53 @@ async function decide(sql, { id, action, note, adminLabel }) {
   if (!got.length) throw userError('That correction has already been dealt with.', 409);
   const c = got[0];
 
-  if (action === 'advised') {
-    const rows = await sql`SELECT l.property_name, l.host_email FROM listings l WHERE l.id = ${c.listing_id}`;
-    const l = rows[0] || {};
-    // Again, nothing in the booking thread — the email and the bell
-    // notice are on the listing, not on anybody's stay.
-    await email(l.host_email, `One update for ${l.property_name || 'your listing'}`,
-      `<h2 style="font-family:Georgia,serif;">An update worth making to your listing</h2>
-       <p>Aerva has compared <strong>${esc(l.property_name || 'your place')}</strong> with how it is today, and one detail in the listing no longer matches:</p>
-       <p style="padding:10px 12px; background:#f4eadc; border-radius:8px;">${esc(note ? String(note).slice(0, 600) : c.what)}</p>
-       <p>Updating the photos or the description to show it as it is keeps what guests expect and what they walk into the same thing — which is most of what a good arrival comes down to.</p>
-       <p><strong>Nothing is held against you, no payout is held, and there is no deadline.</strong></p>`);
-  }
+  // 'advised' sends NO email either (owner, 14 Nov 2026). A listing that
+  // needs updating is a recommendation, not a message: deciding 'advised'
+  // is what makes the bell notice on the listing appear (bellNotifications
+  // reads the decided row), and that notice is the whole of how the host
+  // hears. An email goes only where the place could not be found as
+  // listed, which is the report flow in _checkin-promise.js.
+  //
+  // The admin's note still matters — it is what the bell notice shows, in
+  // Aerva's words rather than the guest's.
 
   await logAudit(sql, { action: 'listing_correction_' + action, success: true, actorType: 'admin', actorIdentifier: adminLabel || 'admin',
     targetType: 'listing', targetId: c.listing_id, metadata: { correctionId: c.id, orderId: c.order_id, note: note || null } });
   return c;
 }
 
-// The host's bell. Deliberately on the LISTING, never on a booking
-// (owner, 14 Nov 2026): a host should be told what to update without
-// being able to work out which guest mentioned it. Only corrections
-// Aerva has looked at and agreed with are shown — an open one is still
-// Aerva's to judge, and a host should not be chased over something that
-// may yet be dropped.
+// The host's bell, and since the emails went, the ONLY way a host hears
+// that a listing has drifted out of date.
+//
+// Deliberately on the LISTING, never on a booking (owner, 14 Nov 2026): a
+// host should be told what to update without being able to work out which
+// guest mentioned it. Only corrections Aerva has looked at and agreed with
+// are shown — an open one is still Aerva's to judge, and a host should not
+// be chased over something that may yet be dropped.
+//
+// AND ONLY WHERE AERVA WROTE THE WORDING (owner, 14 Nov 2026: "No
+// notification in that case"). The notice used to fall back to the guest's
+// own sentence when an admin advised without writing a note, which put the
+// guest's words — and whatever identified them — in front of the host by
+// the back door. There is no fallback now: no note, no notice. The admin's
+// note is the only text a host ever sees, so what reaches them is always
+// Aerva's own words.
+//
+// The cost of that is silence: advising without a note tells the host
+// nothing at all. The admin form says so where the note is typed.
 async function bellNotifications(sql, { hostId }) {
   const out = [];
   if (!hostId || !(await ready(sql))) return out;
   try {
-    const rows = await sql`SELECT c.id, c.listing_id, c.what, c.decision_note, l.property_name
+    const rows = await sql`SELECT c.id, c.listing_id, c.decision_note, l.property_name
                            FROM listing_corrections c JOIN listings l ON l.id = c.listing_id
                            WHERE l.host_id = ${hostId} AND c.status = 'advised'
+                             AND c.decision_note IS NOT NULL AND btrim(c.decision_note) <> ''
                              AND c.decided_at > now() - interval '45 days'
                            ORDER BY c.decided_at DESC LIMIT 5`;
     rows.forEach(r => out.push({ id: 'listing-correction:' + r.id, kind: 'action',
       title: `One update for ${r.property_name || 'your listing'}`,
-      body: `${String(r.decision_note || r.what).slice(0, 140)} — update the photos or the description so they show the place as it is.`,
+      body: `${String(r.decision_note).slice(0, 140)} — update the photos or the description so they show the place as it is.`,
       href: 'host-dashboard.html?listing=' + r.listing_id }));
   } catch (err) { /* the bell never blocks */ }
   return out;

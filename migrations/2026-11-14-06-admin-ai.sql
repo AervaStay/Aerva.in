@@ -1,0 +1,24 @@
+-- 2026-11-14-06 · Each person on the team can turn Aerva's AI off for
+-- themselves, and their own AI spend is shown against their name (owner,
+-- 14 Nov 2026: "show the token credit against each CR and provide them
+-- option to turn AI off as well", then "Same for reviewer" and "Same for
+-- Super Admin" — so every admin account, whatever their role).
+--
+--   ai_enabled   TRUE  = this person can use the AI suggestions and the
+--                        host summary (the default for everybody)
+--                FALSE = they have turned it off, or a super admin has.
+--                        Their own AI calls are refused with a plain
+--                        message; the rest of Admin is unaffected, and the
+--                        guest assistant is untouched because that is the
+--                        guest's, not theirs.
+--
+-- The spend itself needs no new column: ai_usage already records every call
+-- against by_email, so a person's own usage, cost and remaining allowance
+-- are all read from there.
+--
+-- Turning it off is NOT a punishment and holds nothing up: a person with it
+-- off writes their replies themselves, which is what they could always do.
+--
+-- Safe to run more than once. Adds one column.
+
+ALTER TABLE admins ADD COLUMN IF NOT EXISTS ai_enabled BOOLEAN NOT NULL DEFAULT true;

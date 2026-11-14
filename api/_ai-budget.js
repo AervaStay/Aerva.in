@@ -87,7 +87,24 @@ async function today(sql) {
 // Called before a model call. Throws a user-facing 429 when the day is
 // spent. `by` is the admin's email for the per-person cap; guest calls pass
 // nothing and are covered by the platform cap plus their own message limit.
+// Has this person turned the AI off for themselves? Returns false when the
+// column is not there yet (the database update is pending), because a
+// missing column must not switch everybody's AI off.
+async function aiOffFor(sql, email) {
+  if (!email) return false;
+  try {
+    const r = await sql`SELECT ai_enabled FROM admins WHERE lower(email) = ${String(email).toLowerCase()}`;
+    return r.length > 0 && r[0].ai_enabled === false;
+  } catch (err) { return false; }
+}
+
 async function check(sql, { kind = 'other', by = null } = {}) {
+  // Their own choice comes first: it is the most specific reason, and it
+  // applies whether or not the usage table exists yet.
+  if (by && (await aiOffFor(sql, by))) {
+    throw Object.assign(new Error('You have Aerva’s AI turned off for your account. Turn it back on under your name in Admin, or write the reply yourself.'),
+      { isUserFacing: true, status: 403, aiOff: true });
+  }
   if (!(await tableReady(sql))) return { enforced: false };
   const caps = CAPS();
   const day = await today(sql);
@@ -164,7 +181,75 @@ async function report(sql, days = 14) {
       cacheRead: Number(r.cache_read_tokens) || 0, cacheWrite: Number(r.cache_write_tokens) || 0
     });
   }
-  return { enforced: true, caps: CAPS(), usdInr: USD_INR(), today: await today(sql), days: [...byDay.values()] };
+  return { enforced: true, caps: CAPS(), usdInr: USD_INR(), today: await today(sql), days: [...byDay.values()], people: await people(sql) };
 }
 
-module.exports = { check, record, report, today, costOf, CAPS, _internals: { rateFor, istDay } };
+// Everyone on the team, with their own AI spend against their name and how
+// much of today's allowance is left (owner, 14 Nov 2026: "show the token
+// credit against each CR... Same for reviewer... Same for Super Admin").
+//
+// Read for every role, not just representatives: a reviewer who changes a
+// proposal and a super admin signing one off both use the same suggestion
+// cards, so both spend and both are shown.
+//
+// `left` is the credit: how many more AI calls that person can make today
+// before their own cap stops them. It is a count, because the per-person
+// cap is a count; the rupees beside it are what they have actually cost.
+async function people(sql) {
+  let rows = [];
+  try {
+    rows = await sql`SELECT lower(a.email) AS email, a.name, a.role,
+                            COALESCE(a.super_admin, false) AS super_admin,
+                            COALESCE(a.ai_enabled, true)   AS ai_enabled
+                     FROM admins a WHERE a.removed_at IS NULL ORDER BY a.email`;
+  } catch (err) {
+    // Either column may be missing while a database update is pending.
+    try { rows = await sql`SELECT lower(email) AS email, name, role FROM admins ORDER BY email`; }
+    catch (e) { return []; }
+  }
+  let used = [];
+  if (await tableReady(sql)) {
+    used = await sql`SELECT by_email, sum(calls)::int AS calls, sum(cost_inr)::numeric AS cost_inr,
+                            sum(input_tokens + cache_read_tokens + cache_write_tokens)::bigint AS in_tokens,
+                            sum(output_tokens)::bigint AS out_tokens
+                     FROM ai_usage WHERE day = ${istDay()} AND by_email IS NOT NULL GROUP BY by_email`;
+  }
+  const byEmail = new Map(used.map(u => [String(u.by_email).toLowerCase(), u]));
+  const caps = CAPS();
+  return rows.map(r => {
+    const u = byEmail.get(r.email) || {};
+    const calls = Number(u.calls) || 0;
+    return {
+      email: r.email, name: r.name || null, role: r.role || null,
+      superAdmin: !!r.super_admin,
+      aiEnabled: r.ai_enabled === undefined ? true : r.ai_enabled !== false,
+      calls,
+      rupees: Number(u.cost_inr) || 0,
+      inTokens: Number(u.in_tokens) || 0,
+      outTokens: Number(u.out_tokens) || 0,
+      cap: caps.perAdmin,
+      left: caps.perAdmin ? Math.max(0, caps.perAdmin - calls) : null
+    };
+  });
+}
+
+// Turn one person's AI on or off. A person may always set their own; a
+// super admin may set anybody's. Nobody else can touch somebody else's.
+async function setAi(sql, { email, enabled, by, bySuper = false }) {
+  const target = String(email || '').trim().toLowerCase();
+  if (!target) throw Object.assign(new Error('Which account?'), { isUserFacing: true, status: 400 });
+  const self = String(by || '').trim().toLowerCase() === target;
+  if (!self && !bySuper) {
+    throw Object.assign(new Error('Only a super admin can change this for somebody else.'), { isUserFacing: true, status: 403 });
+  }
+  let r;
+  try {
+    r = await sql`UPDATE admins SET ai_enabled = ${!!enabled} WHERE lower(email) = ${target} RETURNING lower(email) AS email, ai_enabled`;
+  } catch (err) {
+    throw Object.assign(new Error('Aerva cannot change this yet — the database update for it has not been run.'), { isUserFacing: true, status: 503 });
+  }
+  if (!r.length) throw Object.assign(new Error('No such account.'), { isUserFacing: true, status: 404 });
+  return { email: r[0].email, aiEnabled: r[0].ai_enabled !== false, changedBy: self ? 'self' : 'super_admin' };
+}
+
+module.exports = { check, record, report, today, costOf, CAPS, people, setAi, aiOffFor, _internals: { rateFor, istDay } };

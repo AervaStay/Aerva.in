@@ -144,14 +144,34 @@
   .sup-bar{margin-bottom:10px;}
   .sup-bar input[type=text]{min-width:320px;}
   .sup-sr{position:absolute; width:1px; height:1px; overflow:hidden; clip:rect(0 0 0 0); white-space:nowrap;}
-  .sup-table{table-layout:fixed; display:table;}
-  .sup-table th, .sup-table td{white-space:normal; vertical-align:top;}
-  .sup-table td{padding:11px 10px;}
-  .sup-main{width:46%;}
-  .sup-subject{font-size:14.5px; line-height:1.4; margin-bottom:2px;}
-  .sup-flags{margin-top:4px;}
-  .sup-num{width:92px; text-align:right; white-space:nowrap;}
-  .sup-row.is-hot td{box-shadow:inset 3px 0 0 #b4532a;}
+  /* The request list. It used to be a fixed table, which wasted half the
+     width on an empty FROM column and — because the urgent marker was an
+     inset shadow on EVERY cell rather than on the row — drew a thick brown
+     bar down the left of all four columns, so it read as heavy dividers
+     (owner, 14 Nov 2026). It is a list of rows now: what the request is on
+     the left, who and where on the right, and one marker down the edge of
+     a row that needs attention. */
+  .sup-rows{display:flex; flex-direction:column; gap:7px;}
+  .sup-item{display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 18px; align-items:start;
+       padding:11px 13px 11px 14px; border:1px solid #e9e1d6; border-radius:10px; background:#fff;
+       cursor:pointer; position:relative; transition:border-color 0.12s ease, background 0.12s ease;}
+  .sup-item:hover{border-color:#d8c8a8; background:#fdfbf7;}
+  .sup-item.is-hot{border-left:3px solid #b4532a; padding-left:12px;}
+  .sup-subject{font-size:14.5px; line-height:1.4;}
+  .sup-meta{font-size:11.5px; opacity:0.65; margin-top:2px;}
+  .sup-who{font-size:12.5px; margin-top:3px;}
+  .sup-who .sup-mail{opacity:0.6;}
+  .sup-right{display:flex; flex-direction:column; align-items:flex-end; gap:4px; text-align:right; white-space:nowrap;}
+  .sup-age{font-size:12.5px;}
+  .sup-age .tds-sub{display:block;}
+  .sup-flags{margin-top:5px; display:flex; flex-wrap:wrap; gap:4px;}
+  .sup-head{display:grid; grid-template-columns:minmax(0,1fr) auto; gap:18px; padding:0 14px 5px;
+       font-size:11px; text-transform:uppercase; letter-spacing:0.05em; color:#8a6c39; font-weight:600;}
+  @media (max-width:640px){
+    .sup-item{grid-template-columns:minmax(0,1fr);}
+    .sup-right{align-items:flex-start; text-align:left; margin-top:5px;}
+    .sup-head{display:none;}
+  }
   .sup-state{display:inline-block; font-size:12.5px; padding:3px 9px; border-radius:999px; background:#f1ebe2; color:#5a5349; white-space:nowrap;}
   .sup-state-open{background:#f6e2dc; color:#a3402f;}
   .sup-state-in_progress{background:#fdf0d8; color:#8a6c39;}
@@ -202,16 +222,73 @@
   /* The horizon: where a request has got to (owner, 14 Nov 2026). */
   .sup-horizon{border:1px solid #e6ded3; border-radius:10px; padding:12px 14px; margin:0 0 12px; background:#fcfaf7;}
   .sup-horizon-head{margin-bottom:8px;}
-  .sup-horizon-line{list-style:none; margin:0; padding:0; display:flex; flex-wrap:wrap; gap:6px 18px;}
-  .sup-horizon-line .hz{display:flex; gap:6px; align-items:baseline; font-size:13px; flex:0 1 auto;}
-  .hz-mark{font-weight:700;}
-  .hz-note{opacity:0.65; font-size:12px;}
-  .hz-done .hz-mark{color:#2f6b45;}
-  .hz-now{font-weight:600;}
-  .hz-now .hz-mark{color:#a3402f;}
-  .hz-later{opacity:0.55;}
-  .hz-skipped{opacity:0.45;}
-  .hz-skipped .hz-label{text-decoration:line-through;}
+  /* The (i) beside a heading or a label. The rules behind it are long and
+     only wanted now and then, so they sit in here instead of as a wall of
+     text above the thing they describe (owner, 14 Nov 2026: "Lot of text.
+     Can we create Informative (I) Icon on each label and put the text there
+     if someone hovers").
+
+     It opens on hover AND on keyboard focus, and it is a <span> with
+     tabindex so it works by tapping on a phone, where there is no hover. */
+  .inf{display:inline-flex; align-items:center; justify-content:center; width:16px; height:16px;
+       border-radius:50%; border:1px solid currentColor; font-size:10.5px; font-weight:700; line-height:1;
+       font-family:Georgia,serif; font-style:italic; opacity:0.55; cursor:help; position:relative;
+       vertical-align:middle; margin-left:6px; flex:0 0 auto; user-select:none;}
+  .inf:hover, .inf:focus-visible{opacity:1; outline:none;}
+  .inf > .inf-tip{position:absolute; left:50%; top:calc(100% + 8px); transform:translateX(-50%);
+       width:min(380px, calc(100vw - 32px)); background:#2b2520; color:#fdfaf6; text-align:left;
+       padding:10px 12px; border-radius:8px; font:400 12.5px/1.55 system-ui,-apple-system,sans-serif;
+       font-style:normal; letter-spacing:0; box-shadow:0 8px 24px rgba(0,0,0,0.26);
+       opacity:0; visibility:hidden; transition:opacity 0.12s ease; z-index:60; pointer-events:none;
+       white-space:normal;}
+  .inf > .inf-tip::before{content:''; position:absolute; bottom:100%; left:50%; transform:translateX(-50%);
+       border:6px solid transparent; border-bottom-color:#2b2520;}
+  .inf:hover > .inf-tip, .inf:focus-visible > .inf-tip{opacity:1; visibility:visible;}
+  .inf > .inf-tip strong{color:#f3d9a8;}
+  /* Near the right edge the tooltip would run off screen, so those flip. */
+  .inf.inf-right > .inf-tip{left:auto; right:0; transform:none;}
+  .inf.inf-right > .inf-tip::before{left:auto; right:14px; transform:none;}
+  h3 > .inf, h2 > .inf{vertical-align:middle;}
+  /* In a small uppercase label the icon must not inherit the tracking or
+     the tiny size, or it reads as a stray letter. */
+  .ap-label .inf{width:14px; height:14px; font-size:9.5px; letter-spacing:0; margin-left:5px;
+                 text-transform:none; color:var(--gold-deep);}
+  .ap-label .inf > .inf-tip{letter-spacing:0; text-transform:none; color:#fdfaf6;}
+
+  /* The horizon, left to right: a coloured segment per stage with its full
+     name and state underneath (owner, 14 Nov 2026, option A3). The colours
+     are the real ones — on a request where a payment went through while an
+     earlier step is still open, the run is not a tidy fill, and the label
+     under the odd segment is what explains it. */
+  .hzh-scroll{overflow-x:auto; margin-top:9px; padding-bottom:2px;}
+  .hzh{min-width:min(100%, 680px);}
+  .hzh-track{display:grid; gap:4px;}
+  /* Three colours and no more (owner, 14 Nov 2026): grey for not done, red
+     for being worked on, green for done. A stage that is open but not the
+     next thing to pick up is red too — it is still being worked on — and
+     the words under it say which is which. */
+  .hzh-seg{height:8px; border-radius:3px; background:#e6ded3;}
+  .hzh-seg.hzh-done{background:#2f6b45;}
+  .hzh-seg.hzh-now, .hzh-seg.hzh-open{background:#a3402f;}
+  .hzh-labels{display:grid; gap:4px; margin-top:6px;}
+  .hzh-cell{min-width:0; font:400 11px/1.3 system-ui,-apple-system,sans-serif; position:relative; cursor:help;}
+  .hzh-cell:focus-visible{outline:2px solid #a3402f; outline-offset:2px; border-radius:4px;}
+  .hzh-name{display:block; overflow-wrap:anywhere;}
+  .hzh-state{display:block; font-size:9.5px; text-transform:uppercase; letter-spacing:0.04em; opacity:0.45; margin-top:1px;}
+  .hzh-cell.hzh-done .hzh-name{color:#2f6b45;}
+  .hzh-cell.hzh-now .hzh-name{color:#a3402f; font-weight:700;}
+  .hzh-cell.hzh-now .hzh-state{color:#a3402f; opacity:0.9;}
+  .hzh-cell.hzh-open .hzh-name{color:#a3402f; font-weight:600;}
+  .hzh-cell.hzh-open .hzh-state{color:#a3402f; opacity:0.8;}
+  .hzh-cell.hzh-later{opacity:0.45;}
+  .hzh-tip{position:absolute; top:calc(100% + 7px); left:0; width:210px; background:#2b2520; color:#fdfaf6;
+       padding:8px 10px; border-radius:7px; font:400 11.5px/1.45 system-ui,-apple-system,sans-serif;
+       opacity:0; visibility:hidden; transition:opacity 0.12s ease; z-index:20; box-shadow:0 6px 18px rgba(0,0,0,0.25);}
+  .hzh-tip strong{color:#f3d9a8;}
+  .hzh-cell:hover > .hzh-tip, .hzh-cell:focus-visible > .hzh-tip{opacity:1; visibility:visible;}
+  /* The last few would run off the right edge, so they hang the other way. */
+  .hzh-cell:nth-last-child(-n+3) .hzh-tip{left:auto; right:0;}
+  .hz-also{margin:6px 0 0; font-size:12px; opacity:0.7;}
   @media (max-width: 720px){ .sup-horizon-line{flex-direction:column; gap:4px;} }
   /* One block per proposal, carrying its own state (owner, 14 Nov 2026). */
   .sup-msg.sup-action{background:#fdfaf4; border:1px solid #d8b65a;}
@@ -445,7 +522,38 @@
   .ap-grid{display:grid; grid-template-columns:minmax(0,1fr) minmax(0,1.3fr); gap:14px;}
   @media (max-width:760px){ .ap-grid{grid-template-columns:1fr;} }
   .ap-what{font-size:14px; font-weight:600; margin-bottom:8px;}
+  /* Roles: each role with its tabs as checkboxes (owner, 14 Nov 2026). A
+     reserved tab is shown but cannot be ticked, so it is obvious that it
+     exists and obvious that it is not on offer. */
+  .role-card{border:1px solid #e9e1d6; border-radius:10px; padding:13px 15px; margin-bottom:12px; background:#fff;}
+  .role-card.role-new{background:#fcfaf6; border-style:dashed;}
+  .role-head{display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap; align-items:baseline;}
+  .role-head .lk-sub{display:block; font-size:11.5px; opacity:0.6; margin-top:2px;}
+  .role-act{display:flex; gap:7px; flex-wrap:wrap;}
+  .role-tabs{display:flex; flex-wrap:wrap; gap:6px 10px; margin-top:10px;}
+  .role-tab{display:inline-flex; align-items:center; gap:5px; font-size:12.5px; padding:4px 9px;
+       border:1px solid #e6ded3; border-radius:999px; background:#fcfaf7; cursor:pointer;}
+  .role-tab.is-on{background:#eef4ea; border-color:#c3d6ba;}
+  .role-tab.is-locked{opacity:0.45; cursor:not-allowed; text-decoration:line-through;}
+  .role-tab input{margin:0;}
   .ap-label{font-size:11px; letter-spacing:0.08em; text-transform:uppercase; color:var(--gold-deep); margin:8px 0 3px;}
+  /* The whole conversation, folded away under the summary. Shut by default
+     so the card stays short; the reviewer opens it when the decision turns
+     on what was actually said (owner, 14 Nov 2026). */
+  .ap-thread{margin-top:8px; border-top:1px solid rgba(0,0,0,0.08); padding-top:7px;}
+  .ap-thread > summary{cursor:pointer; font-size:12px; color:var(--gold-deep); letter-spacing:0.03em;
+       list-style:none; display:inline-flex; align-items:center; gap:5px;}
+  .ap-thread > summary::-webkit-details-marker{display:none;}
+  .ap-thread > summary::before{content:'▸'; font-size:10px; transition:transform 0.12s ease;}
+  .ap-thread[open] > summary::before{transform:rotate(90deg);}
+  .ap-thread > summary:hover{text-decoration:underline;}
+  .ap-msgs{list-style:none; margin:10px 0 0; padding:0; max-height:360px; overflow-y:auto;}
+  .ap-msg{display:block; padding:7px 10px; border-radius:8px; margin-bottom:6px; background:#f7f3ee; font-size:13px;}
+  .ap-msg.is-them{background:#fdf6e9;}
+  .ap-msg.is-internal{background:#f1f4f0; border:1px dashed #c9d2c4;}
+  .ap-msg-who{display:block; font-size:10.5px; text-transform:uppercase; letter-spacing:0.05em; opacity:0.6; margin-bottom:3px;}
+  .ap-msg-at{margin-left:7px; text-transform:none; letter-spacing:0;}
+  .ap-msg-body{display:block; white-space:pre-wrap; overflow-wrap:anywhere;}
   .ap-text{font-size:13.5px; white-space:pre-wrap;}
   .ap-summary{font-size:13.5px; line-height:1.55; background:#faf6ef; border:1px solid #eee3d1; padding:10px 12px; white-space:pre-wrap;}
   .ap-decide{margin-top:10px;}
@@ -640,6 +748,7 @@
         <div class="tab-row"><button class="tab-btn" id="tabBatchBtn" onclick="switchTab('batch')">Batch Jobs<span class="tab-count" data-count="batch" hidden></span></button><button type="button" class="tab-info" data-info="batch" aria-label="What Batch Jobs is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabTrafficBtn" onclick="switchTab('traffic')">Traffic<span class="tab-count" data-count="traffic" hidden></span></button><button type="button" class="tab-info" data-info="traffic" aria-label="What Traffic is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabTeamBtn" onclick="switchTab('team')">Team<span class="tab-count" data-count="team" hidden></span></button><button type="button" class="tab-info" data-info="team" aria-label="What Team is for">i</button></div>
+        <div class="tab-row" id="tabRolesRow"><button class="tab-btn" id="tabRolesBtn" onclick="switchTab('roles')">Roles</button><button type="button" class="tab-info" data-info="roles" aria-label="What Roles is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabDbBtn" onclick="switchTab('db')">Database updates<span class="tab-count" data-count="migrations" hidden></span></button><button type="button" class="tab-info" data-info="db" aria-label="What Database updates is for">i</button></div>
         <div class="tab-row" id="tabSafetyRow" style="display:none;"><button class="tab-btn" id="tabSafetyBtn" onclick="switchTab('safety')">Data safety</button><button type="button" class="tab-info" data-info="safety" aria-label="What Data safety is for">i</button></div>
         <div class="tab-row"><button class="tab-btn" id="tabAuditBtn" onclick="switchTab('audit')">Audit Log<span class="tab-count" data-count="audit" hidden></span></button><button type="button" class="tab-info" data-info="audit" aria-label="What Audit Log is for">i</button></div>
@@ -653,23 +762,24 @@
   <div class="admin-content">
 
   <div id="approvalsView" style="display:none;">
-    <h2>Approvals</h2>
-    <p style="font-size:13.5px; opacity:0.75; max-width:820px; margin-top:-6px;">Proposed by customer representatives, decided by a reviewer or admin. Approving carries the action out at once (refunds go through Razorpay with the usual checks). Nobody can approve their own proposal.</p>
+    <h2>Approvals<span class="inf" tabindex="0" role="note" aria-label="About Approvals">i<span class="inf-tip">Proposed by customer representatives, decided by a reviewer or admin. Approving carries the action out at once — refunds go through Razorpay with the usual checks. <strong>Nobody can approve their own proposal.</strong></span></span></h2>
     <div class="tds-bar"><label>Show <select id="apStatus" onchange="loadApprovals()"><option value="pending">Waiting for approval</option><option value="done">Decided</option><option value="all">All</option></select></label></div>
-    <h3 style="margin:18px 0 6px;">Check-in promise</h3>
-    <p class="lk-sub" style="margin:0 0 10px;">A guest reported on arrival that the property does not exist, or is not as listed or not available. <strong>Urgent.</strong> Confirm (the host failed) or clear (not upheld). A fake-listing report hides that listing at once; confirmed, the listing stays blocked (only Aerva unblocks it) and its future bookings appear below to move or refund. Once confirmed, find places (same city, free, fitting the party; nearest first, then closest in price) and send up to 3 — the guest pays only the difference, or gets the difference as Aerva credit — or refund in full (price, GST, deposit and service fee). The host is not paid for that booking; anything already paid out comes off their later payouts. Admin only.</p>
+    <h3 style="margin:18px 0 6px;">Check-in promise<span class="inf" tabindex="0" role="note" aria-label="About the check-in promise">i<span class="inf-tip"><strong>Urgent. Admin only.</strong> A guest reported on arrival that the place does not exist, or is not as listed or not available.<br><br>Confirm it (the host failed) or clear it (not upheld). A fake-listing report hides that listing at once; confirmed, the listing stays blocked and only Aerva unblocks it, and its future bookings appear below to move or refund.<br><br>Once confirmed: find places — same city, free, fitting the party, nearest first then closest in price — and send up to 3. The guest pays only the difference in price and GST, or gets the difference back as Aerva credit. Or refund in full: price, GST, deposit and service fee.<br><br>The host is not paid for that booking, and anything already paid out comes off their later payouts.</span></span></h3>
     <div id="apCheckinBody"><p class="lk-empty">Loading…</p></div>
-    <h3 style="margin:18px 0 6px;">Natural disaster cancellations</h3>
-    <p class="lk-sub" style="margin:0 0 10px;">A guest asked to cancel for a natural disaster or a government order / travel restriction, with proof. It comes here at once: the host cannot decline it. Check the proof. Approve: the booking is cancelled and what the guest paid (price, GST, service fee, any free cancellation add-on) becomes ordinary Aerva credit and the deposit is refunded to the payment — the guest uses it for new dates or has it refunded to the original payment at any time; a coupon part comes back as a coupon; the host gets no payout. Reject (with a reason the guest is told): nothing changes, the booking stands. Older emergency requests sent before 10 Nov 2026 also appear here once the host has not answered. Anything still open at check-in closes by itself and the booking stands.</p>
+    <h3 style="margin:18px 0 6px;">Natural disaster cancellations<span class="inf" tabindex="0" role="note" aria-label="About natural disaster cancellations">i<span class="inf-tip">A guest asked to cancel for a natural disaster or a government order or travel restriction, with proof. It comes here at once — the host cannot decline it. <strong>Check the proof.</strong><br><br><strong>Approve:</strong> the booking is cancelled, and what the guest paid — price, GST, service fee and any free-cancellation add-on — becomes ordinary Aerva credit, with the deposit refunded to the payment. They can use that credit for new dates or have it refunded to the original payment at any time. A coupon part comes back as a coupon. The host gets no payout.<br><br><strong>Reject,</strong> with a reason the guest is told: nothing changes and the booking stands.<br><br>Emergency requests sent before 10 Nov 2026 also appear here once the host has not answered. Anything still open at check-in closes by itself and the booking stands.</span></span></h3>
     <div id="apCancelBody"><p class="lk-empty">Loading…</p></div>
-    <h3 style="margin:18px 0 6px;">Group bookings</h3>
-    <p class="lk-sub" style="margin:0 0 10px;">Split payments (owner’s final rules, 10 Nov 2026). The organiser commits to pay for any places not paid within 2 hours. The place is not held until the last payment: if it gets booked by someone else, everyone is refunded in full automatically. At 2 hours the organiser has 30 minutes to pay the rest; if not, nothing is booked, everyone is refunded and the unpaid commitment is recorded on the organiser’s account (below, and in Lookup). Confirmed group bookings are non-refundable.</p>
+    <h3 style="margin:18px 0 6px;">Group bookings<span class="inf" tabindex="0" role="note" aria-label="About group bookings">i<span class="inf-tip">Split payments. The organiser commits to pay for any places not paid within 2 hours.<br><br>The place is not held until the last payment: if somebody else books it first, everyone is refunded in full automatically. At 2 hours the organiser has 30 minutes to pay the rest; if they do not, nothing is booked, everyone is refunded, and the unpaid commitment is recorded on the organiser's account — shown below and in Lookup.<br><br><strong>Confirmed group bookings are non-refundable.</strong></span></span></h3>
     <div id="apGroupBody"><p class="lk-empty">Loading…</p></div>
-    <h3 style="margin:18px 0 6px;">Price changes</h3>
-    <p class="lk-sub" style="margin:0 0 10px;" id="apPriceRules">A host's unusual change on a live listing waits here; guests keep seeing the current price until it is approved.</p>
+    <h3 style="margin:18px 0 6px;">Price changes<span class="inf" tabindex="0" role="note" aria-label="About price changes">i<span class="inf-tip" id="apPriceRules">A host's unusual change on a live listing waits here; guests keep seeing the current price until it is approved.</span></span></h3>
     <div id="apPriceBody"><p class="lk-empty">Loading…</p></div>
     <h3 style="margin:22px 0 6px;">Proposed actions</h3>
     <div id="apBody"><p class="lk-empty">Loading…</p></div>
+  </div>
+
+  <div id="rolesView" style="display:none;">
+    <h2>Roles<span class="inf" tabindex="0" role="note" aria-label="About roles">i<span class="inf-tip">A role is a list of tabs. What somebody on that role may do is worked out from those tabs, so a role can never reach a part of Admin it was not given. Changing a role takes effect at once for everybody on it.</span></span></h2>
+    <p style="font-size:13.5px; opacity:0.75; max-width:820px; margin-top:-6px;">Make a role for the way your team actually works — a payouts clerk, a night shift — and tick the tabs it may open. <strong>The tabs are the whole permission:</strong> the server works out which requests to allow from them, so nobody can reach a page their role does not have.</p>
+    <div id="rolesBody"><p class="lk-empty">Loading…</p></div>
   </div>
 
   <div id="teamView" style="display:none;">
@@ -2178,6 +2288,11 @@
   // admin tool would be able to read it. The admin's own session
   // authorises this instead, exactly as it does every other action here
   // (see isAdminAuthorized in api/get-listings.js).
+  // Running a job by hand is a super admin's alone (owner, 14 Nov 2026:
+  // "Only Super Admin will have access to Run Batch job and can see tab").
+  // This hides the button; the server refuses the call as well, because a
+  // hidden button is not a permission.
+  function isSuperAdmin(){ return !!(window.ADMIN_ME_INFO && (window.ADMIN_ME_INFO.superAdmin || window.ADMIN_ME_INFO.canManageTeam)); }
   // ---- Scheduled jobs (get-listings ?jobStatus=1 / ?runJob=<name>) ----
   function jobWhen(v){
     if(!v) return 'never';
@@ -2197,26 +2312,45 @@
       const d = await res.json();
       if(!res.ok){ box.innerHTML = '<p>' + escAdmin(d.error || 'Could not load jobs.') + '</p>'; return; }
       jobLabels = {}; (d.jobs || []).forEach(j => { jobLabels[j.name] = j.label; });
-      box.innerHTML = d.jobs.map(j => `
-        <div class="${j.lastOk !== false && j.lastImpactCount && j.lastImpactAt && (Date.now() - new Date(j.lastImpactAt).getTime()) < 864e5 ? 'job-row-hit' : ''}" style="padding:12px 0; border-bottom:1px solid #eee;${j.lastOk === false ? ' border-left:3px solid #a3402f; padding-left:10px;' : ''}">
-          <div style="display:flex; justify-content:space-between; gap:12px; flex-wrap:wrap;">
-            <div style="flex:1 1 220px; min-width:0;"><strong>${escAdmin(j.label)}</strong><div style="font-size:13px; opacity:0.75;">${escAdmin(j.schedule)}</div></div>
-            <button class="approve-btn" style="align-self:flex-start; flex:0 0 auto;" ${j.running ? 'disabled' : ''} onclick="runJobNow('${escAdmin(j.name)}')">${j.running ? 'Running…' : 'Run now'}</button>
+      // ORDER: what needs looking at first (owner, 14 Nov 2026: "The one
+      // that is effected should be shown at the top"). A failure first,
+      // then anything that actually touched somebody recently, then the
+      // quiet ones. Within a group the most recent comes first, so a list
+      // of thirty jobs puts the two worth reading at the top.
+      const HIT_WINDOW = 864e5;
+      const hitAt = (j) => (j.lastImpactCount && j.lastImpactAt ? new Date(j.lastImpactAt).getTime() : 0);
+      const isHit = (j) => j.lastOk !== false && hitAt(j) && (Date.now() - hitAt(j)) < HIT_WINDOW;
+      const rank = (j) => j.lastOk === false ? 0 : isHit(j) ? 1 : 2;
+      const jobs = (d.jobs || []).slice().sort((a, b) =>
+        rank(a) - rank(b) || hitAt(b) - hitAt(a) ||
+        new Date(b.lastFinishedAt || b.lastStartedAt || 0) - new Date(a.lastFinishedAt || a.lastStartedAt || 0));
+      const nFail = jobs.filter(x => x.lastOk === false).length;
+      const nHit = jobs.filter(isHit).length;
+      box.innerHTML = `<p class="job-tally">${nFail ? '<span class="job-tally-bad">' + nFail + ' failing</span> \u00b7 ' : ''}${nHit ? '<span class="job-tally-hit">' + nHit + ' touched someone in the last day</span> \u00b7 ' : ''}${jobs.length} job${jobs.length === 1 ? '' : 's'} in all. The ones worth reading are at the top.</p>` +
+        jobs.map(j => {
+        const state = j.lastOk === false ? 'bad' : isHit(j) ? 'hit' : 'quiet';
+        return `
+        <div class="job-card job-${state}">
+          <div class="job-top">
+            <div class="job-name"><strong>${escAdmin(j.label)}</strong>
+              <span class="job-sched">${escAdmin(j.schedule)}</span></div>
+            <div class="job-act">
+              <span class="job-pill job-pill-${state}">${j.lastOk === false ? 'Failing' : isHit(j) ? 'Affected someone' : 'Quiet'}</span>
+              ${isSuperAdmin() ? `<button class="approve-btn job-run" ${j.running ? 'disabled' : ''} onclick="runJobNow('${escAdmin(j.name)}')">${j.running ? 'Running\u2026' : 'Run now'}</button>` : ''}
+            </div>
           </div>
-          <div style="font-size:13px; margin-top:6px; ${j.lastOk === false ? 'color:#a3402f;' : 'opacity:0.8;'}">
-            Last run: ${escAdmin(jobWhen(j.lastFinishedAt || j.lastStartedAt))}
-            ${j.lastOk === false ? ' · FAILED: ' + escAdmin(j.lastError || '') : j.lastOk ? ' · OK · ' + escAdmin(jobSummary(j.lastResult)) : ''}
-            ${j.failures ? ' · ' + Number(j.failures) + ' failure' + (j.failures === 1 ? '' : 's') + ' in ' + Number(j.runs) + ' runs' : ''}
+          <div class="job-last${j.lastOk === false ? ' is-bad' : ''}">
+            Last run ${escAdmin(jobWhen(j.lastFinishedAt || j.lastStartedAt))}${j.lastOk === false ? ' \u00b7 FAILED: ' + escAdmin(j.lastError || '') : j.lastOk ? ' \u00b7 OK \u00b7 ' + escAdmin(jobSummary(j.lastResult)) : ''}${j.failures ? ' \u00b7 ' + Number(j.failures) + ' failure' + (j.failures === 1 ? '' : 's') + ' in ' + Number(j.runs) + ' runs' : ''}
           </div>
-          <div style="font-size:13px; margin-top:4px;">
+          <div class="job-links">
             ${j.lastImpactCount
-              ? `<button type="button" class="job-who" onclick="showJobHitWho('${escAdmin(j.name)}', this)">Last affected <strong>${Number(j.lastImpactCount)} ${Number(j.lastImpactCount) === 1 ? 'person' : 'people'}</strong> (${escAdmin(jobWhen(j.lastImpactAt))}) \u2014 see who</button>`
-              : '<span style="opacity:0.6;">No one affected recently</span>'}
-            <div id="jobHitWho-${escAdmin(j.name)}" class="job-who-box"></div>
+              ? `<button type="button" class="job-who" onclick="showJobHitWho('${escAdmin(j.name)}', this)">Affected <strong>${Number(j.lastImpactCount)} ${Number(j.lastImpactCount) === 1 ? 'person' : 'people'}</strong> ${escAdmin(jobWhen(j.lastImpactAt))} \u2014 see who</button>`
+              : '<span class="job-none">Nobody affected recently</span>'}
             <button type="button" class="job-who job-who-quiet" onclick="toggleJobRuns('${escAdmin(j.name)}', this)">Recent runs</button>
           </div>
+          <div id="jobHitWho-${escAdmin(j.name)}" class="job-who-box"></div>
           <div id="jobRuns-${escAdmin(j.name)}" style="display:none; margin-top:10px;"></div>
-        </div>`).join('');
+        </div>`; }).join('');
     }catch(e){ box.innerHTML = '<p>Could not load jobs.</p>'; }
   }
   // Recent runs of one job: when, outcome, and exactly who was affected.
@@ -2824,6 +2958,7 @@
   // ---- What each section is for: the "i" beside every tab ----
   const TAB_INFO = {
     approvals: ['Approvals', 'Unusual price changes from hosts (a sharp drop, a very low price or a very large discount), held until approved. And actions a customer representative proposed — refunds, cancellations, deposit refunds, reports, blocks — each with a summary of the conversation and what it would do. A reviewer or admin approves (it is carried out at once) or rejects with a note. Nobody approves their own proposal.'],
+    roles: ['Roles', 'Super admin only. Make a role and tick the tabs it may open — the tabs ARE the permission, so a role can only reach what its tabs need. The three Aerva ships with can have their tabs changed but not be deleted, and a role somebody is on cannot be deleted. Roles, Team, Data safety and Batch Jobs are kept for super admins and cannot be put on a role.'],
     team: ['Team', 'Who has access to Admin and their role: Admin (everything), Reviewer (Support, Lookup, Approvals: decides proposed actions, price changes and cancellation requests) or Customer representative (Support, Lookup, sees Approvals; proposes actions). A changed role signs that person out so it applies at once.'],
     safety: ['Data safety', 'Super admin only. Daily backups of the whole database (and one before every clear or restore), restore from a backup, clear dummy data or everything, and the go-live switch. Every risky step needs a PIN emailed to the owner.'],
     db: ['Database updates', 'Changes to the database ship as .sql files in the migrations/ folder with the code. Apply them here — first on UAT, then on production after the release — instead of running SQL in Neon. Each file runs in one transaction: all of it or none of it.'],
@@ -2922,6 +3057,9 @@
     document.getElementById('tabTeamBtn').classList.toggle('active', tab === 'team');
     document.getElementById('teamView').style.display = tab === 'team' ? 'block' : 'none';
     if(tab === 'team') loadTeam();
+    document.getElementById('tabRolesBtn').classList.toggle('active', tab === 'roles');
+    document.getElementById('rolesView').style.display = tab === 'roles' ? 'block' : 'none';
+    if(tab === 'roles') loadRoles();
     document.getElementById('tabDbBtn').classList.toggle('active', tab === 'db');
     document.getElementById('dbView').style.display = tab === 'db' ? 'block' : 'none';
     if(tab === 'db') loadDbUpdates();
@@ -3303,7 +3441,7 @@
       const c = d.counts || {}, labels = supStatusLabels(d);
       supDrawChips(c, labels, status);
       if(!d.tickets.length){ list.innerHTML = '<p style="opacity:0.7;">No requests here.</p>'; return; }
-      list.innerHTML = '<table class="tds-table sup-table"><thead><tr><th>Request</th><th>From</th><th>Status</th><th class="sup-num">Age</th></tr></thead><tbody>'
+      list.innerHTML = '<div class="sup-head"><span>Request</span><span>Status · age</span></div><div class="sup-rows">'
         + d.tickets.map(t => {
             const live = t.status !== 'resolved' && t.status !== 'closed';
             const flags = [
@@ -3315,18 +3453,28 @@
               t.channel === 'chat' ? '<span class="sup-flag sup-wa">Chat</span>' : '',
               t.booking_id ? '<span class="sup-flag">Booking #' + Number(t.booking_id) + '</span>' : ''
             ].filter(Boolean).join('');
-            return `<tr class="sup-row${live && (t.overdue || t.urgent || t.category === 'safety') ? ' is-hot' : ''}" onclick="openSupport(${Number(t.id)})">
-            <td class="sup-main">
-              <div class="sup-subject">${escAdmin(t.subject || '(no subject)')}</div>
-              <div class="tds-sub"><strong>${escAdmin(t.ref)}</strong> · ${escAdmin(t.categoryLabel)} · as ${escAdmin(t.role)}</div>
-              ${flags ? '<div class="sup-flags">' + flags + '</div>' : ''}
-            </td>
-            <td>${t.signed_out
-              ? 'Can\u2019t sign in<div class="tds-sub">' + escAdmin(t.contact_email || '') + (t.account_email && t.account_email !== t.contact_email ? '<br>account: ' + escAdmin(t.account_email) : '') + '</div>'
-              : escAdmin(t.person_name || 'Deleted account') + '<div class="tds-sub">' + escAdmin(t.person_email || '') + '</div>'}</td>
-            <td><span class="sup-state sup-state-${escAdmin(t.status)}">${escAdmin((labels[t.status]) || t.status)}</span></td>
-            <td class="sup-num" title="Raised ${escAdmin(supDate(t.created_at))} \u00b7 last activity ${escAdmin(supDate(t.updated_at))}">${escAdmin(supAgo(t.created_at))}<div class="tds-sub">active ${escAdmin(supAgo(t.updated_at))} ago</div></td>
-          </tr>`; }).join('') + '</tbody></table>';
+            // Who raised it now sits under the subject rather than in a
+            // column of its own: a name and an email never filled the width
+            // that column took, and reading them together with the subject
+            // is how a representative actually picks a request up.
+            const who = t.signed_out
+              ? 'Can\u2019t sign in \u00b7 <span class="sup-mail">' + escAdmin(t.contact_email || '') + '</span>'
+                + (t.account_email && t.account_email !== t.contact_email ? ' <span class="sup-mail">(account: ' + escAdmin(t.account_email) + ')</span>' : '')
+              : escAdmin(t.person_name || 'Deleted account')
+                + (t.person_email ? ' \u00b7 <span class="sup-mail">' + escAdmin(t.person_email) + '</span>' : '');
+            return `<div class="sup-item${live && (t.overdue || t.urgent || t.category === 'safety') ? ' is-hot' : ''}" role="button" tabindex="0"
+              onclick="openSupport(${Number(t.id)})" onkeydown="if(event.key==='Enter'||event.key===' '){event.preventDefault();openSupport(${Number(t.id)});}">
+              <div>
+                <div class="sup-subject">${escAdmin(t.subject || '(no subject)')}</div>
+                <div class="sup-meta"><strong>${escAdmin(t.ref)}</strong> \u00b7 ${escAdmin(t.categoryLabel)} \u00b7 as ${escAdmin(t.role)}</div>
+                <div class="sup-who">${who}</div>
+                ${flags ? '<div class="sup-flags">' + flags + '</div>' : ''}
+              </div>
+              <div class="sup-right">
+                <span class="sup-state sup-state-${escAdmin(t.status)}">${escAdmin((labels[t.status]) || t.status)}</span>
+                <span class="sup-age" title="Raised ${escAdmin(supDate(t.created_at))} \u00b7 last activity ${escAdmin(supDate(t.updated_at))}">${escAdmin(supAgo(t.created_at))}<span class="tds-sub">active ${escAdmin(supAgo(t.updated_at))} ago</span></span>
+              </div>
+            </div>`; }).join('') + '</div>';
     }catch(e){ list.innerHTML = '<p class="error">Could not load requests.</p>'; }
   }
   async function openSupport(id){
@@ -3391,17 +3539,36 @@
     const H = d.horizon;
     if(!H || !H.stages) return '';
     const id = Number(d.ticket.id);
-    const mark = { done: '✓', now: '●', later: '○', skipped: '–' };
+    // A coloured bar left to right, one segment per stage, with each
+    // stage's full name under its own segment and its state in words under
+    // that (owner, 14 Nov 2026, choosing A3: "I want this to be horizontal
+    // ... and give color coding ... but labelling should be as per option
+    // A"). Hovering a segment gives the name, the detail and the state.
+    //
+    // The colours are the honest ones, so on a request where a payment went
+    // through while an earlier step is still open the run is not a tidy
+    // left-to-right fill. That is the request being untidy, not the widget:
+    // the amber "Also open" label under the segment says which step it is.
+    const word = { done: 'Done', now: 'Do this next', open: 'Also open', later: 'Not yet', skipped: 'Not needed' };
+    const steps = H.stages.filter(st => st.state !== 'skipped');
+    const skipped = H.stages.filter(st => st.state === 'skipped');
+    const cols = `grid-template-columns:repeat(${steps.length}, minmax(86px, 1fr));`;
     return `<div class="sup-horizon">
       <div class="sup-horizon-head"><strong>Where this is:</strong> ${escAdmin(H.where)}
         ${d.ticket.assigned_to_email ? `<span class="tds-sub">· with ${escAdmin(d.ticket.assigned_to_email)}</span>
           <button type="button" class="filter-clear" onclick="supAssign(${id}, null)" style="font-size:12px;">unassign</button>`
           : `<button type="button" class="approve-btn" onclick="supAssign(${id}, 'me')" style="padding:3px 10px; font-size:12px; margin-left:6px;">Assign to me</button>`}
       </div>
-      <ol class="sup-horizon-line">${H.stages.map(st => `
-        <li class="hz hz-${escAdmin(st.state)}"><span class="hz-mark">${mark[st.state] || '○'}</span>
-          <span class="hz-label">${escAdmin(st.label)}</span>
-          ${st.note ? `<span class="hz-note">${escAdmin(st.note)}</span>` : ''}</li>`).join('')}</ol>
+      <div class="hzh-scroll"><div class="hzh">
+        <div class="hzh-track" style="${cols}">${steps.map(st => `<span class="hzh-seg hzh-${escAdmin(st.state)}"></span>`).join('')}</div>
+        <div class="hzh-labels" style="${cols}">${steps.map(st => `
+          <span class="hzh-cell hzh-${escAdmin(st.state)}" tabindex="0">
+            <span class="hzh-name">${escAdmin(st.label)}</span>
+            <span class="hzh-state">${word[st.state] || ''}</span>
+            <span class="hzh-tip"><strong>${escAdmin(st.label)}</strong>${st.note ? '<br>' + escAdmin(st.note) : ''}<br><em>${word[st.state] || ''}</em></span>
+          </span>`).join('')}</div>
+      </div></div>
+      ${skipped.length ? `<p class="hz-also">Not needed on this request: ${skipped.map(st => escAdmin(st.label)).join(' · ')}</p>` : ''}
       <p class="lk-msg" id="hzMsg"></p></div>`;
   }
   window.supAssign = async function(id, who){
@@ -3903,7 +4070,8 @@
             <p style="margin:8px 0; font-size:14px;"><strong>${escAdmin(c.guest || 'Guest')}:</strong> ${escAdmin(c.what)}</p>
             <small>${fileLinks(c.photos)}</small>
             <p style="font-size:13px; opacity:0.7; margin:6px 0 0;">Host: ${escAdmin(c.host || '')} · ${escAdmin(c.hostEmail || '')}</p>
-            <input id="corrNote-${Number(c.id)}" placeholder="What the host should put right (the guest and the host both see this)" style="width:100%; margin-top:10px; padding:8px; border:1px solid #ddd; border-radius:6px;">
+            <input id="corrNote-${Number(c.id)}" placeholder="What the host should put right — in your words, not the guest's" style="width:100%; margin-top:10px; padding:8px; border:1px solid #ddd; border-radius:6px;">
+            <p class="tds-sub" style="margin:6px 0 0;">This is the only thing the host is shown, and the guest sees it too. <strong>Leave it blank and the host is not told at all</strong> — the guest's own words are never passed on.</p>
             <div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
               <button type="button" class="approve-btn" onclick="decideCorrection(${Number(c.id)}, 'advised')">Ask the host to put it right</button>
               <button type="button" class="approve-btn" onclick="decideCorrection(${Number(c.id)}, 'dropped')">Drop it — the listing is right</button>
@@ -4417,6 +4585,28 @@
 // see it whole and act on it. Server: get-pending-listings.js → _admin-lookup.js.
 const lkState = { q: '', results: null, detail: null, stack: [] };
 const lkEsc = (t) => escAdmin(t == null ? '' : String(t));
+// The (i) that follows a label, with its explanation behind it instead of
+// as a paragraph on the page (owner, 14 Nov 2026: "Lot of text. Can we
+// create Informative (I) Icon on each label and put the text there if
+// someone hovers"). Opens on hover, on keyboard focus, and on a tap.
+const apInf = (text) => `<span class="inf" tabindex="0" role="note" aria-label="What this means">i<span class="inf-tip">${lkEsc(text)}</span></span>`;
+// A tooltip is centred under its icon, which runs off the screen when the
+// icon sits near the right edge. Measured as it opens rather than guessed,
+// because the icons are inside panels of varying width. One listener for
+// the whole page, so markup added later is covered without re-binding.
+(function infEdges(){
+  const fix = (el) => {
+    const i = el.closest ? el.closest('.inf') : null;
+    if(!i) return;
+    i.classList.remove('inf-right');
+    const tip = i.querySelector('.inf-tip');
+    if(!tip) return;
+    const r = tip.getBoundingClientRect();
+    if(r.right > window.innerWidth - 8) i.classList.add('inf-right');
+  };
+  document.addEventListener('mouseover', (e) => fix(e.target), true);
+  document.addEventListener('focusin', (e) => fix(e.target), true);
+})();
 const lkInr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
 const lkDay = (d) => { if(!d) return '—'; const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(String(d)); const x = m ? new Date(+m[1], +m[2] - 1, +m[3]) : new Date(d); return x.toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }); };
 const lkWhen = (d) => d ? new Date(d).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '—';
@@ -4987,6 +5177,10 @@ async function applyDbUpdates(){
 <script>
 // ---------- Roles, Approvals, Team, proposing actions (server: _support-actions.js) ----------
 window.ADMIN_ROLE = null;
+// Filled from the server on sign-in (adminMe.tabs): the owner can make
+// roles and change what each reaches, so this cannot be a constant any
+// more. The two below are only what to show before the first answer comes
+// back, and the server refuses anything this page gets wrong.
 window.ROLE_TABS = { agent: ['lookup', 'support', 'approvals', 'policies'], reviewer: ['lookup', 'support', 'approvals', 'policies'] };
 const ROLE_LABEL = { admin: 'Admin', reviewer: 'Reviewer', agent: 'Customer representative' };
 const TAB_BTN = { lookup: 'tabLookupBtn', support: 'tabSupportBtn', approvals: 'tabApprovalsBtn', policies: 'tabPoliciesBtn' };
@@ -4999,9 +5193,20 @@ window.applyRole = async function(){
     if(r.ok) me = await r.json();
   }catch(e){ /* fall back to admin view; the server still checks every call */ }
   ADMIN_ME_INFO = me;
+  // Also on window: this file has several script blocks, and a `let` at the
+  // top of one of them is not reachable from the others. Code outside this
+  // block (the jobs panel, for one) asks window for it.
+  window.ADMIN_ME_INFO = me;
   // Data safety: the super admin only (the server refuses everyone else too).
   { const row = document.getElementById('tabSafetyRow'); if(row) row.style.display = me && me.superAdmin ? '' : 'none'; }
+  // Roles decides who can do what, so it is a super admin’s alone. The
+  // server refuses the calls as well; this only keeps the tab out of sight.
+  { const row = document.getElementById('tabRolesRow'); if(row) row.style.display = me && (me.superAdmin || me.canManageTeam) ? '' : 'none'; }
   window.ADMIN_ROLE = (me && me.role) || 'admin';
+  // The server now says which tabs this role holds (adminMe.tabs). It is
+  // the same list the server enforces on, so the sidebar cannot drift from
+  // what is actually permitted.
+  if(me && Array.isArray(me.tabs)) window.ROLE_TABS[window.ADMIN_ROLE] = me.tabs;
   document.body.dataset.role = window.ADMIN_ROLE;
   const g = document.getElementById('adminGreeting');
   if(g && !g.querySelector('.role-badge')) g.insertAdjacentHTML('afterbegin', `<span class="role-badge is-${lkEsc(window.ADMIN_ROLE)}">${lkEsc(ROLE_LABEL[window.ADMIN_ROLE] || window.ADMIN_ROLE)}</span> `);
@@ -5271,11 +5476,14 @@ async function loadApprovals(){
             ${a.guest_name || a.guest_email ? `<div class="lk-kv"><span>Guest</span><span><button type="button" class="lk-link" onclick="apOpen('guest', ${Number(a.guest_id)})">${lkEsc(a.guest_name || a.guest_email)} ›</button></span></div>` : ''}
             ${a.property_name && !a.order_id ? `<div class="lk-kv"><span>Listing</span><span><button type="button" class="lk-link" onclick="apOpen('listing', ${Number(a.listing_id)})">${lkEsc(a.property_name)} ›</button></span></div>` : ''}
             ${a.ticket_ref ? `<div class="lk-kv"><span>Request</span><span><button type="button" class="lk-link" onclick="apOpenTicket(${Number(a.ticket_id)})">${lkEsc(a.ticket_ref)} ›</button></span></div>` : ''}</div>
-          <div><div class="ap-label">If you approve this</div><div class="ap-what">${lkEsc(a.description || '')}</div>
-            <div class="ap-label">Why they asked for it</div><div class="ap-text">${lkEsc(a.reason)}</div></div>
+          <div><div class="ap-label">If you approve this${apInf('Exactly what Aerva will do the moment you approve — the money moved, the words the person is sent, and anything recorded against the booking. It is written out in advance so there is no surprise: approving does this, nothing more and nothing less.')}</div><div class="ap-what">${lkEsc(a.description || '')}</div>
+            <div class="ap-label">Why they asked for it${apInf('The representative\'s own reason, in their words. It is what they will be judged on, so it should say what happened and why this action fits — not simply repeat the request.')}</div><div class="ap-text">${lkEsc(a.reason)}</div></div>
         </div>
-        ${a.hostStep ? `<div class="ap-label">Was the host heard?</div><div class="ap-text">${lkEsc(a.hostStep.line)}</div>` : ''}
-        ${a.summary ? `<div class="ap-label">Conversation summary</div><div class="ap-summary">${lkEsc(a.summary)}</div>` : ''}
+        ${a.hostStep ? `<div class="ap-label">Was the host heard?${apInf('Whether anyone asked the host what happened before this was proposed, and what they said. Nothing can be proposed on a booking until a representative has answered this — so if it says the host was not needed, the reason they gave is here.')}</div><div class="ap-text">${lkEsc(a.hostStep.line)}</div>` : ''}
+        ${a.summary ? `<div class="ap-label">Conversation summary${apInf('Written by Aerva\'s AI from the conversation, kept short on purpose. It is a summary, not evidence: if the decision turns on exactly what somebody said, open the whole conversation underneath and read it.')}</div><div class="ap-summary">${lkEsc(a.summary)}</div>` : ''}
+        ${a.ticket_id ? `<details class="ap-thread" data-tid="${Number(a.ticket_id)}" ontoggle="apLoadThread(this)">
+          <summary>Read the whole conversation${a.ticket_ref ? ' · ' + lkEsc(a.ticket_ref) : ''}</summary>
+          <div class="ap-thread-body"><p class="lk-sub" style="margin:8px 0 0;">Loading…</p></div></details>` : ''}
         ${a.status !== 'pending' && a.reviewed_by_email ? `<p class="lk-sub" style="margin-top:8px;">${a.status === 'withdrawn' ? 'Withdrawn' : 'Decided by ' + lkEsc(a.reviewed_by_email)} · ${lkWhen(a.reviewed_at)}${a.review_note ? ' — “' + lkEsc(a.review_note) + '”' : ''}${a.error ? `<br><span class="error">${lkEsc(a.error)}</span>` : ''}</p>` : ''}
         ${(a.params || {}).refundFee ? `<p class="lk-sub" style="color:#a3402f; margin-top:8px;"><strong>Refunds Aerva’s service fee</strong> — an exception; only an admin can approve. Why: ${lkEsc((a.params || {}).feeReason || '—')}</p>` : ''}
         ${pend && canReview() && !mine && (!(a.params || {}).refundFee || isAdminRole()) ? `<div class="lk-form ap-decide">
@@ -5301,6 +5509,35 @@ async function loadApprovals(){
 }
 function apOpen(kind, id){ switchTab('lookup'); lkState.stack = []; lkOpen(kind, id, false); }
 function apOpenTicket(id){ switchTab('support'); setTimeout(() => openSupport(id), 50); }
+// The whole conversation, under the summary, without leaving Approvals
+// (owner, 14 Nov 2026: "If approver wants to see the original
+// conversation, they should be able to see the history of it"). The
+// summary is deliberately short now, so the evidence behind it has to be
+// one click away rather than one tab away — opening the Support tab loses
+// the reviewer's place in the list they are working through.
+//
+// Loaded the first time it is opened and kept, so opening and closing it
+// does not fetch again.
+async function apLoadThread(el){
+  if(!el.open || el.dataset.loaded) return;
+  el.dataset.loaded = '1';
+  const box = el.querySelector('.ap-thread-body');
+  try{
+    const d = await lkGet('supportTicket=' + Number(el.dataset.tid));
+    const msgs = (d && d.messages) || [];
+    if(!msgs.length){ box.innerHTML = '<p class="lk-sub" style="margin:8px 0 0;">Nothing was written on this request.</p>'; return; }
+    const who = (m) => m.sender === 'user' ? 'Customer'
+      : m.sender === 'support' ? (m.internal ? 'Internal note' + (m.admin_email ? ' · ' + lkEsc(m.admin_email) : '') : 'Aerva Support' + (m.admin_email ? ' · ' + lkEsc(m.admin_email) : ''))
+      : 'Aerva';
+    box.innerHTML = `<ol class="ap-msgs">${msgs.map(m => `<li class="ap-msg${m.internal ? ' is-internal' : ''}${m.sender === 'user' ? ' is-them' : ''}">
+      <span class="ap-msg-who">${who(m)}<span class="ap-msg-at">${lkWhen(m.at || m.created_at)}</span></span>
+      <span class="ap-msg-body">${lkEsc(m.body || '')}</span></li>`).join('')}</ol>
+      <p class="lk-sub" style="margin:8px 0 0;">${msgs.length} message${msgs.length === 1 ? '' : 's'}. Internal notes are shown to you and never to the customer.</p>`;
+  }catch(err){
+    el.dataset.loaded = '';
+    box.innerHTML = `<p class="lk-msg is-err" style="margin:8px 0 0;">Could not load it: ${lkEsc(err.message)}</p>`;
+  }
+}
 async function apDecide(id, approve, action){
   const note = document.getElementById('apNote' + id).value.trim();
   const msg = document.getElementById('apMsg' + id); msg.className = 'lk-msg'; msg.textContent = '';
@@ -5376,9 +5613,142 @@ async function loadTeam(){
       ${(d.removed || []).length ? `<h3 style="margin:22px 0 6px;">Off the team</h3>
         <p class="lk-sub" style="margin:0 0 8px; max-width:760px;">They cannot sign in, cannot be sent a new password, and any link they were still holding is dead. Their account is kept so every approval, case record and audit line still says who did it. Letting someone back in sends them a new link to set a password — their old one never works again.</p>
         <div class="lk-list">${d.removed.map(gone).join('')}</div>` : ''}
-      <p class="lk-msg" id="teamMsg"></p>`;
+      <p class="lk-msg" id="teamMsg"></p>
+      <div id="aiCreditBlock"></div>`;
+    loadAiCredit(iAmSuper);
   }catch(err){ body.innerHTML = `<p class="lk-empty error">${lkEsc(err.message)}</p>`; }
 }
+
+// What each person has spent on the AI today, and their switch for it
+// (owner, 14 Nov 2026: "show the token credit against each CR and provide
+// them option to turn AI off as well", then the same for reviewers and for
+// super admins — so every role is listed here).
+//
+// "Credit" is how many more AI calls that person can make today before
+// their own daily cap stops them. The rupees beside it are what their calls
+// have actually cost, worked out from the token counts the API reported —
+// not an estimate from the number of calls.
+async function loadAiCredit(iAmSuper){
+  const box = document.getElementById('aiCreditBlock');
+  if(!box) return;
+  const myEmail = String((ADMIN_ME_INFO && ADMIN_ME_INFO.email) || '').toLowerCase();
+  try{
+    const d = await lkGet('aiBudget=1&days=1');
+    const people = d.people || [];
+    if(!people.length){ box.innerHTML = ''; return; }
+    const bar = (p) => {
+      if(!p.cap) return '';
+      const pct = Math.min(100, Math.round((p.calls / p.cap) * 100));
+      const tone = pct >= 100 ? '#a3402f' : pct >= 75 ? '#b4761f' : '#5a7d52';
+      return `<span style="display:inline-block; width:90px; height:6px; background:#e9e1d6; border-radius:3px; overflow:hidden; vertical-align:middle;"><span style="display:block; width:${pct}%; height:100%; background:${tone};"></span></span>`;
+    };
+    const row = (p) => {
+      const mine = p.email === myEmail;
+      const canToggle = mine || iAmSuper;
+      return `<div class="lk-item" style="cursor:default; grid-template-columns:minmax(0,1.8fr) minmax(0,1.5fr) auto;">
+        <span><strong>${lkEsc(p.name || p.email)}</strong>${mine ? ' <span class="lk-chip">You</span>' : ''}${p.superAdmin ? ' <span class="lk-chip">Super admin</span>' : ''}
+          <span class="lk-sub">${lkEsc(p.email)}${p.role ? ' · ' + lkEsc(p.role) : ''}</span></span>
+        <span>${p.aiEnabled
+          ? `${bar(p)} <strong>${p.cap ? p.left + ' of ' + p.cap + ' left' : p.calls + ' used'}</strong>
+             <span class="lk-sub">${p.calls} call${p.calls === 1 ? '' : 's'} today · ₹${(Math.round(p.rupees * 100) / 100).toLocaleString('en-IN')} · ${(p.inTokens + p.outTokens).toLocaleString('en-IN')} tokens</span>`
+          : `<span class="lk-sub">AI is off for this account.${p.calls ? ' ' + p.calls + ' call' + (p.calls === 1 ? '' : 's') + ' earlier today, ₹' + (Math.round(p.rupees * 100) / 100).toLocaleString('en-IN') + '.' : ''}</span>`}</span>
+        <span style="justify-self:end;">${canToggle
+          ? `<button type="button" class="lk-btn${p.aiEnabled ? ' is-ghost' : ''}" onclick="setAiFor('${lkEsc(p.email).replace(/'/g, "\\'")}', ${p.aiEnabled ? 'false' : 'true'})">${p.aiEnabled ? 'Turn AI off' : 'Turn AI back on'}</button>`
+          : '<span class="lk-sub">—</span>'}</span></div>`;
+    };
+    box.innerHTML = `<h3 style="margin:26px 0 6px;">AI credit today</h3>
+      <p class="lk-sub" style="margin:0 0 8px; max-width:760px;">
+        Each person can make up to ${d.caps && d.caps.perAdmin ? d.caps.perAdmin : 'a set number of'} AI calls a day — the suggestion cards and the summary written for a host.
+        Turning AI off holds nothing up: that person writes their replies themselves, which they can always do. It does not affect the assistant guests talk to.
+        ${iAmSuper ? 'As a super admin you can switch it for anybody.' : 'You can switch your own; a super admin can switch anybody’s.'}
+        ${d.enforced === false ? '<br><strong>Spend is not being counted yet</strong> — the database update for it has not been run, so the daily ceiling is not in force.' : `Across the whole platform today: ${d.today ? d.today.calls : 0} calls, ₹${d.today ? (Math.round(d.today.rupees * 100) / 100).toLocaleString('en-IN') : 0} of ₹${d.caps ? d.caps.rupees : 0}.`}
+      </p>
+      <div class="lk-list">${people.map(row).join('')}</div>
+      <p class="lk-msg" id="aiCreditMsg"></p>`;
+  }catch(err){ box.innerHTML = `<p class="lk-sub" style="margin-top:18px;">AI usage could not be loaded: ${lkEsc(err.message)}</p>`; }
+}
+async function setAiFor(email, on){
+  const m = document.getElementById('aiCreditMsg');
+  if(m){ m.className = 'lk-msg'; m.textContent = 'Saving…'; }
+  try{
+    await lkPost({ aiToggle: { email, enabled: !!on } });
+    await loadTeam();
+    const m2 = document.getElementById('aiCreditMsg');
+    if(m2){ m2.className = 'lk-msg is-ok'; m2.textContent = on ? `AI is back on for ${email}.` : `AI is off for ${email}.`; }
+  }catch(err){ if(m){ m.className = 'lk-msg is-err'; m.textContent = err.message; } }
+}
+// ---- Roles (owner, 14 Nov 2026: "Admin can create roles and also can
+// define tabs that will be allowed against that role") ----------------
+//
+// A role is a list of tabs, and the tabs are the whole permission: the
+// server works out which requests to allow from them. So this screen is
+// a list of roles, each with its tabs as checkboxes, and a box to make a
+// new one. Reserved tabs are shown struck through and cannot be ticked.
+let ROLES_DATA = null;
+async function loadRoles(){
+  const body = document.getElementById('rolesBody');
+  try{
+    const d = await lkGet('adminRoles=1');
+    ROLES_DATA = d;
+    if(!d.ready){ body.innerHTML = '<p class="lk-empty">Roles are not switched on yet \u2014 run the database update <code>2026-11-14-07-roles.sql</code> first.</p>'; return; }
+    const canEdit = !!d.canEdit;
+    const tabBox = (role, t) => {
+      const on = (role.tabs || []).includes(t.key);
+      const locked = t.superOnly && role.key !== 'admin';
+      return `<label class="role-tab${locked ? ' is-locked' : ''}${on ? ' is-on' : ''}" title="${locked ? 'Kept for super admins; cannot be put on a role.' : ''}">`
+        + `<input type="checkbox" data-role="${lkEsc(role.key)}" value="${lkEsc(t.key)}"${on ? ' checked' : ''}${(!canEdit || locked || role.key === 'admin') ? ' disabled' : ''}> ${lkEsc(t.label)}</label>`;
+    };
+    const card = (r) => `<div class="role-card" data-rolecard="${lkEsc(r.key)}">
+        <div class="role-head">
+          <div><strong>${lkEsc(r.label)}</strong>${r.builtin ? ' <span class="lk-chip">Built in</span>' : ''}
+            <span class="lk-sub">${lkEsc(r.key)} \u00b7 ${Number(r.people)} ${Number(r.people) === 1 ? 'person' : 'people'} \u00b7 ${(r.tabs || []).length} tab${(r.tabs || []).length === 1 ? '' : 's'}</span></div>
+          <div class="role-act">
+            ${canEdit && r.key !== 'admin' ? `<button type="button" class="lk-btn" onclick="saveRoleTabs('${lkEsc(r.key)}')">Save tabs</button>` : ''}
+            ${canEdit && !r.builtin ? `<button type="button" class="lk-btn is-danger" onclick="deleteRole('${lkEsc(r.key)}', '${lkEsc(r.label).replace(/'/g, "\\'")}')">Delete</button>` : ''}
+          </div>
+        </div>
+        ${r.key === 'admin' ? '<p class="lk-sub" style="margin:4px 0 0;">Admin holds every tab and cannot be narrowed \u2014 somebody has to be able to change roles.</p>' : ''}
+        <div class="role-tabs">${(d.tabs || []).map(t => tabBox(r, t)).join('')}</div>
+      </div>`;
+    body.innerHTML = (d.roles || []).map(card).join('')
+      + (canEdit ? `<div class="role-card role-new">
+          <div class="role-head"><strong>Make a role</strong></div>
+          <div style="display:flex; gap:8px; flex-wrap:wrap; align-items:flex-end; margin:8px 0;">
+            <label class="lk-wide" style="flex:1 1 220px;">Name<input type="text" id="roleNewLabel" maxlength="60" placeholder="Payouts clerk"></label>
+          </div>
+          <div class="role-tabs">${(d.tabs || []).map(t => `<label class="role-tab${t.superOnly ? ' is-locked' : ''}"><input type="checkbox" data-role="__new" value="${lkEsc(t.key)}"${t.superOnly ? ' disabled' : ''}> ${lkEsc(t.label)}</label>`).join('')}</div>
+          <button type="button" class="approve-btn" style="margin-top:10px;" onclick="createRole()">Make the role</button>
+        </div>` : '')
+      + '<p class="lk-msg" id="rolesMsg"></p>';
+  }catch(err){ body.innerHTML = `<p class="lk-empty error">${lkEsc(err.message)}</p>`; }
+}
+function roleTicked(key){
+  return [...document.querySelectorAll(`input[data-role="${CSS.escape(key)}"]:checked`)].map(i => i.value);
+}
+function rolesSay(ok, text){
+  const m = document.getElementById('rolesMsg');
+  if(m){ m.className = 'lk-msg ' + (ok ? 'is-ok' : 'is-err'); m.textContent = text; }
+}
+async function saveRoleTabs(key){
+  const tabs = roleTicked(key);
+  if(!tabs.length){ rolesSay(false, 'Tick at least one tab, or the role can do nothing.'); return; }
+  try{ await lkPost({ updateRole: { key, tabs } }); await loadRoles(); rolesSay(true, 'Saved. It applies at once to everybody on that role.'); }
+  catch(err){ rolesSay(false, err.message); }
+}
+async function createRole(){
+  const label = (document.getElementById('roleNewLabel').value || '').trim();
+  const tabs = roleTicked('__new');
+  if(label.length < 2){ rolesSay(false, 'Give the role a name.'); return; }
+  if(!tabs.length){ rolesSay(false, 'Tick at least one tab, or the role can do nothing.'); return; }
+  try{ await lkPost({ createRole: { label, tabs } }); await loadRoles(); rolesSay(true, `\u201c${label}\u201d is ready. Put somebody on it from Team.`); }
+  catch(err){ rolesSay(false, err.message); }
+}
+async function deleteRole(key, label){
+  if(!confirm(`Delete the role \u201c${label}\u201d? Anybody still on it has to be moved first.`)) return;
+  try{ await lkPost({ deleteRole: { key } }); await loadRoles(); rolesSay(true, `\u201c${label}\u201d is gone.`); }
+  catch(err){ rolesSay(false, err.message); }
+}
+
 // Taking someone off the team: typed out in full, because they are signed
 // out at once and cannot get back in by themselves.
 async function removeTeamMember(id, who){

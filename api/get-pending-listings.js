@@ -561,7 +561,35 @@ module.exports = async (req, res) => {
   // A representative or reviewer reaches only Support, Lookup and Approvals;
   // anything else answers 403 here, whatever the page shows.
   const ADMIN_ROLE = await actions.roleOf(sql, sessionPayload, hasValidSecret);
-  if (!actions.allowed(ADMIN_ROLE, req)) {
+  // Worked out once, lazily, for the handlers that need it.
+  let _isSuper = null;
+  const isSuperNow = async () => {
+    if (_isSuper !== null) return _isSuper;
+    if (hasValidSecret && !sessionPayload) { _isSuper = true; return true; }
+    try { _isSuper = await actions.isSuper(sql, Number((sessionPayload || {}).listingId) || 0); }
+    catch (err) { _isSuper = false; }
+    return _isSuper;
+  };
+  // RULE 1 (owner, 14 Nov 2026): "CR cant refund, neither Reviewer - Only
+  // super admin can." Checked before anything else, on every request, so a
+  // direct money route cannot be reached by a role that merely holds the
+  // tab it lives on — nor by a plain Admin.
+  try {
+    const moved = await require('./_money-gate').check(req, { isSuper: await isSuperNow() });
+    if (moved) {
+      await logAudit(sql, { action: 'money_move_by_super_admin', success: true, actorType: 'admin',
+        actorIdentifier: ADMIN_ACTOR, targetType: 'request', targetId: null, metadata: { key: moved }, ...ADMIN_AUDIT }).catch(() => {});
+    }
+  } catch (err) {
+    if (err.isUserFacing) {
+      await logAudit(sql, { action: 'money_move_refused', success: false, actorType: 'admin',
+        actorIdentifier: ADMIN_ACTOR, targetType: 'request', targetId: null,
+        metadata: { role: ADMIN_ROLE, keys: Object.keys(req.body || {}) }, ...ADMIN_AUDIT }).catch(() => {});
+      return res.status(err.status).json({ error: err.message });
+    }
+    throw err;
+  }
+  if (!(await actions.allowedFor(sql, ADMIN_ROLE, req))) {
     return res.status(403).json({ error: `Your role (${actions.ROLES[ADMIN_ROLE] || 'none'}) cannot do this. Ask an admin.`, role: ADMIN_ROLE });
   }
   const ADMIN_ME = { id: sessionPayload ? Number(sessionPayload.listingId) : 0, email: ADMIN_ACTOR, role: ADMIN_ROLE };
@@ -834,7 +862,7 @@ module.exports = async (req, res) => {
       }
       if (b.reproposeAction) {
         const x = b.reproposeAction;
-        const row = await actions.repropose(sql, { id: x.id, kind: x.kind, params: x.params || {}, reason: x.reason, admin: Object.assign({ role: ADMIN_ROLE }, ADMIN_ME), audit: ADMIN_AUDIT });
+        const row = await actions.repropose(sql, { id: x.id, kind: x.kind, params: x.params || {}, reason: x.reason, admin: Object.assign({ role: ADMIN_ROLE, isSuper: await isSuperNow() }, ADMIN_ME), audit: ADMIN_AUDIT });
         return res.status(200).json({ success: true, action: row });
       }
       if (b.signoffAction) {
@@ -1276,12 +1304,56 @@ module.exports = async (req, res) => {
       return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Suggestions are not available right now.' });
     }
   }
-  // GET ?aiBudget=1 — what the AI has cost per day, and today's ceiling.
+  // ---- Roles (owner, 14 Nov 2026) ----------------------------------
+  // GET ?adminRoles=1 — every role, every tab, and who holds each.
+  // Readable by any role that has been given the Roles tab; changing one is
+  // a super admin's alone, because a role IS the permission system and
+  // anybody who could edit roles could grant themselves anything.
+  if (req.method === 'GET' && req.query && req.query.adminRoles) {
+    try { return res.status(200).json({ ...(await require('./_roles').screen(sql)), canEdit: await isSuperNow() }); }
+    catch (err) { console.error('adminRoles failed:', err); return res.status(500).json({ error: 'Could not load roles.' }); }
+  }
+  if (req.method === 'POST' && req.body && (req.body.createRole || req.body.updateRole || req.body.deleteRole)) {
+    try {
+      if (!(await isSuperNow())) return res.status(403).json({ error: 'Only a super admin can change roles.' });
+      const roles = require('./_roles');
+      const b = req.body;
+      const out = b.createRole ? await roles.create(sql, { ...b.createRole, by: ADMIN_ACTOR, isSuper: true })
+                : b.updateRole ? await roles.update(sql, { ...b.updateRole, by: ADMIN_ACTOR, isSuper: true })
+                : await roles.remove(sql, { ...b.deleteRole, by: ADMIN_ACTOR });
+      await logAudit(sql, { action: b.createRole ? 'role_created' : b.updateRole ? 'role_updated' : 'role_deleted',
+        success: true, actorType: 'admin', actorIdentifier: ADMIN_ACTOR, targetType: 'role', targetId: null,
+        metadata: out, ...ADMIN_AUDIT }).catch(() => {});
+      return res.status(200).json(out);
+    } catch (err) {
+      if (!err.isUserFacing) console.error('role change failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not change that.' });
+    }
+  }
+
+  // GET ?aiBudget=1 — what the AI has cost per day, today's ceiling, and
+  // each person's own spend and remaining credit.
   if (req.method === 'GET' && req.query && req.query.aiBudget) {
     try { return res.status(200).json(await require('./_ai-budget').report(sql, Number(req.query.days) || 14)); }
     catch (err) {
       console.error('aiBudget failed:', err);
       return res.status(500).json({ error: 'Could not load AI usage.' });
+    }
+  }
+  // POST { aiToggle: { email, enabled } } — turn one person's AI on or off.
+  // Anyone may set their own; only a super admin may set somebody else's.
+  if (req.method === 'POST' && req.body && req.body.aiToggle) {
+    try {
+      const budget = require('./_ai-budget');
+      let isSuper = false;
+      try { isSuper = await require('./_support-actions').isSuper(sql, ADMIN_ME.id); } catch (e) { /* older database */ }
+      return res.status(200).json(await budget.setAi(sql, {
+        email: req.body.aiToggle.email, enabled: !!req.body.aiToggle.enabled,
+        by: ADMIN_ACTOR, bySuper: isSuper
+      }));
+    } catch (err) {
+      if (!err.isUserFacing) console.error('aiToggle failed:', err);
+      return res.status(err.isUserFacing ? err.status : 500).json({ error: err.isUserFacing ? err.message : 'Could not change that.' });
     }
   }
   // POST { supportCase: { ticketId, summary?, outcome?, requesterConduct?, otherConduct?, conductNote? } }
