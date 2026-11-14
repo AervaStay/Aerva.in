@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_confirm-booking.js — turns a paid Razorpay order into bookings.
 // Not an endpoint (leading underscore).
 //
@@ -266,7 +269,7 @@ async function sendHostBookingEmails(sql, stays, experiences, agreementVersion, 
 
 // extraHtml: a paragraph added for gift and group bookings (_gifts.js,
 // _group-bookings.js) — the same email, never a second one.
-async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer, agreementVersion = null, confirmationCodes = null, extraHtml = ''){
+async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer, agreementVersion = null, confirmationCodes = null, extraHtml = '', agreementPdfBuffer = null){
   if (!process.env.RESEND_API_KEY) {
     console.error('RESEND_API_KEY not set — booking confirmation email not sent.');
     return { sent: false, error: 'RESEND_API_KEY not set' };
@@ -287,10 +290,14 @@ async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer
       ${stays.filter(s => Number(s.freeCancelFee) > 0).map(s => `<p style="background:#f6efe3; border-radius:10px; padding:10px 14px; font-size:14px;"><strong>Free cancellation${stays.length > 1 ? ' — ' + String(s.suite).replace(/[&<>"']/g, '') : ''}:</strong> cancel before <strong>${String((s.freeCancelOffer || {}).untilLabel || '').replace(/[&<>"']/g, '')}</strong> (the property’s time) for a full refund of the booking price, its GST and any deposit. The free cancellation add-on (₹${Math.round(Number(s.freeCancelFee)).toLocaleString('en-IN')} + GST) and Aerva’s service fee are not refunded. After that, the listing’s refund policy applies.</p>`).join('')}
       ${pdfBuffer ? `<p>Your full booking details — dates, amounts, and everything else — are attached as a PDF to this email.</p>`
         : `<p>You can see your full booking details any time under <a href="https://aerva.in/index.html?view=my-bookings">My Bookings</a> on aerva.in.</p>`}
-      ${agreementVersion ? `<p style="font-size:13px; opacity:0.8;">You accepted Aerva’s booking agreement (version ${agreementVersion}) before paying. Read it and Aerva’s Policies at <a href="https://aerva.in/index.html?view=policies">aerva.in/policies</a>.</p>` : ''}
+      ${agreementVersion ? `<p style="font-size:13px; opacity:0.8;">You accepted Aerva’s booking agreement (version ${agreementVersion}) before paying${agreementPdfBuffer ? ', and a copy is attached to this email for your records' : ''}. Read it and Aerva’s Policies at <a href="https://aerva.in/index.html?view=policies">aerva.in/policies</a>.</p>` : ''}
       <p style="font-size:12px; opacity:0.6; margin-top:24px;">${helpLine({}, 'Questions?')}</p>
     </div>
   `;
+
+  const attachments = [];
+  if (pdfBuffer) attachments.push({ filename: 'aerva-booking-confirmation.pdf', content: pdfBuffer.toString('base64') });
+  if (agreementPdfBuffer) attachments.push({ filename: 'aerva-booking-agreement.pdf', content: agreementPdfBuffer.toString('base64') });
 
   const res = await fetch('https://api.resend.com/emails', {
     method: 'POST',
@@ -303,7 +310,13 @@ async function sendBookingConfirmationEmail(email, stays, experiences, pdfBuffer
       to: email,
       subject: 'Your Aerva Booking Confirmation',
       html,
-      ...(pdfBuffer ? { attachments: [{ filename: 'aerva-booking-confirmation.pdf', content: pdfBuffer.toString('base64') }] } : {})
+      // The booking details, and a copy of the agreement they accepted
+      // (owner, 14 Nov 2026: "agreement copy should be sent in pdf as
+      // attachment"). A link is not a copy — the page changes when the
+      // agreement changes, so a year later it no longer shows what they
+      // agreed to. Either attachment can be missing without stopping the
+      // email going out.
+      ...(attachments.length ? { attachments } : {})
     })
   });
 
@@ -1048,8 +1061,17 @@ async function finishBooking(sql, razorpay, ctx, rows, { conflictReason = null, 
       let pdf = null;
       try { pdf = await generateBookingConfirmationPdf(ctx.stays, ctx.experiences, razorpayOrderId, ctx.chargeCurrency, ctx.couponDiscount, ctx.confirmationCodes); out.pdf = true; }
       catch (err) { console.error('confirmation PDF failed (email goes without it):', err.message); out.pdfError = String(err.message || err).slice(0, 200); }
+      // The agreement they accepted, as a copy they keep (owner, 14 Nov
+      // 2026). Built with the version actually accepted, not today's.
+      let agreePdf = null;
+      try {
+        agreePdf = await require('./_agreement-pdf').agreementPdf('guest', {
+          version: ctx.agreement.version, acceptedAt: ctx.agreement.acceptedAt,
+          name: [ctx.firstName, ctx.lastName].filter(Boolean).join(' '), reference: razorpayOrderId });
+        out.agreementPdf = !!agreePdf;
+      } catch (err) { console.error('agreement PDF failed (email goes without it):', err.message); }
       const giftHtml = gift ? `<p><strong>This stay is a gift for ${String(gift.recipient_first_name + ' ' + gift.recipient_last_name).replace(/[&<>"']/g, '')}.</strong> We have emailed them the stay details (never the price) and a link to accept it. You still manage the booking, and any refund goes to your payment.</p>` : '';
-      try { Object.assign(out, await sendBookingConfirmationEmail(ctx.email, ctx.stays, ctx.experiences, pdf, ctx.agreement.version, ctx.confirmationCodes, giftHtml)); }
+      try { Object.assign(out, await sendBookingConfirmationEmail(ctx.email, ctx.stays, ctx.experiences, pdf, ctx.agreement.version, ctx.confirmationCodes, giftHtml, agreePdf)); }
       catch (err) { console.error('Could not send booking confirmation email:', err); out.error = String(err.message || err).slice(0, 300); }
     }
     try {

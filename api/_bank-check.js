@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_bank-check.js — the PAN and the bank account must belong to the same
 // person. Not an endpoint.
 //
@@ -338,8 +341,15 @@ const esc = (t) => String(t == null ? '' : t).replace(/[&<>"']/g, c => ({ '&': '
 // payouts are on hold and why, and the bank account is checked again from
 // scratch against the name on the PAN. Never throws: the change is saved
 // either way.
+//
+// FIRST TIME, OR A CHANGE (owner, 14 Nov 2026)? opts.first says there was
+// nothing on file before. A host adding their first bank account was being
+// told it "was changed", and then asked whether they had made the change
+// they had just made. The checks and the hold are identical either way —
+// only the words differ, and the words have to be true.
 const fmtWhen = (d) => new Date(d).toLocaleString('en-IN', { timeZone: 'Asia/Kolkata', day: 'numeric', month: 'long', hour: 'numeric', minute: '2-digit' });
-async function payoutDetailsChanged(sql, kind, key, what = 'bank') {
+async function payoutDetailsChanged(sql, kind, key, what = 'bank', opts = {}) {
+  const first = !!(opts && opts.first);
   try {
     const p = await loadPayee(sql, kind, key);
     if (!p) return { status: 'missing' };
@@ -349,21 +359,28 @@ async function payoutDetailsChanged(sql, kind, key, what = 'bank') {
     // PAN change is checked on the Verification tab.
     const where = kind !== 'host' ? 'https://aerva.in/index.html?view=cohost'
       : what === 'pan' ? 'https://aerva.in/host-dashboard.html?openProfile=1&profileTab=verification' : 'https://aerva.in/host-payouts.html';
+    const headline = what === 'pan'
+      ? (first ? 'Your PAN was added' : 'Your PAN was changed')
+      : (first ? 'Your payout bank account was added' : 'Your payout bank account was changed');
     const changed = what === 'pan'
-      ? `The PAN on your Aerva account was changed${p.panName ? ` to one in the name <strong>${esc(p.panName)}</strong>` : ''}.`
-      : `The bank account for your Aerva payouts was changed to the account ending <strong>${esc(last4)}</strong> (${esc(p.ifsc)}), in the name ${esc(p.holder)}.`;
-    await sendMail(p.email, what === 'pan' ? 'Your PAN was changed — payouts on hold' : 'Your payout bank account was changed — payouts on hold',
-      `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">${what === 'pan' ? 'Your PAN was changed' : 'Your payout bank account was changed'}</h2>
+      ? (first
+          ? `A PAN was added to your Aerva account${p.panName ? `, in the name <strong>${esc(p.panName)}</strong>` : ''}.`
+          : `The PAN on your Aerva account was changed${p.panName ? ` to one in the name <strong>${esc(p.panName)}</strong>` : ''}.`)
+      : (first
+          ? `The bank account for your Aerva payouts was set to the account ending <strong>${esc(last4)}</strong> (${esc(p.ifsc)}), in the name ${esc(p.holder)}.`
+          : `The bank account for your Aerva payouts was changed to the account ending <strong>${esc(last4)}</strong> (${esc(p.ifsc)}), in the name ${esc(p.holder)}.`);
+    await sendMail(p.email, `${headline} — payouts on hold`,
+      `<h2 style="font-family:Georgia,serif; margin:0 0 8px;">${headline}</h2>
        <p>${changed}</p>
        <p><strong>Your payouts are on hold</strong> while Aerva checks your details again:</p>
        <ul>
-         ${p.account ? '<li>Aerva verifies the new account;</li>' : '<li>add a bank account in the name on your PAN — payouts cannot be sent without one;</li>'}
-         ${what === 'pan' ? '<li>Aerva reviews your new PAN;</li>' : ''}
+         ${p.account ? `<li>Aerva verifies ${first ? 'the account' : 'the new account'};</li>` : '<li>add a bank account in the name on your PAN — payouts cannot be sent without one;</li>'}
+         ${what === 'pan' ? `<li>Aerva reviews your ${first ? 'PAN' : 'new PAN'};</li>` : ''}
          <li>and, for your security, at least until ${esc(until)}.</li>
        </ul>
        <p>Nothing is lost: payouts that fall due meanwhile are sent once the checks are done. You will get an email when they are, or if anything is needed from you.</p>
        <p style="margin:20px 0;"><a href="${where}" style="background:#1c1a17; color:#f4eadc; padding:12px 22px; text-decoration:none; display:inline-block;">See your payout details</a></p>
-       <p><strong>Did not make this change?</strong> ${helpLink({ category: 'verification' })} straight away.</p>`);
+       <p><strong>${first ? 'Was this not you?' : 'Did not make this change?'}</strong> ${helpLink({ category: 'verification' })} straight away.</p>`);
     if (!p.account || !p.ifsc) return { status: 'missing' };
     return await startCheck(sql, kind, key);
   } catch (err) {
@@ -545,18 +562,40 @@ function inChangeHold(changedAt) {
 }
 
 // What the payee and the admin see about the check.
-function describeCheck(row) {
+//
+//   overallStatus   the account's own status ('verified' / 'approved' /
+//                   'pending_review' / 'rejected'), when the caller has
+//                   it. An account Aerva has already approved should not
+//                   also be described as still being checked: the card
+//                   showed an APPROVED badge with "Being verified." right
+//                   under it, which cannot both be true to a reader. Once
+//                   it is settled, only a PROBLEM with the check is worth
+//                   saying; an unfinished penny drop is Aerva's business.
+function describeCheck(row, overallStatus) {
   const s = row && row.bank_check_status;
   const m = row && row.bank_name_match;
+  // SAY WHAT ACTUALLY HAPPENED (owner, 14 Nov 2026, looking at a card that
+  // read "APPROVED" and "Being verified." at the same time).
+  //
+  // Four different states used to read "Being verified." — including
+  // `error` and `failed`, which mean the check did NOT work. A host whose
+  // check had failed was told it was in progress, and would have waited
+  // for something that was never going to finish. `not_set_up` means it
+  // never started, which is not the same as running either.
   const map = {
     checking: 'Being verified…',
-    not_set_up: 'Being verified.',
-    error: 'Being verified.',
-    failed: 'Being verified.',
+    not_set_up: 'Waiting to be verified.',
+    error: 'The check could not be completed. Aerva will try again.',
+    failed: 'The check did not go through. Aerva will try again.',
     invalid: 'We could not verify this account. Check the account number and IFSC.',
-    active: m === 'match' ? 'Verified.' : m === 'mismatch' ? 'We could not verify this account in the payout name.' : 'Being verified.'
+    active: m === 'match' ? 'Verified.' : m === 'mismatch' ? 'We could not verify this account in the payout name.' : 'Being verified…'
   };
-  return s ? (map[s] || null) : null;
+  const text = s ? (map[s] || null) : null;
+  if (!text) return null;
+  const settled = overallStatus === 'verified' || overallStatus === 'approved';
+  const stillGoing = text === 'Being verified…' || text === 'Waiting to be verified.';
+  if (settled && stillGoing) return null;           // the badge already says it
+  return text;
 }
 
 // ---- IFSC → bank and branch ----

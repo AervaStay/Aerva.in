@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_contact-checks.js — Admin → Contact Checks, and the daily audit.
 // Not an endpoint (get-pending-listings.js ?contactChecks=1, admins only;
 // get-listings.js JOBS 'contact_check_audit').

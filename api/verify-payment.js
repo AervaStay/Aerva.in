@@ -114,7 +114,16 @@ module.exports = async (req, res) => {
       try {
         const rows = await sql`
           SELECT o.id, o.suite_name, o.arrival, o.departure, o.nights, o.guests, o.confirmation_code, o.guest_email,
-                 o.listing_id, l.listing_type, l.check_in_time, l.check_out_time, l.city
+                 o.listing_id, l.listing_type, l.check_in_time, l.check_out_time, l.city,
+                 -- What the guest was charged, so the confirmation can show
+                 -- the same breakdown they agreed to at checkout (owner,
+                 -- 14 Nov 2026) rather than one total with no parts.
+                 o.subtotal, o.discount_amount, o.gst, o.guest_service_fee, o.deposit_amount, o.total,
+                 o.coupon_discount, o.fee_credit_used,
+                 -- Not on every database yet: read through to_jsonb so an
+                 -- older one returns null instead of failing the query.
+                 to_jsonb(o)->>'free_cancel_fee' AS free_cancel_fee,
+                 to_jsonb(o)->>'free_cancel_gst' AS free_cancel_gst
           FROM orders o LEFT JOIN listings l ON l.id = o.listing_id
           WHERE o.razorpay_order_id = ${razorpay_order_id} AND o.status = 'paid' ORDER BY o.id`;
         let paid = null, currency = 'INR', method = null;
@@ -130,9 +139,21 @@ module.exports = async (req, res) => {
           const pad = (n) => String(n).padStart(2, '0');
           return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
         };
+        // Added up across every booking in this one payment — a guest who
+        // booked two homes together paid one amount and should see one
+        // breakdown of it.
+        const sum = (f) => rows.reduce((t, r) => t + (Number(r[f]) || 0), 0);
+        const charges = {
+          stay: sum('subtotal'), discount: sum('discount_amount'),
+          freeCancel: sum('free_cancel_fee'),
+          gst: sum('gst') + sum('free_cancel_gst'),
+          fee: sum('guest_service_fee'), deposit: sum('deposit_amount'),
+          coupon: sum('coupon_discount'), credit: sum('fee_credit_used'),
+          total: sum('total')
+        };
         return {
           email: rows[0] ? rows[0].guest_email : null,
-          paid, currency, method, paymentId: razorpay_payment_id,
+          paid, currency, method, paymentId: razorpay_payment_id, charges,
           items: rows.map(r => ({
             orderId: r.id, name: r.suite_name, arrival: day(r.arrival), departure: day(r.departure),
             nights: Number(r.nights) || null, guests: Number(r.guests) || null, code: r.confirmation_code || null,

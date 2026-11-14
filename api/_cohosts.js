@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_cohosts.js
 // Co-hosts: people a host lets into their listings. Not an API endpoint —
 // the leading underscore tells Vercel that.

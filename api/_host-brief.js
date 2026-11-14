@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_host-brief.js — the host's morning brief (owner, 9 Nov 2026: keep
 // hosts informed of today and upcoming bookings). Not an endpoint.
 // Daily (get-listings.js job host_daily_brief, 7 AM India time): one email

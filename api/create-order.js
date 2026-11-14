@@ -188,8 +188,14 @@ function priceLines(stayDetails, experienceDetails, { gst, fee, deposit, coupon 
                  amount: before, unitPrice: x.unitPrice, guests: x.guests, perPerson: x.priceUnit === 'per_person' });
     if (x.discountAmount) lines.push({ kind: 'discount', item: x.suite, label: 'Offer applied', amount: -x.discountAmount });
   });
-  const rates = [...new Set([...stayDetails, ...experienceDetails].filter(x => Number(x.gst) > 0).map(x => x.gstRate))];
-  if (gst) lines.push({ kind: 'gst', label: rates.length === 1 ? `GST (${rates[0]}%)` : 'GST', amount: gst });
+  // GST is listed whether or not it comes to anything (owner, 14 Nov 2026:
+  // "always show GST along with other even if it is 0"), beside the guest
+  // service fee, which has always been listed at zero. On a very cheap
+  // stay 5% rounds down to nothing, and a line that vanished looked like
+  // a charge the guest had not been shown. The rate comes from the items
+  // themselves, so the label still reads "GST (5%)" at ₹0.
+  const rates = [...new Set([...stayDetails, ...experienceDetails].map(x => Number(x.gstRate)).filter(r => r > 0))];
+  lines.push({ kind: 'gst', label: rates.length === 1 ? `GST (${rates[0]}%)` : 'GST', amount: gst });
   lines.push({ kind: 'fee', label: 'Guest service fee', amount: fee });
   if (deposit) lines.push({ kind: 'deposit', label: 'Refundable deposit', amount: deposit });
   if (coupon) lines.push({ kind: 'coupon', label: 'Coupon', amount: -coupon });

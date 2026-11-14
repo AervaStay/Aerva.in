@@ -6786,6 +6786,9 @@
     document.getElementById('bookingEmailStepView').style.display = 'block';
     document.getElementById('bookingLoginFormView').style.display = 'none';
     document.getElementById('bookingSignupFormView').style.display = 'none';
+    const doneView = document.getElementById('bookingSignupDoneView');
+    if(doneView) doneView.style.display = 'none';
+    if(bookingSignupHomeTimer){ clearTimeout(bookingSignupHomeTimer); bookingSignupHomeTimer = null; }
     document.getElementById('bookingEmailStepError').style.display = 'none';
     // The email the guest just typed in "Your details", so they are not
     // asked for it twice.
@@ -6793,7 +6796,43 @@
     document.getElementById('bookingEmailStepInput').value = typed ? typed.value.trim() : '';
     document.getElementById('bookingEmailStepInput').focus();
   }
+  // ---- After sign-up: say so, then go home ----
+  // Signing up issues no session (guest-auth.js): the account is unusable
+  // until the verification link is clicked, so this booking cannot carry
+  // on from here whatever the guest does next. Leaving the filled-in form
+  // open invited them to keep trying. The form is replaced by a plain
+  // "check your email", and the page returns to the home page.
+  let bookingSignupHomeTimer = null;
+  function bookingSignupGoHome(){
+    if(bookingSignupHomeTimer){ clearTimeout(bookingSignupHomeTimer); bookingSignupHomeTimer = null; }
+    // The booking cannot be finished by an account that cannot log in, so
+    // the saved form is dropped rather than reopened on the home page.
+    try{ aervaForgetBookingDraft(); }catch(e){}
+    try{
+      const home = location.origin + '/';
+      if(location.href === home) location.reload(); else location.href = home;
+    }catch(e){ location.href = '/'; }
+  }
+  function showBookingSignupDone(email){
+    ['bookingEmailStepView', 'bookingLoginFormView', 'bookingSignupFormView'].forEach(id => {
+      const el = document.getElementById(id); if(el) el.style.display = 'none';
+    });
+    const who = document.getElementById('bookingSignupDoneEmail');
+    if(who) who.textContent = email || '';
+    const done = document.getElementById('bookingSignupDoneView');
+    if(done) done.style.display = 'block';
+    // Long enough to read two sentences; the button is there for anyone
+    // who would rather not wait.
+    bookingSignupHomeTimer = setTimeout(bookingSignupGoHome, 8000);
+  }
+  function bookingSignupDoneShowing(){
+    const done = document.getElementById('bookingSignupDoneView');
+    return !!(done && done.style.display === 'block');
+  }
   function closeBookingLoginGate(){
+    // Dismissing the "check your email" panel is also a way out of it:
+    // the form behind it is finished with either way.
+    if(bookingSignupDoneShowing()){ bookingSignupGoHome(); return; }
     document.getElementById('bookingLoginOverlay').style.display = 'none';
     bookingLoginSuccessCallback = null;
   }
@@ -6804,6 +6843,8 @@
     document.getElementById('bookingEmailStepInput').focus();
   }
   document.getElementById('bookingLoginCloseBtn').addEventListener('click', closeBookingLoginGate);
+  const signupDoneBtn = document.getElementById('bookingSignupDoneBtn');
+  if(signupDoneBtn) signupDoneBtn.addEventListener('click', bookingSignupGoHome);
   document.getElementById('bookingLoginOverlay').addEventListener('click', (e) => {
     if(e.target.id === 'bookingLoginOverlay') closeBookingLoginGate();
   });
@@ -6848,7 +6889,6 @@
         } else {
           document.getElementById('bookingSignupEmailDisplay').textContent = email;
           document.getElementById('bookingSignupError').style.display = 'none';
-          document.getElementById('bookingSignupSuccessMsg').style.display = 'none';
           document.getElementById('bookingSignupName').value = '';
           document.getElementById('bookingSignupPassword').value = '';
           const gateConsent = document.getElementById('bookingSignupConsent');
@@ -6949,10 +6989,8 @@
     const name = document.getElementById('bookingSignupName').value.trim();
     const password = document.getElementById('bookingSignupPassword').value;
     const errEl = document.getElementById('bookingSignupError');
-    const successEl = document.getElementById('bookingSignupSuccessMsg');
     const btn = document.getElementById('bookingSignupSubmitBtn');
     errEl.style.display = 'none';
-    successEl.style.display = 'none';
     if(!password || password.length < 8 || !/\p{L}/u.test(password) || !/\d/.test(password)){
       errEl.textContent = 'Password must be at least 8 characters, with at least one letter and one number.';
       errEl.style.display = 'block';
@@ -6985,10 +7023,11 @@
         // until the verification link is clicked (see guest-auth.js).
         // The guest has to come back and log in afterward; this can't
         // seamlessly continue straight to payment the way a login can.
-        successEl.textContent = 'Account created — check your email for a verification link. Once verified, click "not you?" above to log in and complete your booking.';
-        successEl.style.display = 'block';
+        // So the form closes and the page goes home, rather than sitting
+        // open offering a next step that does not work yet.
         document.getElementById('bookingSignupName').value = '';
         document.getElementById('bookingSignupPassword').value = '';
+        showBookingSignupDone(bookingGateEmail);
       }
     } catch(err){
       errEl.textContent = 'Could not create your account right now. Please try again.';
@@ -11395,6 +11434,7 @@
       return;
     }
     loadListingExperiences(listing);
+    aervaWatchBookingDetails(listing.id);
     // This modal previously never actually rendered — buildListingDetailHtml
     // only sets up the "Loading availability…" placeholder markup, the
     // real calendar (and the Book Now button's click handler) were only
@@ -11532,7 +11572,64 @@
     });
   }
 
+  // The details fields change nothing else on the card, so nothing else
+  // would save them. One listener for the whole page, installed once, with
+  // the listing the card currently holds kept in a variable beside it —
+  // the booking modal and the full listing page both use these same ids.
+  let aervaCardListingId = null;
+  let aervaDetailsWatched = false;
+  function aervaWatchBookingDetails(listingId){
+    aervaCardListingId = listingId == null ? null : String(listingId);
+    if(aervaDetailsWatched) return;
+    aervaDetailsWatched = true;
+    document.addEventListener('input', (e) => {
+      const id = e.target && e.target.id;
+      if(!id || !/^listingBook(FirstName|LastName|Email|Phone)$/.test(id)) return;
+      if(aervaCardListingId) aervaCaptureBookingDraft(aervaCardListingId);
+    });
+  }
+
+  // ---- Reopening a booking that a refresh interrupted ----
+  // Runs once the grid has loaded, and only when no link was followed to
+  // somewhere else: a shared listing, a group or gift page, or one of the
+  // full pages all mean the guest asked for something other than this.
+  function aervaRestoreBookingDraft(){
+    const d = aervaReadBookingDraft();
+    if(!d) return;
+    const listing = listingsById[d.listingId];
+    if(!listing){ aervaForgetBookingDraft(); return; }   // taken down since
+    // The calendar re-checks these against today and against nights booked
+    // in the meantime and drops them if they no longer work, so a saved
+    // range can never put a guest back on dates they cannot have.
+    if(d.arrival && d.departure){
+      searchArrivalDate = d.arrival;
+      searchDepartureDate = d.departure;
+      try{ updateDateRangeBtn(); }catch(e){}
+    }
+    renderAvailabilityCalendar._lgAnimals = renderAvailabilityCalendar._lgAnimals || {};
+    if(Array.isArray(d.animals) && d.animals.length){
+      renderAvailabilityCalendar._lgAnimals[listing.id] = d.animals.map(a => ({ type: a.type, service: !!a.service, litter: Number(a.litter) || 0 }));
+    }
+    aervaDraftToRestore = d;
+    openListingDetail(listing.id);
+    // openListingDetail builds the form markup synchronously, so the fields
+    // are here now. These are what the guest typed, so they go in over
+    // whatever the account prefill would otherwise fill.
+    AERVA_DRAFT_FIELDS.forEach(f => {
+      const el = document.getElementById('listingBook' + f);
+      if(el && d.details && d.details[f]) el.value = d.details[f];
+    });
+  }
+
   function closeListingDetail(){
+    // Closing the booking card ends any payment window it opened. Without
+    // this the countdown outlived the page it belonged to: the guest had
+    // shut the booking and still had dates held, with the cancel button on
+    // the bar as the only way back.
+    try{ if(typeof aervaEndCheckout === 'function') aervaEndCheckout('closed'); }catch(e){}
+    // Closing the card is the guest saying they are done with it, so it is
+    // not reopened on the next load. (A refresh never comes through here.)
+    try{ aervaForgetBookingDraft(); }catch(e){}
     document.getElementById('listingModalOverlay').style.display = 'none';
     document.body.style.overflow = '';
   }
@@ -11743,6 +11840,16 @@
     else if(liveGuestCounts && liveGuestCounts.infants) lgCounts.infants = liveGuestCounts.infants;
     if(carriedParams.get('pets')) lgCounts.pets = parseInt(carriedParams.get('pets'), 10) || 0;
     else if(liveGuestCounts && liveGuestCounts.pets) lgCounts.pets = liveGuestCounts.pets;
+    // Reopening after a refresh: the guest's own numbers win over both the
+    // search bar's and the URL's. (The animals come back through
+    // _lgAnimals, which is restored before this runs.)
+    const draftGuests = aervaDraftGuestsFor(listingId);
+    if(draftGuests){
+      lgCounts.adults = Math.max(1, Number(draftGuests.adults) || 1);
+      lgCounts.children = Math.max(0, Number(draftGuests.children) || 0);
+      lgCounts.infants = Math.max(0, Number(draftGuests.infants) || 0);
+      aervaDraftToRestore = null; // consumed
+    }
     // Respect the host's own cap immediately in the UI, not just as a
     // server-side rejection after the fact — previously this stepper let
     // a guest click all the way to 5 pets even on a listing capped at 1.
@@ -12016,6 +12123,9 @@
     // _lgCounts above.
     renderAvailabilityCalendar._lgDates = renderAvailabilityCalendar._lgDates || {};
     renderAvailabilityCalendar._lgDates[listing.id] = { arrival, departure };
+    // This function already runs on every date and guest change, so it is
+    // also where the booking draft is kept up to date for a refresh.
+    try{ aervaCaptureBookingDraft(listing.id); }catch(e){}
     // Refreshes the experience date input's min/max to match the new
     // stay dates, and defaults a freshly-checked experience's date to
     // the new arrival — same reasoning as the amenities picker re-render
@@ -12105,11 +12215,13 @@
         experienceFee = Math.round(experienceTotal * (guestFeeRateOf(exp) / 100));
       }
     }
+    // GST is always shown, zero or not (owner, 14 Nov 2026: "always show
+    // GST along with other even if it is 0") — the same as the guest
+    // service fee line below it. A missing line reads as a charge the
+    // guest has not been told about; a ₹0 line says what it is.
     const gstShown = stayTax.gst + experienceGst;
-    if(gstShown > 0){
-      const gstLabel = experienceGst > 0 && stayTax.rate !== GST_EXPERIENCE_RATE ? 'GST' : `GST (${stayTax.rate}%)`;
-      rows.push(`<div class="sum-row"><span>${gstLabel}</span><span>${fmtGuest(gstShown)}</span></div>`);
-    }
+    const gstLabel = experienceGst > 0 && stayTax.rate !== GST_EXPERIENCE_RATE ? 'GST' : `GST (${stayTax.rate}%)`;
+    rows.push(`<div class="sum-row"><span>${gstLabel}</span><span>${fmtGuest(gstShown)}</span></div>`);
     rows.push(`<div class="sum-row"><span>Guest service fee</span><span>${fmtGuest(guestServiceFee + experienceFee)}</span></div>`);
     if(listing.security_deposit && Number(listing.security_deposit) > 0){
       rows.push(`<div class="sum-row" style="opacity:0.7;"><span>Refundable deposit (covers damage and extra cleaning; refunded after check-out unless damage is reported within 24 hours)</span><span>${fmtGuest(Number(listing.security_deposit))}</span></div>`);
@@ -14649,6 +14761,7 @@
     }
     // Same add-on experiences as the booking modal ("This Property Also Offers").
     loadListingExperiences(listing);
+    aervaWatchBookingDetails(listing.id);
     renderAvailabilityCalendar(listing);
     document.getElementById('listingBookNowBtn').addEventListener('click', () => handleListingBookNow(listing));
     aervaPrefillBooking();
@@ -15534,6 +15647,15 @@
       setTimeout(() => note.remove(), 10000);
     }
 
+    // ---- A booking interrupted by a refresh ----
+    // Nothing above took the guest somewhere they asked for, so if they
+    // were part-way through a booking when the page reloaded, that card
+    // comes back with their dates, guests and details still in it.
+    const draftView = new URLSearchParams(window.location.search).get('view');
+    if(!draftView || draftView === 'suites' || draftView === 'experiences' || draftView === 'all'){
+      try{ aervaRestoreBookingDraft(); }catch(err){ /* never let a saved draft stop the site loading */ }
+    }
+
     // List Property and List Experience are still their own separate
     // full pages. "All"/"Suites"/"Aerva Experience" are no longer
     // separate sections at all — they're the SAME combined grid,
@@ -16276,6 +16398,79 @@ function aervaQuoteErrorHtml(err){
 // Name, email and mobile number, so a guest never types them twice. Only
 // empty fields are filled; nothing the guest typed is replaced.
 let aervaPrefillPromise = null;
+// ---- A booking in progress survives a refresh ----
+// Reported 14 Nov 2026: "even after refresh, booking details form should
+// retain the data and open that again". A guest who reloaded — or was
+// reloaded by a payment that went wrong — lost the dates they had picked,
+// the guest numbers they had set, the details they had typed, and the
+// booking card itself, and started over from the grid.
+//
+// The draft lives in sessionStorage, not localStorage: it holds a name,
+// an email address and a phone number, and it belongs to this tab only.
+// A refresh keeps it; closing the tab ends it, so a shared or borrowed
+// computer does not keep someone's details afterwards. It is also dropped
+// the moment it stops being a booking in progress — the card closed, the
+// payment made, the account signed up but not yet usable.
+const AERVA_DRAFT_KEY = 'aerva_booking_draft';
+const AERVA_DRAFT_MAX_AGE_MS = 2 * 60 * 60 * 1000;
+const AERVA_DRAFT_FIELDS = ['FirstName', 'LastName', 'Email', 'Phone'];
+
+function aervaDraftStore(){ try{ return window.sessionStorage; }catch(e){ return null; } }
+function aervaReadBookingDraft(){
+  const store = aervaDraftStore();
+  if(!store) return null;
+  try{
+    const d = JSON.parse(store.getItem(AERVA_DRAFT_KEY) || 'null');
+    if(!d || !d.listingId || !d.savedAt) return null;
+    // Old enough that prices, availability and the guest's intentions
+    // have all moved on.
+    if(Date.now() - Number(d.savedAt) > AERVA_DRAFT_MAX_AGE_MS){ aervaForgetBookingDraft(); return null; }
+    return d;
+  }catch(e){ return null; }
+}
+function aervaForgetBookingDraft(){
+  const store = aervaDraftStore();
+  if(store){ try{ store.removeItem(AERVA_DRAFT_KEY); }catch(e){} }
+  aervaDraftToRestore = null;
+}
+// Snapshots whatever the booking card currently holds. Called from
+// updateListingPriceSummary (which already runs on every date and guest
+// change) and from the details fields as they are typed in.
+function aervaCaptureBookingDraft(listingId){
+  const store = aervaDraftStore();
+  if(!store || listingId == null) return;
+  const dates = (renderAvailabilityCalendar._lgDates || {})[listingId] || {};
+  const counts = (renderAvailabilityCalendar._lgCounts || {})[listingId] || {};
+  // The animals are saved as the card's own list, not as counts: that one
+  // list is what pets, service animals, young litter AND each animal's
+  // type are all derived from (syncAnimalCounts), so saving it keeps them
+  // consistent with each other instead of restoring "2 pets" with no types.
+  const animals = (renderAvailabilityCalendar._lgAnimals || {})[listingId] || [];
+  const details = {};
+  AERVA_DRAFT_FIELDS.forEach(f => {
+    const el = document.getElementById('listingBook' + f);
+    if(el && el.value) details[f] = el.value;
+  });
+  // Nothing worth coming back to until the guest has actually chosen something.
+  if(!dates.arrival && !animals.length && !Object.keys(details).length) return;
+  const draft = {
+    listingId: String(listingId),
+    arrival: dates.arrival || '', departure: dates.departure || '',
+    guests: { adults: Number(counts.adults) || 1, children: Number(counts.children) || 0, infants: Number(counts.infants) || 0 },
+    animals: animals.map(a => ({ type: a.type, service: !!a.service, litter: Number(a.litter) || 0 })),
+    details, savedAt: Date.now()
+  };
+  try{ store.setItem(AERVA_DRAFT_KEY, JSON.stringify(draft)); }catch(e){ /* private mode, full quota: the booking still works, it just won't survive a refresh */ }
+}
+// Set just before the card is reopened, read once by the calendar as it
+// builds itself, then cleared.
+let aervaDraftToRestore = null;
+function aervaDraftGuestsFor(listingId){
+  const d = aervaDraftToRestore;
+  if(!d || String(d.listingId) !== String(listingId) || !d.guests) return null;
+  return d.guests;
+}
+
 function aervaPrefillBooking(){
   const token = (typeof guestAuthToken === 'function') ? guestAuthToken() : null;
   if(!token) return;
@@ -16329,7 +16524,36 @@ function aervaShowBookingSuccess(summary, codes, opts){
       ${when}
     </div>`;
   }).join('');
-  const paid = summary && summary.paid != null ? `<div class="bs-row"><span>Paid</span><strong>${esc(money(summary.paid, summary.currency))}${summary.method ? ` <em>· ${esc(String(summary.method).toUpperCase())}</em>` : ''}</strong></div>` : '';
+  // ---- What was paid, broken down ----
+  // Owner, 14 Nov 2026: "in the confirmation, Booking summary should show
+  // same details as well. How much guest paid, aerva fees, deposit, gst
+  // etc." Same lines, same order and the same wording as the summary the
+  // guest agreed to at checkout, so the two can be read against each
+  // other. GST and the service fee are listed even at zero, as there.
+  const c = (summary && summary.charges) || null;
+  const billRow = (label, amount, cls) => `<div class="bs-bill-row${cls ? ' ' + cls : ''}"><span>${esc(label)}</span><strong>${esc(money(amount, summary.currency))}</strong></div>`;
+  // The amount Razorpay actually took is the one that settles it; the
+  // summed total is only used when Razorpay could not be reached.
+  const paidAmount = summary && summary.paid != null ? summary.paid : (c ? c.total : null);
+  let bill = '';
+  if(c){
+    const parts = [];
+    if(c.stay) parts.push(billRow('Stay', c.stay));
+    if(c.discount) parts.push(billRow('Offer applied', -c.discount));
+    if(c.freeCancel) parts.push(billRow('Free cancellation', c.freeCancel));
+    parts.push(billRow('GST', c.gst || 0));
+    parts.push(billRow('Guest service fee', c.fee || 0));
+    if(c.deposit) parts.push(billRow('Refundable deposit', c.deposit));
+    if(c.coupon) parts.push(billRow('Coupon', -c.coupon));
+    if(c.credit) parts.push(billRow('Aerva credit', -c.credit));
+    if(paidAmount != null){
+      parts.push(`<div class="bs-bill-row bs-bill-total"><span>Total paid${summary.method ? ` · ${esc(String(summary.method).toUpperCase())}` : ''}</span><strong>${esc(money(paidAmount, summary.currency))}</strong></div>`);
+    }
+    if(c.deposit) parts.push(`<p class="bs-bill-note">The refundable deposit comes back to you after check-out.</p>`);
+    bill = `<div class="bs-bill">${parts.join('')}</div>`;
+  }
+  // Nothing itemised to show (an older server): the single total, as before.
+  const paid = (!c && summary && paidAmount != null) ? `<div class="bs-row"><span>Paid</span><strong>${esc(money(paidAmount, summary.currency))}${summary.method ? ` <em>· ${esc(String(summary.method).toUpperCase())}</em>` : ''}</strong></div>` : '';
   const payId = summary && summary.paymentId ? `<div class="bs-row"><span>Payment ID</span><strong class="bs-mono">${esc(summary.paymentId)}</strong></div>` : '';
   wrap.innerHTML = `<div class="bs-card">
       <div class="bs-tick" aria-hidden="true"><svg viewBox="0 0 24 24"><path d="M5 12.5l4.2 4.2L19 7"/></svg></div>
@@ -16337,6 +16561,7 @@ function aervaShowBookingSuccess(summary, codes, opts){
       <h2 id="bsTitle">Your booking is confirmed</h2>
       <p class="bs-lead">${summary && summary.email ? `We have sent the confirmation to <strong>${esc(summary.email)}</strong>.` : 'We have emailed you the confirmation.'} ${opts && opts.gift ? `This stay is a gift for <strong>${esc([opts.gift.firstName, opts.gift.lastName].filter(Boolean).join(' '))}</strong>: we have emailed them the stay details (never the price) and a link to accept it.` : 'Show your confirmation code at check-in.'}</p>
       ${itemHtml}
+      ${bill}
       ${paid || payId ? `<div class="bs-pay">${paid}${payId}</div>` : ''}
       ${opts && opts.suggestFor ? `<div class="sx-slot" data-suggest-exp-for="${Number(opts.suggestFor)}"></div>` : ''}
       <div class="bs-actions">
@@ -16456,15 +16681,38 @@ function aervaWatchCheckout(rzp, order, msgEl, opts){
   if(!seconds) return; // no window was opened (older server): nothing to time
   const bar = document.createElement('div');
   bar.id = 'aervaCheckoutTimer';
-  bar.setAttribute('role', 'timer');
-  bar.setAttribute('aria-live', 'polite');
-  bar.style.cssText = 'position:fixed; top:0; left:0; right:0; z-index:2147483647; background:#1c1b19; color:#fff; text-align:center;'
+  bar.style.cssText = 'position:fixed; top:0; left:0; right:0; z-index:2147483647; background:#1c1b19; color:#fff;'
+    + 'display:flex; align-items:center; justify-content:center; gap:14px; flex-wrap:wrap;'
     + "padding:calc(10px + env(safe-area-inset-top, 0px)) 16px 10px; font-family:'Jost', sans-serif; font-size:15px; font-weight:500; box-shadow:0 2px 8px rgba(0,0,0,0.25);";
+  // The countdown is its own element: a live region that also held a button
+  // would read the button out on every tick.
+  const label = document.createElement('span');
+  label.setAttribute('role', 'timer');
+  label.setAttribute('aria-live', 'polite');
+  // ---- A way out that does not depend on Razorpay ----
+  // Reported 14 Nov 2026: "Unable to cancel the payment" — the countdown
+  // running with no payment window on screen and no way to stop it.
+  // Cancelling used to be possible ONLY through Razorpay's own close
+  // button (modal.ondismiss). If Razorpay's window never opened, was
+  // blocked, or closed without firing ondismiss, the guest was left
+  // watching a timer over dates they could neither pay for nor release.
+  // This button is on Aerva's own bar, so it works in every one of those
+  // cases: it closes Razorpay if it is there, releases the dates, and
+  // tells the guest nothing was booked.
+  const cancel = document.createElement('button');
+  cancel.type = 'button';
+  cancel.id = 'aervaCheckoutCancel';
+  cancel.textContent = 'Cancel payment';
+  cancel.style.cssText = "background:transparent; color:#fff; border:1px solid rgba(255,255,255,0.55); border-radius:999px;"
+    + "padding:4px 14px; font-family:'Jost', sans-serif; font-size:13px; font-weight:500; cursor:pointer; line-height:1.5;";
+  cancel.addEventListener('click', () => aervaEndCheckout('closed'));
+  bar.appendChild(label);
+  bar.appendChild(cancel);
   document.body.appendChild(bar);
   state.bar = bar;
   const paint = () => {
     const m = Math.floor(state.left / 60), sec = String(state.left % 60).padStart(2, '0');
-    bar.textContent = `Pay within ${m}:${sec}` + (state.holdsDates ? ' — dates held for you' : '');
+    label.textContent = `Pay within ${m}:${sec}` + (state.holdsDates ? ' — dates held for you' : '');
     bar.style.background = state.left <= 20 ? '#a3402f' : '#1c1b19';
   };
   paint();
@@ -16492,7 +16740,7 @@ function aervaStopCheckout(){
   aervaCheckout = null;
 }
 // Payment succeeded: the booking takes the dates; nothing to release here.
-function aervaCheckoutSucceeded(){ aervaStopCheckout(); aervaStopFollowUp(); }
+function aervaCheckoutSucceeded(){ aervaStopCheckout(); aervaStopFollowUp(); try{ aervaForgetBookingDraft(); }catch(e){} }
 
 // ---- When Razorpay's answer never arrives ----
 // A card paid on the bank's OTP page, a window closed or timed out while a

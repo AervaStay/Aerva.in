@@ -69,13 +69,27 @@ const userError = (message, status = 400, extra = {}) => Object.assign(new Error
 // ---------------------------------------------------------------- helpers
 const normName = (s) => String(s || '').toUpperCase().normalize('NFKD').replace(/[̀-ͯ]/g, '')
   .replace(/[^A-Z\s]/g, ' ').split(/\s+/).filter(Boolean);
-// Same person's name: every word of one is in the other (order ignored),
-// a single letter standing for a word that starts with it, and the first
-// names agree. "Ravi Kumar" = "RAVI KUMAR", "Kumar Ravi", "Ravi K";
-// "Ravi Kumar" ≠ "Ravi", "Ravi Kumar Sharma".
+// Same person's name: every word the person typed is on the ID (order
+// ignored), a single letter standing for a word that starts with it.
+// "Ravi Kumar" = "RAVI KUMAR", "Kumar Ravi", "Ravi K", and also
+// "Ravi Kumar Sharma" as printed on an ID. "Ravi Kumar" ≠ "Ravi".
+//
+// THE ID MAY CARRY MORE NAMES THAN A PERSON USES (owner, 14 Nov 2026: a
+// real Aadhaar reading "Chavda Munishkumar Rameshbhai" was refused against
+// "Munishkumar Chavda"). Indian IDs routinely print surname, given name
+// and father's name, and almost nobody types all three. Requiring the same
+// NUMBER of words meant the check failed before a single word was
+// compared, and no amount of retaking the photo could ever fix it — the
+// message even told them to check the photo.
+//
+// What is still refused: a word typed that is not on the ID at all, and
+// one lone word standing in for a fuller name, which would otherwise let
+// "Chavda" verify against half of Gujarat.
 function namesMatch(typed, onId) {
   const a = normName(typed), b = normName(onId);
-  if (!a.length || !b.length || a.length !== b.length) return false;
+  if (!a.length || !b.length) return false;
+  if (a.length > b.length) return false;             // typed more names than the ID carries
+  if (a.length < 2 && b.length >= 2) return false;   // one word cannot stand for a fuller name
   const pool = b.slice();
   for (const w of a) {
     let i = pool.indexOf(w);

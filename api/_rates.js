@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_rates.js — Aerva's commission (hosts) and service fee (guests), set
 // per property type in Admin → Commission settings. Not an endpoint.
 //

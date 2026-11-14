@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_cancellations.js — guest cancellations under the listing's refund
 // policy, and helpers shared with host cancellations. Not an endpoint.
 //

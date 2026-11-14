@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_guest-verify.js — a booking is only confirmed once the guest's
 // details are submitted and verified. Not an endpoint (leading underscore).
 // The owner's rules of 10 Nov 2026; needs migrations/2026-11-10-09-guest-verification.sql.

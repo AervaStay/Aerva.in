@@ -664,9 +664,16 @@
     <input id="loginPassword" type="password" placeholder="Password">
     <button onclick="login()">Log In</button>
     <p id="loginError" class="error" style="display:none;"></p>
+    <!-- "First time here? Create your admin account" was taken off this
+         screen (owner, 14 Nov 2026). People join the team by being added
+         in Admin → Team and following the link they are emailed; nobody
+         makes themselves an admin account from the login page.
+         The form below is still here for the one case that needs it: a
+         brand new environment with no admins at all, where there is
+         nobody to do the adding. It is reached at ?setup=1 and still
+         demands the master password, so this takes away a signpost, not
+         a check. -->
     <p style="text-align:center; font-size:13px; margin-top:16px;">
-      <a href="#" onclick="showSignupForm(); return false;" style="color:#8a6c39;">First time here? Create your admin account</a>
-      &nbsp;·&nbsp;
       <a href="#" onclick="showForgotForm(); return false;" style="color:#8a6c39;">Forgot password?</a>
     </p>
   </div>
@@ -1239,6 +1246,12 @@
   if(urlResetToken){
     document.getElementById('loginForm').style.display = 'none';
     document.getElementById('resetForm').style.display = 'block';
+  }
+  // Setting up a brand new environment, where there is no admin yet to add
+  // anyone. Not linked from the login screen any more; the master password
+  // is still required either way.
+  else if(new URLSearchParams(window.location.search).get('setup') === '1'){
+    showSignupForm();
   }
 
   async function submitPasswordReset(){
@@ -5775,7 +5788,7 @@ async function loadTeam(){
     // super admin are a super admin's alone (owner, 12 Nov 2026).
     const iAmSuper = !!(ADMIN_ME_INFO && (ADMIN_ME_INFO.canManageTeam || ADMIN_ME_INFO.superAdmin));
     const row = (m) => `<div class="lk-item" style="cursor:default; grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) auto;">
-        <span><strong>${lkEsc(m.name || m.email)}</strong>${Number(m.id) === meId ? ' <span class="lk-chip">You</span>' : ''}${m.super_admin ? ' <span class="lk-chip">Super admin</span>' : ''}<span class="lk-sub">${lkEsc(m.email)} · since ${lkDay(m.created_at)}</span></span>
+        <span><strong>${lkEsc(m.name || m.email)}</strong>${Number(m.id) === meId ? ' <span class="lk-chip">You</span>' : ''}${m.super_admin ? ' <span class="lk-chip">Super admin</span>' : ''}${m.never_signed_in ? ' <span class="lk-chip" title="Invited, but has never set a password or signed in. Changing their role emails them a link to set one.">Not signed in yet</span>' : ''}<span class="lk-sub">${lkEsc(m.email)} · since ${lkDay(m.created_at)}</span></span>
         <span>${iAmSuper
           // Giving somebody a role is a super admin's alone (owner, 14 Nov
           // 2026: "super admin can assign roles only. Not other kind can").

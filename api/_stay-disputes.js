@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_stay-disputes.js — a guest is unhappy during a stay. Not an endpoint.
 //
 //   1. During the stay window — from check-in until 10 AM (property's clock)

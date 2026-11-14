@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_deposits.js — refund security deposits whose hold has ended. Not an endpoint.
 //
 // Runs on the scheduler (every 15 minutes) and from Admin's "Process

@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/get-pending-listings.js
 // Powers admin.html. Every mode below except the four login/password
 // ones needs a signed-in admin (email + password → session token in the
@@ -199,6 +202,50 @@ async function sendAdminPasswordResetEmail(admin, resetTok, invite = null) {
   }
 }
 
+// ---- "Your Aerva Admin access has changed" ----
+// Owner, 14 Nov 2026: "I changed the Roles in admin account, I didn't
+// receive any email because I didn't login yet first time. Ideally, user
+// should get an email and then first time asked to setup password."
+//
+// Two versions of the same news. Someone who already has a password is
+// told what changed and signs in as usual — no link, because an
+// unsolicited password link in an ordinary notification is exactly the
+// shape of a phishing email. Someone who has never set one gets the link,
+// because without it the role is something they cannot reach.
+async function sendAdminRoleChangedEmail(changed, { by, link } = {}) {
+  if (!process.env.RESEND_API_KEY) {
+    console.error('RESEND_API_KEY not set — admin cannot be told their role changed.');
+    return;
+  }
+  const who = by ? `${by} has changed` : 'A super admin has changed';
+  const html = `
+    <div style="font-family:sans-serif; max-width:480px;">
+      <h2 style="font-family:Georgia,serif;">Your Aerva Admin access has changed</h2>
+      <p>${who} what you can do in Aerva Admin. You are now <strong>${changed.to}</strong>${changed.from ? ` (you were ${changed.from})` : ''}.</p>
+      ${link ? `<p>You have not set a password yet, so you cannot sign in. Choose one below and you are in. <strong>This link expires in 3 days.</strong></p>
+      <p><a href="${link}" style="background:#1c1a17; color:#f4eadc; padding:12px 24px; text-decoration:none; display:inline-block;">Choose my password</a></p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If the link has expired, use “Forgot password” on the admin login page.</p>`
+      : `<p>Sign in as usual at the admin page — you will be asked to sign in again, as any change to access ends your current session.</p>
+      <p style="font-size:12px; opacity:0.6; margin-top:24px;">If you were not expecting this, reply to this email and tell us.</p>`}
+    </div>
+  `;
+  const res = await fetch('https://api.resend.com/emails', {
+    method: 'POST',
+    headers: { 'Authorization': `Bearer ${process.env.RESEND_API_KEY}`, 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      from: 'Aerva <hello@aerva.in>',
+      to: changed.email,
+      subject: link ? 'Your Aerva Admin access has changed — set your password' : 'Your Aerva Admin access has changed',
+      html
+    })
+  });
+  if (!res.ok) {
+    let detail;
+    try { detail = await res.json(); } catch { detail = { message: res.statusText }; }
+    console.error('Resend send failed (admin role changed):', res.status, detail);
+  }
+}
+
 // Tells a host their listing's visibility changed — used by both
 // block/remove and unblock/restore. Never thrown on failure: a host not
 // getting the email shouldn't undo a moderation action that's already
@@ -374,6 +421,11 @@ module.exports = async (req, res) => {
         return res.status(403).json({ error: 'This account is no longer on the Aerva team.' });
       }
       const sessionToken = createToken(admin.id, 'admin-session', ADMIN_SESSION_LIFETIME_MS, await sessionExtra(sql, admin.id));
+      // Signing in proves the password works, so this account is no longer
+      // one that has never been able to get in. Only ever set once, so a
+      // later sign-in does not keep rewriting it.
+      try { await sql`UPDATE admins SET password_set_at = COALESCE(password_set_at, now()) WHERE id = ${admin.id}`; }
+      catch (e) { /* before 2026-11-14-09 */ }
       await logAudit(sql, {
         action: 'admin_login', success: true, actorType: 'admin', actorIdentifier: cleanEmail, ...requestContext(req),
         targetType: 'admin', targetId: admin.id, metadata: { ip: clientIp }
@@ -510,10 +562,21 @@ module.exports = async (req, res) => {
         return res.status(400).json({ error: 'This reset link is invalid or has expired. Please request a new one.' });
       }
       const passwordHash = await bcrypt.hash(newPassword, BCRYPT_ROUNDS);
-      const rows = await sql`
-        UPDATE admins SET password_hash = ${passwordHash} WHERE id = ${payload.listingId}
-        RETURNING id, email, name
-      `;
+      let rows;
+      try {
+        // From here on this account has a password of its own, so a change
+        // to its access is a notification, not an invitation to set one.
+        rows = await sql`
+          UPDATE admins SET password_hash = ${passwordHash}, password_set_at = now() WHERE id = ${payload.listingId}
+          RETURNING id, email, name
+        `;
+      } catch (e) {
+        // Before 2026-11-14-09 there is no such column.
+        rows = await sql`
+          UPDATE admins SET password_hash = ${passwordHash} WHERE id = ${payload.listingId}
+          RETURNING id, email, name
+        `;
+      }
       const admin = rows[0];
       if (!admin) return res.status(404).json({ error: 'Account not found.' });
       // A new password ends every older session (whoever knew the old one
@@ -861,7 +924,23 @@ module.exports = async (req, res) => {
       || req.body.blockGuestListing || req.body.unblockGuestListing || req.body.resolveReport)) {
     try {
       const b = req.body;
-      if (b.setAdminRole) return res.status(200).json(await actions.setRole(sql, { adminId: b.setAdminRole.adminId, role: b.setAdminRole.role, byId: ADMIN_ME.id, audit: ADMIN_AUDIT }));
+      if (b.setAdminRole) {
+        const out = await actions.setRole(sql, { adminId: b.setAdminRole.adminId, role: b.setAdminRole.role, byId: ADMIN_ME.id, audit: ADMIN_AUDIT });
+        // Tell them their access changed (owner, 14 Nov 2026). Someone who
+        // has never set a password cannot act on that news at all, so for
+        // them the email carries the link to set one — otherwise they sit
+        // with a role they cannot use and nothing to tell them it exists.
+        if (out && out.changed) {
+          try {
+            const link = out.changed.neverSetPassword
+              ? `${SITE_BASE}/${ADMIN_PAGE_PATH}?resetToken=${createToken(out.changed.id, 'admin-password-reset', 72 * 3600 * 1000, { sv: out.changed.sv })}`
+              : null;
+            await sendAdminRoleChangedEmail(out.changed, { by: ADMIN_ACTOR, link });
+            out.emailed = out.changed.email;
+          } catch (err) { console.error('role change: email not sent:', err.message); out.emailFailed = true; }
+        }
+        return res.status(200).json(out);
+      }
       // Only a super admin takes someone off the team, lets them back in, or
       // names another super admin (owner, 12 Nov 2026).
       if (b.removeTeamMember) return res.status(200).json(await actions.removeMember(sql, { adminId: b.removeTeamMember.adminId, byId: ADMIN_ME.id, audit: ADMIN_AUDIT }));

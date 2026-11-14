@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_checkin-promise.js — Aerva's check-in promise. Not an endpoint.
 //
 // THE OWNER'S RULES (9 Nov 2026, as revised the same evening):

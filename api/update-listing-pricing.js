@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/update-listing-pricing.js
 // Backs manage-listing.html — the long-lived link a host gets by email
 // after their listing is approved (see approve-listing.js) and can reuse

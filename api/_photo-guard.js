@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_photo-guard.js — keeps contact details out of photos. Not an endpoint.
 //
 // Guests must book and talk through Aerva, so a phone number, email,

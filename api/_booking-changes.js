@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_booking-changes.js — a guest changes a booking. Not an endpoint.
 //
 // WHAT CAN CHANGE: dates (move, extend, shorten), number of guests, paid
