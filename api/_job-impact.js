@@ -9,6 +9,9 @@
 // Capped at 500 people per run.
 
 const CAP = 500;
+// The same words the Transactions page uses for why a payout has not gone
+// out, so the jobs panel and the ledger never disagree (owner, 14 Nov 2026).
+const { whyNotSent } = require('./_money-ledger');
 const inr = (n) => '₹' + Math.round(Number(n) || 0).toLocaleString('en-IN');
 
 // Runs one lookup; a missing table or column means "nothing to report",
@@ -118,6 +121,11 @@ const IMPACT = {
     const openIds = Object.keys(was).map(Number);
     const rows = await sql`
       SELECT p.id, p.payee_type, p.net, p.status, p.failure_reason, p.attempts, p.created_at, p.last_attempt_at, p.sent_at,
+             -- Why a payout is still sitting there, in the same words the
+             -- Transactions page uses (owner, 14 Nov 2026: "Need to know why
+             -- it is not sent as well"). _money-ledger.whyNotSent reads these.
+             p.auto_eligible, to_jsonb(p)->>'arriving_by' AS arriving_by,
+             (p.payee_type = 'host' AND COALESCE(h.bank_status, '') <> 'verified') AS bank_not_ready,
              o.suite_name, h.name AS host_name, hg.email AS host_email, cg.name AS co_name, cg.email AS co_email
       FROM payouts p JOIN orders o ON o.id = p.order_id JOIN hosts h ON h.id = p.host_id
       LEFT JOIN LATERAL (SELECT email FROM guests WHERE host_id = p.host_id ORDER BY id LIMIT 1) hg ON true
@@ -132,8 +140,11 @@ const IMPACT = {
         || (r.last_attempt_at && new Date(r.last_attempt_at) >= new Date(since));
       if (!touched && (prior === undefined || prior === r.status)) return; // untouched and unchanged
       const retried = r.last_attempt_at && new Date(r.last_attempt_at) >= new Date(since) && Number(r.attempts) > 1;
+      // A payout that has not gone says why, not just that it is waiting.
+      const why = r.status === 'due' || r.status === 'failed' ? whyNotSent(r) : '';
       const what = `Payout ${inr(r.net)} ${label[r.status] || r.status}${retried ? ` (attempt ${Number(r.attempts)})` : ''}`
-        + `${r.status === 'failed' && r.failure_reason ? ' — ' + r.failure_reason : ''}: ${r.suite_name}`;
+        + `${r.status === 'failed' && r.failure_reason ? ' — ' + r.failure_reason : ''}: ${r.suite_name}`
+        + `${why && !(r.status === 'failed' && r.failure_reason) ? ' — ' + why : ''}`;
       out.push(r.payee_type === 'cohost'
         ? { who: 'Co-host', name: r.co_name || 'Co-host', email: r.co_email || '', what }
         : { who: 'Host', name: r.host_name || 'Host', email: r.host_email || '', what });

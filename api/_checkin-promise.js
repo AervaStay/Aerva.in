@@ -485,9 +485,53 @@ async function priceFor(sql, o, { listingId, roomId, from, to }) {
   }, 0);
   if (priced.error) throw userError(priced.error.replace(/^Stay 1: /, ''));
   const d = priced.detail;
-  return { detail: d, total: Math.round(Number(d.subtotal) + Number(d.gst) + Number(d.guestServiceFee) + Number(d.depositAmount || 0)) };
+  // NO AERVA SERVICE FEE ON A RESCUE BOOKING (owner, 14 Nov 2026). The
+  // guest already paid Aerva's fee on the stay their host failed to
+  // provide; charging it again on the replacement would push the gap they
+  // have to find ABOVE the plain difference in price between the two
+  // places — the owner's words: "otherwise guest might have ended up with
+  // more than 3000". Aerva keeps what it earned on the original booking
+  // and takes nothing further for moving them, which is the compensation.
+  // The commission the failed host would have been paid is not Aerva's to
+  // keep either way: that booking is cancelled and they are paid nothing.
+  return { detail: d, feeWaived: Math.round(Number(d.guestServiceFee) || 0),
+           total: Math.round(Number(d.subtotal) + Number(d.gst) + Number(d.depositAmount || 0)) };
 }
 function paidTotal(r, o) { return Math.round(Number((r.original || {}).total != null ? r.original.total : o.total) || 0); }
+
+// AERVA'S COMMISSION ON A RESCUE BOOKING (owner, 14 Nov 2026: "Aerva will
+// keep 600 - previous commission").
+//
+// Aerva never earns more commission on a replacement than it was already
+// going to earn on the booking that failed. Moving a stranded guest
+// somewhere dearer is not an opportunity to earn more: the extra the guest
+// pays is for the better place, and it belongs to the host providing it.
+//
+// The cap is the ORIGINAL booking's commission in rupees, not a rate
+// applied to the lower subtotal. The two give the same answer while every
+// listing is on the same rate, but listings.commission_rate is per-listing,
+// so a rupee cap is the one that still holds if those rates ever differ.
+//
+// Worked example, the owner's own case: original ₹12,000 subtotal at 5% =
+// ₹600 commission; rescue ₹16,000 at 5% would be ₹800. Aerva takes ₹600 and
+// the rescuing host keeps ₹15,400 rather than ₹15,200. Aerva still keeps
+// the ₹600 service fee from the original booking, so it earns ₹1,200 on the
+// move — it is not doing this for nothing, it is simply not profiting from
+// its own host's failure.
+//
+// A replacement that costs the same or less is unaffected: its own
+// commission is already at or below the cap.
+//
+// `o` is the original order, read before it is zeroed by the move.
+function rescueCommission(d, o) {
+  const own = Math.round(Number(d.baseCommission) + Number(d.amenityCommission));
+  // A missing figure is a data problem, not a decision to charge nothing —
+  // fall back to the replacement's own commission rather than silently
+  // handing away Aerva's margin. A genuine zero IS honoured.
+  const prev = o == null || o.commission_amount == null ? null : Math.round(Number(o.commission_amount));
+  if (prev == null || !Number.isFinite(prev) || prev < 0) return own;
+  return Math.min(own, prev);
+}
 
 // Admin: the places the guest could move to, nearest first, then closest in price.
 async function candidates(sql, { reportId }) {
@@ -521,7 +565,11 @@ async function candidates(sql, { reportId }) {
         const d = p.detail;
         out.push({ listingId: l.id, roomId: rm.id, name: rm.name ? `${l.property_name} — ${rm.name}` : l.property_name, city: l.city, area: l.area || null, photo: l.photo || null,
           policy: l.policy, distanceKm: km(o, l), from: range.from, to: range.to, nights: range.nights,
-          subtotal: Math.round(Number(d.subtotal)), gst: Math.round(Number(d.gst)), fee: Math.round(Number(d.guestServiceFee)), deposit: Math.round(Number(d.depositAmount || 0)),
+          // fee 0, and what was waived shown beside it: Aerva charges no
+          // service fee for moving a guest its host let down (owner,
+          // 14 Nov 2026). p.total already leaves it out.
+          subtotal: Math.round(Number(d.subtotal)), gst: Math.round(Number(d.gst)), fee: 0, feeWaived: p.feeWaived,
+          deposit: Math.round(Number(d.depositAmount || 0)),
           total: p.total, oldTotal, difference: p.total - oldTotal });
       } catch (err) { if (err.isUserFacing) unavailable++; else throw err; }
     }
@@ -590,6 +638,8 @@ async function quoteRebook(sql, orderId, guestId, input) {
     quote: { kind: 'rebook', reportId: r.id, listingId: offer.listingId, roomId: offer.roomId || null, name: p.detail.suite, from: range.from, to: range.to, detail: p.detail,
              policy: offer.policy || null, fromName: (r.original || {}).suite || o.suite_name },
     oldTotal, newTotal, difference: newTotal - oldTotal,
+    // What Aerva is not charging them for moving, so the guest can be told.
+    feeWaived: Number(p.feeWaived) || 0,
     summary: `Moved under Aerva’s check-in promise to ${p.detail.suite}, ${niceDate(range.from)} – ${niceDate(range.to)} (${plural(p.detail.nights, 'night')})`
   };
 }
@@ -641,8 +691,8 @@ async function applyRebook(sql, razorpay, change, { paymentId = null } = {}) {
     o = await loadOrder(sql, change.order_id);
     if (!o || o.status !== 'paid') throw userError('This booking is no longer active.', 409);
     const q = change.quote, d = q.detail;
-    const commission = Math.round(Number(d.baseCommission) + Number(d.amenityCommission));
     const subtotal = Math.round(Number(d.subtotal));
+    const commission = rescueCommission(d, o);
     const payout = subtotal - commission;
     const rate = subtotal > 0 ? Number(((commission / subtotal) * 100).toFixed(2)) : 0;
     const total = Math.round(Number(change.new_total));
@@ -663,7 +713,9 @@ async function applyRebook(sql, razorpay, change, { paymentId = null } = {}) {
               deposit_amount, deposit_status, deposit_release_at, order_type, charge_currency, pet_types, service_animal_types, young_litter_count,
               agreement_version, agreement_accepted_at, agreement_ip, cancellation_policy, guest_first_name, guest_last_name, fee_credit_used, created_at, checkin_rebook_of)
             SELECT ${d.suite}, ${q.listingId}, ${q.roomId || null}, guest_email, guest_id, ${q.from}, ${q.to}, ${d.guests}, ${d.nights}, ${subtotal}, ${d.discountAmount || 0}, ${d.gst}, ${total},
-              ${rate}, ${commission}, ${payout}, razorpay_order_id, razorpay_payment_id, 'paid', ${Math.round(Number(d.guestServiceFee))},
+              -- No service fee on a rescue booking, so the row adds up to the
+              -- total the guest was quoted (owner, 14 Nov 2026).
+              ${rate}, ${commission}, ${payout}, razorpay_order_id, razorpay_payment_id, 'paid', 0,
               ${deposit}, ${deposit > 0 ? 'held' : 'none'}, ${releaseAt}, 'stay', charge_currency, pet_types, service_animal_types, young_litter_count,
               agreement_version, agreement_accepted_at, agreement_ip, ${q.policy || 'flexible'}, guest_first_name, guest_last_name, ${creditTake}, created_at, id
             FROM orders WHERE id = ${o.id} AND status = 'paid' AND cancel_claim IS NOT DISTINCT FROM ${claim}
@@ -709,7 +761,11 @@ async function applyRebook(sql, razorpay, change, { paymentId = null } = {}) {
     code = await require('./_confirm-booking').issueConfirmationCode(sql, newId);
     if (code) await sql`UPDATE orders SET confirmation_code = ${code} WHERE id = ${newId} AND confirmation_code IS NULL`;
   } catch (err) { console.error('rebook confirmation code not issued:', newId, err.message); }
-  try { await require('./_cohosts').recordCohostShares(sql, newId, q.listingId, Math.round(Number(d.subtotal)) - Math.round(Number(d.baseCommission) + Number(d.amenityCommission))); }
+  // The same capped commission as the order row, or the co-hosts would be
+  // split a payout that does not match what the booking actually pays out.
+  // `o` still holds the original's figures here: the move zeroed the row in
+  // the database, not this object.
+  try { await require('./_cohosts').recordCohostShares(sql, newId, q.listingId, Math.round(Number(d.subtotal)) - rescueCommission(d, o)); }
   catch (err) { console.error('rebook co-host shares not written:', newId, err.message); }
   try { await sql`DELETE FROM order_cohost_shares WHERE order_id = ${o.id}`; } catch (e) { /* none */ }
   try { await sql`UPDATE fee_credit_uses SET order_id = ${newId} WHERE order_id = ${o.id}`; } catch (e) { /* none */ }
@@ -920,15 +976,25 @@ async function decorateGuestBookings(sql, bookings) {
             : STATUS[r.status] || '',
           note: r.status === 'cleared' ? r.decision_note : null,
           offers: live && r.status === 'confirmed' ? (r.offers || []).map(k => ({ n: k.n, name: k.name, city: k.city, area: k.area, photo: k.photo, distanceKm: k.distanceKm, from: k.from, to: k.to, nights: k.nights,
-            subtotal: k.subtotal, gst: k.gst, fee: k.fee, deposit: k.deposit, total: k.total, oldTotal: k.oldTotal, difference: k.difference })) : [],
+            subtotal: k.subtotal, gst: k.gst, fee: k.fee, feeWaived: k.feeWaived || 0, deposit: k.deposit, total: k.total, oldTotal: k.oldTotal, difference: k.difference })) : [],
           canDecline: live && r.status === 'confirmed' };
         if (ACTIVE.includes(r.status)) { b.can_change = false; b.can_cancel_request = false; b.can_report = false; }
       }
       const m = movedTo.get(Number(b.id));
       if (m) {
         const orig = m.original || {};
+        // What Aerva gave up to move them: its service fee on the new
+        // booking. The new host's commission is untouched and still shows on
+        // the booking — Aerva reduces its OWN take, not the host's money
+        // (owner, 14 Nov 2026).
+        // The rescue booking stores a zero fee, so what Aerva gave up is
+        // what that fee would have been on it, at the published rate.
+        const FEE_RATE = require('./_pricing').GUEST_SERVICE_FEE_RATE || 5;
+        const gaveUp = Math.round(Number(b.guest_service_fee) || 0) === 0
+          ? Math.round((Number(b.subtotal) || 0) * FEE_RATE / 100) : 0;
         b.checkin_summary = { from: orig.suite || '', fromCode: orig.code || null, originalTotal: Math.round(Number(orig.total) || 0), difference: Math.round(Number(m.difference) || 0),
-          credit: Math.round(Number(m.credit_amount) || 0), total: Math.round(Number(b.total) || 0), arrival: orig.arrival, departure: orig.departure };
+          credit: Math.round(Number(m.credit_amount) || 0), total: Math.round(Number(b.total) || 0), arrival: orig.arrival, departure: orig.departure,
+          aervaGaveUp: gaveUp };
       }
       // "Is this place real and as listed?" — until one guest of the listing confirms.
       if (b.status === 'paid' && (b.listing_type || 'stay') === 'stay' && x.tz && !x.checkin_blocked_at && !(r && ACTIVE.includes(r.status))) {
@@ -1112,5 +1178,6 @@ async function runJob(sql, { deadlineMs = 4000 } = {}) {
 
 module.exports = {
   REASONS, MAX_OFFERS, NOT_READY, HOLD_NOTICE_ID, holdFrom, isArrivalReason, ready, payoutHolds, holdFor, openReport, decideReport, startListingReview, candidates, sendOffers,
-  quoteRebook, rebookHolds, acceptOffer, applyRebook, refundInFull, declineOffers, confirmStay, reportDifference, decorateGuestBookings, decorateSharedBookings, adminView, balances, unblockListing, hostView, runJob, rebookRange
+  quoteRebook, rebookHolds, acceptOffer, applyRebook, refundInFull, declineOffers, confirmStay, reportDifference, decorateGuestBookings, decorateSharedBookings, adminView, balances, unblockListing, hostView, runJob, rebookRange,
+  _internals: { rescueCommission }
 };

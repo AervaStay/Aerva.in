@@ -316,3 +316,66 @@ async function hasChangePayments(sql, orderId) {
 
 
 module.exports = { safeRefund, pollRefunds, refundAcrossPayments, hasChangePayments, planRefundAcrossPayments, dropPlannedRefunds, groupPaymentsOf };
+
+// ---------------------------------------------------------------- no second refund
+//
+// Owner, 14 Nov 2026: once a guest has been refunded on a booking, a second
+// refund is NOT paid — whoever asks. A representative or a reviewer who has
+// already acted on it, or approved it, does not change that. The attempt
+// goes to a super admin's notice, and the only thing anyone can do with the
+// request afterwards, super admin included, is close it with the statement
+// below. The amount is never paid twice.
+//
+// The per-booking guard in safeRefund above is narrower — it stops the SAME
+// refund (one order, one kind) going out twice. This one is about the whole
+// booking: a cancellation refund followed by a goodwill refund is two
+// different kinds, and used to go straight through.
+const DAYS_TO_ARRIVE = '5 to 7 working days';
+
+async function refundsOn(sql, orderId) {
+  const rows = await sql`SELECT kind, amount, status, created_at FROM refunds
+                         WHERE order_id = ${Number(orderId) || 0} AND status <> 'failed'
+                         ORDER BY created_at`;
+  const total = rows.reduce((t, r) => t + Math.round(Number(r.amount) || 0), 0);
+  return { any: rows.length > 0, rows, totalPaise: total, totalInr: Math.round(total / 100), first: rows[0] || null, last: rows[rows.length - 1] || null };
+}
+
+// The words the guest is given, and the words that close the request. Built
+// from the refund actually on the booking, so no one has to remember the
+// date or the amount.
+function alreadyRefundedStatement(state) {
+  if (!state || !state.any) return '';
+  const when = state.first && state.first.created_at
+    ? new Date(new Date(state.first.created_at).getTime() + 5.5 * 3600e3).toISOString().slice(0, 10) : null;
+  const amount = '₹' + Number(state.totalInr || 0).toLocaleString('en-IN');
+  return `Under this booking's policy a refund of ${amount} has already been made${when ? ' on ' + when : ''}. It reaches the card or account you paid with within ${DAYS_TO_ARRIVE} of that date. Nothing further is due on this booking.`;
+}
+
+// Throw this before any refund is created. It carries what a super admin
+// needs to see and the statement the request is closed with.
+async function refuseSecondRefund(sql, orderId, { ticketId = null, by = null } = {}) {
+  const state = await refundsOn(sql, orderId);
+  if (!state.any) return null;
+  // The attempt itself is the thing a super admin needs to see: someone
+  // was about to pay a second time. Recorded on the request and in the
+  // audit log, never silently swallowed.
+  try {
+    if (ticketId) {
+      await sql`INSERT INTO support_messages (ticket_id, sender, internal, admin_email, body)
+                VALUES (${ticketId}, 'support', true, ${by || 'system'},
+                        ${`REFUSED — a second refund was attempted on a booking already refunded (₹${Number(state.totalInr || 0).toLocaleString('en-IN')}). Nothing was paid. For a super admin to look at; the request can only be closed with Aerva's statement.`})`;
+    }
+    await require('./_audit-log').logAudit(sql, { action: 'refund_refused_already_refunded', success: false, actorType: 'admin',
+      actorIdentifier: by || 'unknown', targetType: 'order', targetId: Number(orderId), metadata: { alreadyInr: state.totalInr, ticketId } });
+  } catch (err) { console.error('second-refund refusal not recorded:', err.message); }
+  const err = new Error('This booking has already been refunded, so nothing more can be paid on it. It has gone to a super admin to look at, and the request can be closed with the statement Aerva has prepared.');
+  err.isUserFacing = true;
+  err.status = 409;
+  err.secondRefund = { orderId: Number(orderId), alreadyInr: state.totalInr, statement: alreadyRefundedStatement(state) };
+  return err;
+}
+
+module.exports.refundsOn = refundsOn;
+module.exports.alreadyRefundedStatement = alreadyRefundedStatement;
+module.exports.refuseSecondRefund = refuseSecondRefund;
+module.exports.DAYS_TO_ARRIVE = DAYS_TO_ARRIVE;

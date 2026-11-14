@@ -1018,6 +1018,8 @@ module.exports = async (req, res) => {
   // GET ?transactions=1 (admin): every rupee in and out, newest first, with
   // the Razorpay id each row would be found under (_money-ledger.js).
   // &from, &to (dates), &before (page back in time), &direction=in|out,
+  // &state=waiting|moving|failed|done (where the money has got to — a payout
+  // still due, a refund on its way, one the bank refused, or settled),
   // &q (email, name, booking code, listing, any Razorpay id), &limit.
   if (req.method === 'GET' && req.query.transactions === '1') {
     if (!(await isAdminAuthorized(req))) return res.status(401).json({ error: 'Unauthorized' });
@@ -1028,6 +1030,7 @@ module.exports = async (req, res) => {
       // 'to' is the last day the owner wants included, so look at the day after.
       to: to ? new Date(Date.parse(to + 'T00:00:00Z') + 864e5).toISOString().slice(0, 10) : null,
       before: typeof req.query.before === 'string' ? req.query.before : null,
+      state: typeof req.query.state === 'string' ? req.query.state : null,
       direction: req.query.direction,
       q: req.query.q,
       limit: req.query.limit
