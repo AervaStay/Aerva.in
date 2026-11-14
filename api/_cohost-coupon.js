@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_cohost-coupon.js — a co-host asks the host to cover the guest's
 // cancellation coupon they paid. Not an endpoint (host-listings.js routes
 // here; database: migrations/2026-11-10-08-cohost-coupon-requests.sql).

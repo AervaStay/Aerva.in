@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_support.js — the Resolution Center's requests. Not an endpoint.
 //
 // A guest or host raises a request (a "ticket") from the Resolution Center

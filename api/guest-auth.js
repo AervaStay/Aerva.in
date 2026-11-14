@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/guest-auth.js
 // Email + password accounts for guests — separate from phone/OTP login
 // (guest-phone-auth.js). Session tokens use the same signed-token

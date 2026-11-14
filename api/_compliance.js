@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_compliance.js
 // Shared registry of compliance requirements — not an API endpoint
 // itself (the leading underscore is what tells Vercel that, same

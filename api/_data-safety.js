@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_data-safety.js — Admin → Data safety. Not an endpoint
 // (get-pending-listings.js). Owner's rules (9 Nov 2026):
 //   • Only the SUPER ADMIN sees or uses any of this — other admins,

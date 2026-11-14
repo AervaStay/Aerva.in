@@ -1597,7 +1597,20 @@
         </label>
         <button type="button" class="btn" id="bookingSignupSubmitBtn" style="width:100%; margin-top:18px;">Create account</button>
         <p id="bookingSignupError" style="color:#a3402f; font-size:12.5px; margin-top:12px; display:none;"></p>
-        <p id="bookingSignupSuccessMsg" style="color:#3a7d44; font-size:12.5px; margin-top:12px; display:none;"></p>
+      </div>
+
+      <!-- After sign-up. The account exists but cannot be used until the
+           email is verified, so there is nothing further to do on this
+           form. It is replaced by this and the page returns home (owner,
+           14 Nov 2026: "it should redirect it to home page after a pop up
+           message to check your email. Not keeping the form open"). -->
+      <div id="bookingSignupDoneView" style="display:none; text-align:center;">
+        <div aria-hidden="true" style="font-size:32px; line-height:1; margin-bottom:12px;">&#9993;</div>
+        <h3 style="font-family:'Bodoni Moda', serif; font-size:22px; margin-bottom:10px;">Check your email</h3>
+        <p style="font-size:13.5px; line-height:1.6;">Your account has been created. We have sent a verification link to <strong id="bookingSignupDoneEmail"></strong>.</p>
+        <p style="font-size:13.5px; line-height:1.6; opacity:0.75; margin-top:10px;">Open that link to verify your email, then log in and book your stay.</p>
+        <button type="button" class="btn solid" id="bookingSignupDoneBtn" style="width:100%; margin-top:22px;">Go to the home page</button>
+        <p style="font-size:12px; opacity:0.6; margin-top:10px;">Taking you back to the home page&hellip;</p>
       </div>
     </div>
   </div>

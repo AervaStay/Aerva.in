@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_template-scheduling.js
 // Shared by verify-payment.js (the actual trigger point — right after an
 // order is marked 'paid') and kept alongside the rest of the messaging

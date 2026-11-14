@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_gifts.js — gift bookings ("This stay is for someone else").
 // Not an endpoint (leading underscore). Owner's rules, 9 Nov 2026 (revised
 // 23:27 and 23:28 the same night):

@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/host-listings.js
 // Returns every listing belonging to the logged-in guest's linked host
 // account — pending, approved, and rejected, so the dashboard can show
@@ -899,7 +902,7 @@ async function handleCohostModes(req, res, accountId) {
         status: p.status,
         rejectionReason: p.status === 'rejected' ? (p.rejection_reason || null) : null,
         panName: p.pan_name || null,
-        bankCheck: p.bank_check_status ? { status: p.bank_check_status, message: bankCheck.describeCheck(p) } : null,
+        bankCheck: p.bank_check_status ? { status: p.bank_check_status, message: bankCheck.describeCheck(p, p.status) } : null,
         payoutsFrom: p.bank_changed_at && bankCheck.inChangeHold(p.bank_changed_at)
           ? new Date(new Date(p.bank_changed_at).getTime() + bankCheck.HOLD_HOURS_AFTER_CHANGE * 3600e3).toISOString() : null
       } : null });
@@ -4034,10 +4037,18 @@ module.exports = async (req, res) => {
       const current = await sql`
         SELECT aadhaar_status, aadhaar_document_url, aadhaar_rejection_reason,
                bank_status, pan_status, pan_document_url, pan_rejection_reason, pan_number,
-               bank_account_holder_name, to_jsonb(hosts)->>'pan_name' AS pan_name
+               bank_account_holder_name, to_jsonb(hosts)->>'pan_name' AS pan_name,
+               (bank_account_number IS NOT NULL) AS had_bank
         FROM hosts WHERE id = ${guest.host_id}
       `;
       const host = current[0];
+      // WAS THERE ANYTHING HERE BEFORE? Read now, before the rejected-status
+      // resets below wipe it. A host adding their FIRST bank account or PAN
+      // was emailed "Your payout bank account was changed", with "Did not
+      // make this change? Raise a request" underneath — alarming, and
+      // untrue, for somebody who had just added it (owner, 14 Nov 2026).
+      const hadBank = host.had_bank === true;
+      const hadPan = !!host.pan_number;
       // A rejected PAN is not on file: the host submits a new one, and its
       // number and name no longer bind the payout name.
       if (host.pan_status === 'rejected') { host.pan_number = null; host.pan_name = null; }
@@ -4286,7 +4297,7 @@ module.exports = async (req, res) => {
       // The new bank account: the owner is emailed and the penny drop starts
       // (_bank-check.js). Never fails the save.
       let bank = null;
-      if (bankChanged) bank = await bankCheck.payoutDetailsChanged(sql, 'host', guest.host_id, 'bank');
+      if (bankChanged) bank = await bankCheck.payoutDetailsChanged(sql, 'host', guest.host_id, 'bank', { first: !hadBank });
       else if (panChanged) {
         // A new PAN with a bank account on file: the account is checked again
         // against the new name, payouts on hold until then (48 hours at least).
@@ -4296,7 +4307,7 @@ module.exports = async (req, res) => {
                                      bank_registered_name = NULL, bank_name_match = NULL, bank_checked_at = NULL
                     WHERE id = ${guest.host_id}`;
         } catch (e) { if (e.code !== '42703') throw e; await sql`UPDATE hosts SET razorpayx_fund_account_id = NULL WHERE id = ${guest.host_id}`; }
-        bank = await bankCheck.payoutDetailsChanged(sql, 'host', guest.host_id, 'pan');
+        bank = await bankCheck.payoutDetailsChanged(sql, 'host', guest.host_id, 'pan', { first: !hadPan });
       }
       return res.status(200).json({ success: true, bankCheck: bank ? bank.status : undefined });
     } catch (err) {
@@ -4646,7 +4657,7 @@ module.exports = async (req, res) => {
       bankCheck: h.j && h.j.bank_check_status ? {
         // Only the outcome: how an account is verified, and what the bank
         // holds it as, stay with Aerva's team (Admin).
-        status: h.j.bank_check_status, message: bankCheck.describeCheck(h.j)
+        status: h.j.bank_check_status, message: bankCheck.describeCheck(h.j, h.bank_status)
       } : null,
       // What the host must do, or is waiting for (also in the header bell).
       payoutItems: bankCheck.payoutItems({ pan_status: h.pan_status, pan_rejection_reason: h.pan_rejection_reason, pan_number: h.pan_number,

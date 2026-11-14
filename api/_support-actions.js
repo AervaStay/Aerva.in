@@ -1,3 +1,6 @@
+// The Aerva mark on every email (api/_email-shell.js, owner 14 Nov 2026):
+// requiring it brands everything this process sends.
+require('./_email-shell');
 // /api/_support-actions.js — the support team's roles, and actions that need
 // a second person's approval. Not an endpoint (get-pending-listings.js).
 //
@@ -186,9 +189,13 @@ async function me(sql, sessionPayload, role) {
 // is kept for ever so every approval and case record still names who did it
 // (owner, 12 Nov 2026).
 async function team(sql) {
+  // never_signed_in shows on the Team screen. Without it there was no way
+  // to tell an account that is working from one that has never been able
+  // to get in at all (owner, 14 Nov 2026).
   const all = await sql`SELECT id, email, name, created_at, COALESCE(to_jsonb(a)->>'role', 'admin') AS role,
                                COALESCE((to_jsonb(a)->>'super_admin')::boolean, false) AS super_admin,
-                               to_jsonb(a)->>'removed_at' AS removed_at
+                               to_jsonb(a)->>'removed_at' AS removed_at,
+                               (to_jsonb(a)->>'password_set_at') IS NULL AS never_signed_in
                           FROM admins a ORDER BY id`;
   return { roles: ROLES, team: all.filter(a => !a.removed_at), removed: all.filter(a => a.removed_at) };
 }
@@ -301,7 +308,12 @@ async function setRole(sql, { adminId, role, byId, audit }) {
     if (await roles.ready(sql)) known = !!(await roles.get(sql, role));
   } catch (err) { /* older database: the three built-in names */ }
   if (!known) throw userError('Choose a role.');
-  const target = (await sql`SELECT id, email, COALESCE(to_jsonb(a)->>'role', 'admin') AS role FROM admins a WHERE id = ${Number(adminId) || 0}`)[0];
+  // password_set_at and removed_at are read through to_jsonb so an older
+  // database (before 2026-11-14-09) answers null rather than failing.
+  const target = (await sql`SELECT id, email, name, COALESCE(to_jsonb(a)->>'role', 'admin') AS role,
+                                   to_jsonb(a)->>'password_set_at' AS password_set_at,
+                                   to_jsonb(a)->>'removed_at' AS removed_at
+                              FROM admins a WHERE id = ${Number(adminId) || 0}`)[0];
   if (!target) throw userError('Team member not found.', 404);
   if (target.role === 'admin' && role !== 'admin') {
     const admins = (await sql`SELECT count(*)::int AS n FROM admins a
@@ -313,7 +325,19 @@ async function setRole(sql, { adminId, role, byId, audit }) {
   // A changed role takes effect at once: their sessions end.
   if (Number(target.id) !== Number(byId)) await soft(sql`UPDATE admins SET session_version = COALESCE(session_version, 0) + 1 WHERE id = ${target.id}`);
   await logAudit(sql, { action: 'admin_role_changed', success: true, actorType: 'admin', ...audit, targetType: 'admin', targetId: target.id, metadata: { email: target.email, from: target.role, to: role } });
-  return team(sql);
+  const out = await team(sql);
+  // Who to tell, and whether they can even get in to see it. The caller
+  // sends the email — it owns the link-signing and the Resend call.
+  // Nobody is told about their own change, and nobody who has been taken
+  // off the team is told about one (owner, 14 Nov 2026: "user should get
+  // an email and then first time asked to setup password").
+  if (Number(target.id) !== Number(byId) && !target.removed_at && target.role !== role) {
+    out.changed = { id: target.id, email: target.email, name: target.name || null,
+                    from: ROLES[target.role] || target.role, to: ROLES[role] || role,
+                    neverSetPassword: !target.password_set_at,
+                    sv: (await sql`SELECT COALESCE(session_version, 0) AS sv FROM admins WHERE id = ${target.id}`)[0].sv };
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------- the summary for the reviewer
