@@ -1062,12 +1062,53 @@ async function decorateSharedBookings(sql, bookings) {
   return bookings;
 }
 
+// A report waiting on "move or refund" whose booking is no longer live.
+// Mutates the rows it is given, so the board draws the settled state in
+// the same load rather than one refresh later.
+async function settleCancelledElsewhere(sql, reports) {
+  const stuck = reports.filter(r => ACTIVE.includes(r.status) && r.order_status && r.order_status !== 'paid');
+  for (const r of stuck) {
+    const paid = Math.round(Number(r.total) || 0);
+    const returned = Math.round(Number(r.returned_inr) || 0);
+    r.cancelled_elsewhere = true;
+    r.still_owed_inr = Math.max(0, paid - returned);
+    // A rupee of slack: refunds are rounded per part, and a guest is not
+    // left waiting on a report over rounding.
+    if (!paid || returned + 1 < paid) continue;
+    const note = `Settled by a cancellation made elsewhere: ${inr(returned)} of the ${inr(paid)} paid was returned to the guest, so there is nothing left to move or refund.`;
+    const done = await sql`UPDATE checkin_reports
+                              SET status = 'refunded', refund_amount = ${returned}, closed_at = now(),
+                                  decision_note = CASE WHEN COALESCE(decision_note, '') = '' THEN ${note}
+                                                       ELSE decision_note || ' · ' || ${note} END
+                            WHERE id = ${r.id} AND status = ANY(${ACTIVE}) RETURNING id`;
+    if (!done.length) continue;   // somebody acted on it in the meantime
+    r.status = 'refunded';
+    r.refund_amount = returned;
+    r.decision_note = r.decision_note ? `${r.decision_note} · ${note}` : note;
+    try {
+      await require('./_audit-log').logAudit(sql, { action: 'checkin_report_settled_elsewhere', success: true, actorType: 'system',
+        actorIdentifier: 'system', targetType: 'checkin_report', targetId: Number(r.id),
+        metadata: { orderId: Number(r.order_id), orderStatus: r.order_status, paidInr: paid, returnedInr: returned } });
+    } catch (err) { console.error('check-in report settle not logged:', err.message); }
+  }
+}
+
 // ---------------------------------------------------------------------
 // ADMIN (get-pending-listings.js ?checkinPromise=1).
 async function adminView(sql) {
   if (!(await ready(sql))) return { ready: false, reports: [], listingBookings: [], blockedListings: [], balances: [] };
   const reports = await sql`
     SELECT r.*, o.suite_name, o.arrival, o.departure, o.nights, o.guests, o.total, o.guest_email, COALESCE(o.confirmation_code, '#' || o.id) AS code,
+           -- Whether the booking is still live, and what has actually gone
+           -- back to the guest. A report used to be drawn from its own
+           -- status alone, so a booking cancelled another way left it
+           -- demanding "move or refund" for ever, with two buttons the
+           -- server then refused (owner, 14 Nov 2026).
+           o.status AS order_status,
+           -- Measured against what the guest paid, so every refund counts,
+           -- the deposit included — not only the ones the booking rules
+           -- treat as "a refund of the booking".
+           (SELECT COALESCE(sum(f.amount), 0) / 100 FROM refunds f WHERE f.order_id = o.id AND f.status <> 'failed') AS returned_inr,
            l.property_name, l.city, h.name AS host_name, g.name AS guest_name,
            (SELECT email FROM guests x WHERE x.host_id = r.host_id ORDER BY x.id LIMIT 1) AS host_email,
            (SELECT phone FROM guests x WHERE x.host_id = r.host_id ORDER BY x.id LIMIT 1) AS host_phone,
@@ -1076,6 +1117,23 @@ async function adminView(sql) {
     LEFT JOIN hosts h ON h.id = r.host_id LEFT JOIN guests g ON g.id = r.guest_id LEFT JOIN stay_disputes d ON d.id = r.dispute_id
     WHERE r.status = ANY(${ACTIVE}) OR r.closed_at > now() - interval '14 days'
     ORDER BY (r.status = 'open') DESC, (r.status = ANY(${ACTIVE})) DESC, r.created_at DESC LIMIT 100`;
+  // ---- Bookings cancelled some other way ----
+  // Owner, 14 Nov 2026, looking at a confirmed report whose booking had
+  // already been cancelled: "how this option will be removed".
+  //
+  // Nothing closed these. A host cancellation, a policy cancellation or a
+  // refund made from Lookup all end the booking without touching the
+  // report, which went on saying "move or refund the guest" over two
+  // buttons the server refused the moment they were pressed.
+  //
+  // Closed here, and only when the guest really did get everything back:
+  // the point of the report is that the guest is made whole, and a report
+  // closed over a part refund would say they were when they were not. A
+  // guest who paid partly by coupon or credit has less cash returned than
+  // they paid, so their report deliberately stays open for a person —
+  // the card shows both figures so it is clear why.
+  await settleCancelledElsewhere(sql, reports);
+
   // Future bookings of a listing blocked as fake: each guest to be moved or refunded.
   const listingBookings = await sql`
     SELECT o.id, o.suite_name, o.arrival, o.departure, o.guests, o.total, o.guest_email, COALESCE(o.confirmation_code, '#' || o.id) AS code, l.property_name, l.id AS listing_id

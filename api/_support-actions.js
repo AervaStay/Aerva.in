@@ -315,6 +315,20 @@ async function setRole(sql, { adminId, role, byId, audit }) {
                                    to_jsonb(a)->>'removed_at' AS removed_at
                               FROM admins a WHERE id = ${Number(adminId) || 0}`)[0];
   if (!target) throw userError('Team member not found.', 404);
+  // ---- Not until they have been in ----
+  // Owner, 14 Nov 2026: "put a control when super admin setting the role,
+  // if they have reset the password or not. If not, ask super admin to
+  // wait before they set new role."
+  //
+  // Read through to_jsonb, so this only applies once the column exists
+  // (2026-11-14-09). Before it, nothing is known about anybody and the
+  // rule would refuse every role change.
+  const knowsPasswordState = await (async () => {
+    try { await sql`SELECT password_set_at FROM admins LIMIT 0`; return true; } catch (err) { return false; }
+  })();
+  if (knowsPasswordState && !target.password_set_at && Number(target.id) !== Number(byId) && !target.removed_at && target.role !== role) {
+    throw userError(`${target.name || target.email} has not set a password yet, so they have never been in. Wait until they have used the link in their invitation and signed in once, then put them on the role. Until then, invite them on the role you want them to have — or send them the link again with “Forgot password” on the admin login page.`, 409);
+  }
   if (target.role === 'admin' && role !== 'admin') {
     const admins = (await sql`SELECT count(*)::int AS n FROM admins a
                                WHERE COALESCE(to_jsonb(a)->>'role', 'admin') = 'admin' AND to_jsonb(a)->>'removed_at' IS NULL`)[0].n;
@@ -323,7 +337,25 @@ async function setRole(sql, { adminId, role, byId, audit }) {
   try { await sql`UPDATE admins SET role = ${role} WHERE id = ${target.id}`; }
   catch (err) { throw userError('Run the roles database update first (Admin → Database updates).', 503); }
   // A changed role takes effect at once: their sessions end.
-  if (Number(target.id) !== Number(byId)) await soft(sql`UPDATE admins SET session_version = COALESCE(session_version, 0) + 1 WHERE id = ${target.id}`);
+  //
+  // Except for someone who has never set a password: there is no session
+  // behind an account nobody has ever signed into, and the version bump
+  // would kill the set-password link in their invitation, which is
+  // stamped with the version it was issued under. That is the error the
+  // owner hit on 14 Nov 2026 — "it says expired. I just used the link
+  // from the email that I just received" — reproduced in the rig: used
+  // straight away the link works, used after a role change it does not.
+  //
+  // The rule above now refuses such a change outright, so this is belt
+  // and braces: it keeps the link safe if that rule is ever relaxed, and
+  // it gives up nothing either way.
+  const hasSetAtColumn = await (async () => {
+    try { await sql`SELECT password_set_at FROM admins LIMIT 0`; return true; } catch (err) { return false; }
+  })();
+  const neverSetPassword = hasSetAtColumn && !target.password_set_at;
+  if (Number(target.id) !== Number(byId) && !neverSetPassword) {
+    await soft(sql`UPDATE admins SET session_version = COALESCE(session_version, 0) + 1 WHERE id = ${target.id}`);
+  }
   await logAudit(sql, { action: 'admin_role_changed', success: true, actorType: 'admin', ...audit, targetType: 'admin', targetId: target.id, metadata: { email: target.email, from: target.role, to: role } });
   const out = await team(sql);
   // Who to tell, and whether they can even get in to see it. The caller
