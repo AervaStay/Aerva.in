@@ -804,9 +804,14 @@
       <strong style="margin-right:6px;">Add a team member</strong>
       <input id="tmName" aria-label="New team member’s name" placeholder="Name" style="padding:8px 10px; border:1px solid #ccc; border-radius:6px; min-width:140px;">
       <input id="tmEmail" type="email" aria-label="New team member’s email" placeholder="Email" style="padding:8px 10px; border:1px solid #ccc; border-radius:6px; min-width:200px;">
+      <!-- Filled from the roles that actually exist when the team loads, so
+           a role the owner made can be given to a new person. It matters
+           more than it did: a role cannot be changed until they have
+           signed in once, so they have to be invited on the right one. -->
       <select id="tmRole" aria-label="New team member’s role" style="padding:8px; font:inherit;"><option value="agent">Customer representative</option><option value="reviewer">Reviewer</option><option value="admin">Admin</option></select>
       <button type="button" class="lk-btn" onclick="addTeamMember()">Add and email an invite</button>
       <span class="lk-msg" id="tmMsg"></span>
+      <p class="lk-sub" style="flex-basis:100%; margin:4px 0 0;">Pick the role now. It cannot be changed until they have used the link in their invitation and signed in once.</p>
     </div>
     <div id="teamBody"><p class="lk-empty">Loading…</p></div>
   </div>
@@ -5553,12 +5558,29 @@ async function loadCheckinPromise(){
             <button type="button" class="lk-btn is-ghost" onclick="cpDecide(${id}, false)">Clear — not upheld${x.reason === 'fake' ? ' (listing back live)' : ''}</button>
             <button type="button" class="lk-btn" onclick="cpDecide(${id}, false, 'corrected')">Real, but the listing is wrong</button></div>
           <p style="font-size:12.5px; opacity:0.7; margin:6px 0 0;">The third one is for a guest who reached for this over something small: the booking stands and there is no refund, the host keeps the payout with nothing held against them, and they are asked to put the listing right.</p>`;
-      if(isAdmin && x.status === 'confirmed') act = `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
+      // A booking cancelled some other way has nothing left to move or
+      // refund, so neither button is drawn — the server refuses them both
+      // and used to say so only after the click (owner, 14 Nov 2026).
+      // What is left is money: if the guest did not get everything back,
+      // that is the thing to act on, and it is stated instead.
+      if(isAdmin && x.status === 'confirmed' && x.cancelled_elsewhere){
+        act = `<p class="lk-sub" style="margin:10px 0 0; color:#a3402f;"><strong>This booking was cancelled another way, so there is nobody to move and nothing to refund here.</strong>
+            ${Number(x.still_owed_inr) > 0
+              ? `Only ${rupees(x.returned_inr)} of the ${rupees(x.total)} paid has gone back to the guest — <strong>${rupees(x.still_owed_inr)} short</strong>. Settle that from the booking in Lookup, then this closes itself.`
+              : 'Everything paid has gone back to the guest.'}</p>`;
+      }
+      else if(isAdmin && x.status === 'confirmed') act = `<div style="margin-top:10px; display:flex; gap:8px; flex-wrap:wrap;">
             <button type="button" class="lk-btn" onclick="cpFind(${id})">${offers.length ? 'Find places again' : 'Find places'}</button>
             <button type="button" class="lk-btn is-danger" onclick="cpRefund(${id})">Refund in full</button></div>
           <div id="cpCand-${id}"></div>`;
       return `<div class="lk-card" style="border:1px solid ${x.status === 'open' ? '#a3402f' : '#e6ded3'}; border-radius:10px; padding:14px 16px; margin-bottom:12px; overflow-wrap:anywhere;">
-        <strong>${lkEsc(x.property_name)}</strong> · ${day(x.arrival)} → ${day(x.departure)} · booking ${lkEsc(x.code)} · <span class="lk-chip ${active ? 'is-due' : ''}">${lkEsc(CP_STATUS[x.status] || x.status)}</span><br>
+        <strong>${lkEsc(x.property_name)}</strong> · ${day(x.arrival)} → ${day(x.departure)} · booking ${lkEsc(x.code)} · <span class="lk-chip ${active ? 'is-due' : ''}">${lkEsc(
+          // The badge has to say what is actually needed. "Move or refund
+          // the guest" over a cancelled booking asks for something nobody
+          // can do (owner, 14 Nov 2026).
+          x.status === 'confirmed' && x.cancelled_elsewhere
+            ? (Number(x.still_owed_inr) > 0 ? 'Cancelled elsewhere — the guest is still owed money' : 'Cancelled elsewhere — settled')
+            : (CP_STATUS[x.status] || x.status))}</span><br>
         <span><strong>${lkEsc((d.reasons || {})[x.reason] || x.reason)}</strong>${x.source === 'listing_review' ? ' · a future booking of a listing Aerva blocked' : ''}</span><br>
         <span>${lkEsc(x.guest_name || x.guest_email || '')} · ${Number(x.guests) || ''} guest(s) · paid ${rupees(x.total || (x.original || {}).total)}</span><br>
         <span>Host ${lkEsc(x.host_name || '')}${x.host_phone ? ' · <a href="tel:' + lkEsc(x.host_phone) + '">' + lkEsc(x.host_phone) + '</a>' : ''}${x.host_email ? ' · ' + lkEsc(x.host_email) : ''}</span>
@@ -5794,15 +5816,28 @@ async function loadTeam(){
           // 2026: "super admin can assign roles only. Not other kind can").
           // Everybody else is shown the role as it stands, rather than a
           // dropdown and a Save button that would be refused.
-          ? `<select id="role${Number(m.id)}" aria-label="Role of ${lkEsc(m.name || m.email || 'this member')}" style="padding:7px 8px; font:inherit;">${Object.keys(d.roles).map(r => `<option value="${r}"${m.role === r ? ' selected' : ''}>${lkEsc(d.roles[r])}</option>`).join('')}</select>`
+          // Somebody who has never signed in cannot be moved to another
+          // role (owner, 14 Nov 2026: "if they have reset the password or
+          // not. If not, ask super admin to wait"). Said here rather than
+          // only when Save is pressed.
+          ? `<select id="role${Number(m.id)}" aria-label="Role of ${lkEsc(m.name || m.email || 'this member')}" style="padding:7px 8px; font:inherit;"${m.never_signed_in ? ' disabled' : ''}>${Object.keys(d.roles).map(r => `<option value="${r}"${m.role === r ? ' selected' : ''}>${lkEsc(d.roles[r])}</option>`).join('')}</select>${m.never_signed_in ? '<span class="lk-sub" style="display:block;">Not until they have signed in once</span>' : ''}`
           : `<span class="lk-sub">${lkEsc(d.roles[m.role] || m.role)}</span>`}</span>
-        <span style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">${iAmSuper ? `<button type="button" class="lk-btn" onclick="saveRole(${Number(m.id)})">Save</button>` : ''}
+        <span style="display:flex; gap:6px; flex-wrap:wrap; justify-content:flex-end;">${iAmSuper && !m.never_signed_in ? `<button type="button" class="lk-btn" onclick="saveRole(${Number(m.id)})">Save</button>` : ''}
           ${iAmSuper ? `<button type="button" class="lk-btn is-ghost" onclick="setSuperAdmin(${Number(m.id)}, ${m.super_admin ? 'false' : 'true'})">${m.super_admin ? 'Not a super admin' : 'Make super admin'}</button>` : ''}
           ${iAmSuper && Number(m.id) !== meId ? `<button type="button" class="lk-btn is-danger" onclick="removeTeamMember(${Number(m.id)}, '${lkEsc(m.name || m.email).replace(/'/g, "\\'")}')">Take off the team</button>` : ''}</span></div>`;
     const gone = (m) => `<div class="lk-item" style="cursor:default; opacity:0.75; grid-template-columns:minmax(0,2fr) minmax(0,1.4fr) auto;">
         <span><strong>${lkEsc(m.name || m.email)}</strong><span class="lk-sub">${lkEsc(m.email)} · taken off the team ${lkDay(m.removed_at)}</span></span>
         <span class="lk-sub">${lkEsc(d.roles[m.role] || m.role)}</span>
         <span>${iAmSuper ? `<button type="button" class="lk-btn is-ghost" onclick="restoreTeamMember(${Number(m.id)})">Let them back in</button>` : ''}</span></div>`;
+    // The invite dropdown offers every role that exists, not the three
+    // written into the page — the same reason setRole stopped using a
+    // hard-coded list, and now it is the only chance to get the role right.
+    const tmRole = document.getElementById('tmRole');
+    if(tmRole && d.roles){
+      const want = tmRole.value;
+      tmRole.innerHTML = Object.keys(d.roles).map(r => `<option value="${lkEsc(r)}">${lkEsc(d.roles[r])}</option>`).join('');
+      if(Object.keys(d.roles).includes(want)) tmRole.value = want;
+    }
     body.innerHTML = `<div class="lk-list">${d.team.map(row).join('')}</div>
       ${(d.removed || []).length ? `<h3 style="margin:22px 0 6px;">Off the team</h3>
         <p class="lk-sub" style="margin:0 0 8px; max-width:760px;">They cannot sign in, cannot be sent a new password, and any link they were still holding is dead. Their account is kept so every approval, case record and audit line still says who did it. Letting someone back in sends them a new link to set a password — their old one never works again.</p>

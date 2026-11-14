@@ -842,7 +842,18 @@ module.exports = async (req, res) => {
       const x = req.body.addTeamMember;
       const cleanEmail = typeof x.email === 'string' ? x.email.trim().toLowerCase() : '';
       if (!cleanEmail || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(cleanEmail)) return res.status(400).json({ error: 'Enter a valid email address.' });
-      const role = ['admin', 'reviewer', 'agent'].includes(x.role) ? x.role : 'agent';
+      // Any role that exists, not just the three written into the code.
+      // setRole was fixed this way earlier today; this one was left with
+      // the old list, which meant a role the owner created could not be
+      // given to a new person at all. That became a trap the moment a
+      // role could no longer be changed before they had signed in (owner,
+      // 14 Nov 2026) — invite them on the right role, or they are stuck
+      // on the wrong one until they have been in.
+      let role = ['admin', 'reviewer', 'agent'].includes(x.role) ? x.role : 'agent';
+      try {
+        const roles = require('./_roles');
+        if (await roles.ready(sql)) role = (x.role && await roles.get(sql, x.role)) ? x.role : 'agent';
+      } catch (e) { /* older database: the three built-in names above */ }
       if ((await sql`SELECT id FROM admins WHERE email = ${cleanEmail}`)[0]) return res.status(409).json({ error: 'This email already has an admin account.' });
       const unusable = await bcrypt.hash(require('crypto').randomBytes(24).toString('hex'), BCRYPT_ROUNDS);
       const name = String(x.name || '').trim().slice(0, 80) || null;
