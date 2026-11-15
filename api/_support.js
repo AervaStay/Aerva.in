@@ -499,12 +499,30 @@ async function bellNotifications(sql, guestId) {
 
 // ---------------------------------------------------------------- the support team's side
 
-async function adminList(sql, { status = 'active', q = '' } = {}) {
+// How many incidents a page holds. Counted in incidents, not requests, so
+// a page never arrives with one side of a concern on it and the other side
+// overleaf (owner, 15 Nov 2026).
+const PER_PAGE = 25;
+
+// How the search term is compared. "contains" is the default, so somebody
+// who just types into the box gets what they always did.
+const MATCH_MODES = {
+  contains: 'Contains',
+  equals: 'Equals',
+  not_equals: 'Does not equal',
+  blank: 'No booking attached'
+};
+
+async function adminList(sql, { status = 'active', q = '', page = 1, match = 'contains' } = {}) {
   const want = status === 'all' ? null : status === 'active' ? ['open', 'in_progress', 'waiting_on_you'] : STATUSES.includes(status) ? [status] : ['open', 'in_progress', 'waiting_on_you'];
   const term = String(q || '').trim().slice(0, 80);
+  const mode = Object.prototype.hasOwnProperty.call(MATCH_MODES, String(match)) ? String(match) : 'contains';
+  const pageNo = Math.max(1, Math.min(10000, Math.floor(Number(page) || 1)));
+  const from = (pageNo - 1) * PER_PAGE;
   let rows, counts;
   try {
     rows = await sql`
+      WITH base AS (
       SELECT t.id, t.ref, t.category, t.subject, t.status, t.role, t.order_id, t.listing_id, t.callback_phone,
              COALESCE(to_jsonb(t)->>'channel', 'web') AS channel, COALESCE((to_jsonb(t)->>'urgent')::boolean, false) AS urgent,
              (to_jsonb(t)->>'feedback_rating')::int AS feedback_rating, (to_jsonb(t)->>'auto_closed')::boolean AS auto_closed,
@@ -515,18 +533,96 @@ async function adminList(sql, { status = 'active', q = '' } = {}) {
              (t.first_response_at IS NULL AND t.status NOT IN ('resolved', 'closed')
                AND t.created_at < now() - make_interval(hours => ${FIRST_RESPONSE_HOURS})) AS overdue,
              (t.status NOT IN ('resolved', 'closed') AND t.last_user_message_at IS NOT NULL AND (t.last_support_message_at IS NULL OR t.last_user_message_at > t.last_support_message_at)) AS awaiting_us
+             ,
+             -- The incident this request belongs to: one concern that
+             -- opened a request for the guest AND one for the host
+             -- (owner, 15 Nov 2026). Both already carry the same booking
+             -- and category, so nothing extra is stored.
+             CASE WHEN t.order_id IS NOT NULL THEN 'o' || t.order_id || ':' || t.category END AS incident_key,
+             -- Counted over the whole table, not the filtered page, so a
+             -- card can say "the host side is resolved" rather than
+             -- silently looking like a lone request.
+             (SELECT count(*)::int FROM support_tickets s
+               WHERE t.order_id IS NOT NULL AND s.order_id = t.order_id AND s.category = t.category AND s.id <> t.id) AS incident_others,
+             o.confirmation_code AS incident_code, l.property_name AS incident_property,
+             -- Who holds it, so the card can say so without a second call.
+             to_jsonb(t)->>'assigned_to_email' AS assigned_to_email,
+             -- Requests with no booking are their own incident of one.
+             COALESCE(CASE WHEN t.order_id IS NOT NULL THEN 'o' || t.order_id || ':' || t.category END, 'i' || t.id::text) AS gk,
+             -- Whether THIS request matches what was typed. Nothing is
+             -- filtered out here: the filtering happens per incident
+             -- further down, so searching the guest's reference brings
+             -- back the whole concern rather than half of one (owner,
+             -- 15 Nov 2026 — "search the incident and only that incident
+             -- shows up and other hides"). The booking code and the
+             -- property are searchable too, since those are what an
+             -- incident is actually about.
+             -- How the term is compared is the person's choice (owner,
+             -- 15 Nov 2026: "add contains, equal, not equal, blank filter
+             -- along. by default, contains should be used"). All of them
+             -- look across the same fields: reference, subject, who raised
+             -- it, the booking code and the property.
+             (CASE
+                WHEN ${mode} = 'blank' THEN t.order_id IS NULL
+                WHEN ${mode} = 'equals' THEN (${term} <> '' AND (
+                     lower(t.ref) = lower(${term}) OR lower(t.subject) = lower(${term})
+                  OR lower(g.email) = lower(${term}) OR lower(g.name) = lower(${term})
+                  OR lower(to_jsonb(t)->>'contact_email') = lower(${term}) OR lower(to_jsonb(t)->>'account_email') = lower(${term})
+                  OR lower(o.confirmation_code) = lower(${term}) OR lower(l.property_name) = lower(${term})))
+                WHEN ${mode} = 'not_equals' THEN (${term} = '' OR NOT COALESCE(
+                     lower(t.ref) = lower(${term}) OR lower(t.subject) = lower(${term})
+                  OR lower(g.email) = lower(${term}) OR lower(g.name) = lower(${term})
+                  OR lower(to_jsonb(t)->>'contact_email') = lower(${term}) OR lower(to_jsonb(t)->>'account_email') = lower(${term})
+                  OR lower(o.confirmation_code) = lower(${term}) OR lower(l.property_name) = lower(${term}), false))
+                ELSE (${term} = '' OR t.ref ILIKE ${'%' + term + '%'} OR t.subject ILIKE ${'%' + term + '%'}
+                  OR g.email ILIKE ${'%' + term + '%'} OR g.name ILIKE ${'%' + term + '%'}
+                  OR to_jsonb(t)->>'contact_email' ILIKE ${'%' + term + '%'} OR to_jsonb(t)->>'account_email' ILIKE ${'%' + term + '%'}
+                  OR o.confirmation_code ILIKE ${'%' + term + '%'} OR l.property_name ILIKE ${'%' + term + '%'})
+              END) AS matched
       FROM support_tickets t LEFT JOIN guests g ON g.id = t.guest_id
+      LEFT JOIN orders o ON o.id = t.order_id
+      LEFT JOIN listings l ON l.id = COALESCE(t.listing_id, o.listing_id)
       WHERE (${want}::text[] IS NULL OR t.status = ANY(${want}::text[]))
-        AND (${term} = '' OR t.ref ILIKE ${'%' + term + '%'} OR t.subject ILIKE ${'%' + term + '%'} OR g.email ILIKE ${'%' + term + '%'} OR g.name ILIKE ${'%' + term + '%'}
-             OR to_jsonb(t)->>'contact_email' ILIKE ${'%' + term + '%'} OR to_jsonb(t)->>'account_email' ILIKE ${'%' + term + '%'})
+      ),
       -- "Can't sign in?" first (the person has no other way to reach us), then other urgent requests, then safety.
-      ORDER BY (COALESCE(to_jsonb(t)->>'channel', 'web') = 'signed_out' AND t.status NOT IN ('resolved', 'closed')) DESC,
-               (COALESCE((to_jsonb(t)->>'urgent')::boolean, false) AND t.status NOT IN ('resolved', 'closed')) DESC, (t.category = 'safety' AND t.status NOT IN ('resolved', 'closed')) DESC, (t.first_response_at IS NULL) DESC, t.updated_at DESC LIMIT 200`;
+      --
+      -- Ranked over the INCIDENT rather than the single request, so the two
+      -- sides of one concern stay together and the pair sits where its most
+      -- pressing half would have sat. Sorting them separately is what put
+      -- the owner's two rows in different places in the queue.
+      ranked AS (
+        SELECT *,
+               bool_or(signed_out AND status NOT IN ('resolved', 'closed')) OVER w AS g_access,
+               bool_or(urgent AND status NOT IN ('resolved', 'closed')) OVER w AS g_urgent,
+               bool_or(category = 'safety' AND status NOT IN ('resolved', 'closed')) OVER w AS g_safety,
+               bool_or(first_response_at IS NULL) OVER w AS g_new,
+               max(updated_at) OVER w AS g_updated,
+               -- One side matching brings the whole incident back.
+               bool_or(matched) OVER w AS g_matched
+          FROM base
+        WINDOW w AS (PARTITION BY gk)
+      ),
+      -- Numbered by INCIDENT, so a page holds whole concerns. Paging by
+      -- row would put the guest's side at the bottom of one page and the
+      -- host's at the top of the next, which is the thing being fixed.
+      paged AS (
+        SELECT *, dense_rank() OVER (ORDER BY g_access DESC, g_urgent DESC, g_safety DESC,
+                                              g_new DESC, g_updated DESC, gk) AS grp
+          FROM ranked
+         WHERE g_matched          -- the search, applied to whole incidents
+      )
+      SELECT paged.*, (SELECT max(grp) FROM paged) AS total_incidents
+        FROM paged
+       WHERE grp > ${from} AND grp <= ${from + PER_PAGE}
+       ORDER BY grp, (role = 'host'), id`;
     counts = await sql`SELECT status, count(*)::int AS n FROM support_tickets GROUP BY status`;
   } catch (err) { if (notReady(err)) return { ready: false, tickets: [], counts: {} }; throw err; }
+  const total = rows.length ? Number(rows[0].total_incidents) || 0 : 0;
   return {
-    ready: true, categories: CATEGORIES, statuses: STATUS_LABELS,
+    ready: true, categories: CATEGORIES, statuses: STATUS_LABELS, matchModes: MATCH_MODES,
     counts: Object.fromEntries(counts.map(c => [c.status, c.n])),
+    page: pageNo, perPage: PER_PAGE, totalIncidents: total, match: mode,
+    pages: Math.max(1, Math.ceil(total / PER_PAGE)),
     tickets: rows.map(r => ({ ...r, categoryLabel: (CATEGORIES[r.category] || {}).label || r.category }))
   };
 }
@@ -1336,42 +1432,94 @@ function horizon(t, acts, host) {
            alsoWaiting: open.slice(1).filter(o => o.key !== firstOpenKey).map(o => (o.note ? `${o.name} — ${o.note}` : o.name)) };
 }
 
+// ---- One concern, two requests: the incident ----
+// Owner, 15 Nov 2026, looking at a guest's arrival report sitting in the
+// list as two separate rows: "Both these are for 1 concern raised by the
+// guest, can this be designed so, as a person working on it, i can get
+// both under 1 common umbrella or something".
+//
+// A guest reporting a problem opens a request for the guest AND one for
+// the host (_checkin-promise.js); an emergency escalation does the same
+// (_emergency-escalation.js). They are one piece of work — the same facts,
+// one decision — but they arrived as two unrelated rows, and the owner's
+// own screenshot had one of them "Being looked at" and the other "Waiting
+// for the person": two representatives on two halves of one job.
+//
+// Nothing new is stored. Both sides already carry the same booking and the
+// same category, and that pair IS the incident.
+function incidentKey(t) {
+  return t && t.order_id != null && t.category ? `o${Number(t.order_id)}:${t.category}` : null;
+}
+
+// The incident's other requests. Comes back empty on a database that has
+// not had the horizon update yet, so none of this can break assigning.
+async function incidentSiblings(sql, t) {
+  if (!t || t.order_id == null || !t.category) return [];
+  try {
+    return await sql`SELECT id, ref, role, status, assigned_to, assigned_to_email
+                       FROM support_tickets
+                      WHERE order_id = ${t.order_id} AND category = ${t.category} AND id <> ${t.id}
+                        AND status NOT IN ('resolved', 'closed')`;
+  } catch (err) { return []; }
+}
+
 // Picking up a request. By hand for now; the queue will call this too.
 async function assignRequest(sql, { id, adminId, adminEmail, byEmail = 'admin', audit = {}, actor = null }) {
-  const t = (await sql`SELECT id, assigned_to, assigned_to_email FROM support_tickets WHERE id = ${Number(id) || 0}`)[0]
-         || (await sql`SELECT id, NULL::int AS assigned_to, NULL::text AS assigned_to_email FROM support_tickets WHERE id = ${Number(id) || 0}`)[0];
+  const t = (await sql`SELECT id, order_id, category, assigned_to, assigned_to_email FROM support_tickets WHERE id = ${Number(id) || 0}`)[0]
+         || (await sql`SELECT id, order_id, category, NULL::int AS assigned_to, NULL::text AS assigned_to_email FROM support_tickets WHERE id = ${Number(id) || 0}`)[0];
   if (!t) throw userError('Support request not found.', 404);
+  // Picking up one side picks up the whole incident (owner, 15 Nov 2026).
+  // Done by moving the assignment itself rather than by adding a second
+  // rule, so everything that already asks "who holds this request" keeps
+  // working untouched — both sides simply carry the same holder from here.
+  const siblings = await incidentSiblings(sql, t);
   // RULE C (owner, 14 Nov 2026): "Super Admin can reassign then only they
   // can." Picking up a request nobody holds is not reassigning — that is
   // the queue working, and without it no representative could ever start.
   // Taking one off somebody, or handing it to a third person, is a super
   // admin's alone.
   if (actor) {
-    const r = require('./_ownership').mayAssign({ current: t.assigned_to, to: adminId, actor });
-    if (!r.ok) {
-      // Written down: an attempt to move a request off somebody is worth a
-      // super admin seeing, whether or not it got anywhere.
-      await logAudit(sql, { action: 'reassign_refused', success: false, actorType: 'admin', ...audit,
-        targetType: 'support_ticket', targetId: t.id,
-        metadata: { heldBy: t.assigned_to_email || null, wanted: adminId == null ? 'nobody' : Number(adminId), by: byEmail } }).catch(() => {});
-      throw userError(r.why, 403);
+    const mayAssign = require('./_ownership').mayAssign;
+    // Every side of the incident has to be free, or already this person's.
+    // Otherwise picking up the guest side would quietly take the host side
+    // off whoever was working it — the reassignment rule C exists to stop.
+    for (const row of [t, ...siblings]) {
+      const r = mayAssign({ current: row.assigned_to, to: adminId, actor });
+      if (!r.ok) {
+        // Written down: an attempt to move a request off somebody is worth a
+        // super admin seeing, whether or not it got anywhere.
+        await logAudit(sql, { action: 'reassign_refused', success: false, actorType: 'admin', ...audit,
+          targetType: 'support_ticket', targetId: t.id,
+          metadata: { heldBy: row.assigned_to_email || null, blockedBy: row.id === t.id ? 'this request' : row.ref,
+                      wanted: adminId == null ? 'nobody' : Number(adminId), by: byEmail } }).catch(() => {});
+        // Name who has it, and which side — otherwise the message points
+        // at a request that looks free on screen, or at nobody at all.
+        const side = row.id === t.id ? 'this request'
+          : `the ${row.role === 'host' ? 'host' : 'guest'} side of this (${row.ref})`;
+        throw userError(row.assigned_to_email
+          ? `${row.assigned_to_email} is working on ${side}, and both sides of one concern move together. Ask a super admin to move it to you.`
+          : r.why, 403);
+      }
     }
   }
+  // Both sides move together, so neither can be picked up on its own later.
+  const ids = [t.id, ...siblings.map(s => s.id)];
   try {
     if (adminId == null) {
-      await sql`UPDATE support_tickets SET assigned_to = NULL, assigned_to_email = NULL, assigned_at = NULL WHERE id = ${t.id}`;
+      await sql`UPDATE support_tickets SET assigned_to = NULL, assigned_to_email = NULL, assigned_at = NULL WHERE id = ANY(${ids})`;
     } else {
       const who = (await sql`SELECT id, email FROM admins a WHERE a.id = ${Number(adminId) || 0} AND to_jsonb(a)->>'removed_at' IS NULL`)[0];
       if (!who) throw userError('That team member is not on the team.', 404);
-      await sql`UPDATE support_tickets SET assigned_to = ${who.id}, assigned_to_email = ${who.email}, assigned_at = now() WHERE id = ${t.id}`;
+      await sql`UPDATE support_tickets SET assigned_to = ${who.id}, assigned_to_email = ${who.email}, assigned_at = now() WHERE id = ANY(${ids})`;
     }
   } catch (err) {
     if (err.isUserFacing) throw err;
     throw userError('Run the database update for the request horizon first (Admin → Database updates).', 503);
   }
   await logAudit(sql, { action: adminId == null ? 'support_unassigned' : 'support_assigned', success: true, actorType: 'admin', ...audit,
-    targetType: 'support_ticket', targetId: t.id, metadata: { to: adminEmail || null, by: byEmail } });
-  return { assignedTo: adminEmail || null };
+    targetType: 'support_ticket', targetId: t.id,
+    metadata: { to: adminEmail || null, by: byEmail, alsoMoved: siblings.map(s => s.ref) } });
+  return { assignedTo: adminEmail || null, alsoMoved: siblings.map(s => s.ref) };
 }
 
 

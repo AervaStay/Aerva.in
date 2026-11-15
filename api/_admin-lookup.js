@@ -222,10 +222,27 @@ async function partialRefund(sql, razorpay, { orderId, amount, reason, hostPays,
   const money = await moneyState(sql, o.id);
   if (amt > money.refundable) throw userError(`At most ${inr(money.refundable)} can be refunded (charged ${inr(money.charged)}, already refunded ${inr(money.refunded)}).`);
 
-  // Which goodwill refund this is (1, 2, …). Two clicks at once pick the
-  // same number, and the refunds table lets only one through (_refunds.js).
-  const n = (await soft(sql`SELECT count(*)::int AS n FROM refunds WHERE order_id = ${o.id} AND kind LIKE 'goodwill-%'`, [{ n: 0 }]))[0].n;
-  const kindBase = `goodwill-${Number(n) + 1}`;
+  // ONE kind, not a counted one (owner, 15 Nov 2026: "only 1 refund
+  // against 1 booking").
+  //
+  // This used to be `goodwill-${count + 1}`, and the comment beside it
+  // claimed "two clicks at once pick the same number, and the refunds
+  // table lets only one through". They do not. The count is read without a
+  // lock, so two simultaneous refunds read it a moment apart: one picked
+  // goodwill-1, the other goodwill-2, the unique index on
+  // (order_id, kind) saw two different values, and BOTH went through. Two
+  // ₹500 refunds fired at one booking paid out ₹1,000, on about one run in
+  // three — an admin double-clicking Refund was enough to do it.
+  //
+  // With a fixed kind the index does what that comment always said it did:
+  // both callers aim at the same row, safeRefund's INSERT ... ON CONFLICT
+  // and its status claim let exactly one create it, and the other is
+  // refused. Nothing is counted, so there is nothing to race.
+  //
+  // The number stays in the value because the column's check constraint
+  // requires goodwill-<digits>; it is simply always 1 now, because under
+  // the rule above there is never a second one.
+  const kindBase = 'goodwill-1';
 
   // The host's share is taken first, so a refund never goes out while the
   // host is still paid in full for it.

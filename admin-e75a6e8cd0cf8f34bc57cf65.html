@@ -160,6 +160,18 @@
      the left, who and where on the right, and one marker down the edge of
      a row that needs attention. */
   .sup-rows{display:flex; flex-direction:column; gap:7px;}
+  /* One concern that opened a request for the guest AND one for the host
+     (owner, 15 Nov 2026). The sides keep their own row, status and age;
+     the band above says what they are both about and who holds them. */
+  .sup-incident{border:1px solid #e3d9c8; border-left:3px solid #8a6c39; border-radius:12px;
+       background:#faf7f1; padding:10px 10px 11px; display:flex; flex-direction:column; gap:7px;}
+  .sup-incident-head{padding:1px 4px 2px; font-size:13.5px; color:#3f3930;}
+  .sup-incident-sub{font-size:12px; color:#7b7262; margin-top:2px;}
+  .sup-incident .sup-item{border-color:#ece3d3;}
+  .sup-pager{display:flex; align-items:center; justify-content:space-between; gap:14px; flex-wrap:wrap;
+       margin-top:14px; padding-top:12px; border-top:1px solid #ece3d3; font-size:13px; color:#5c554a;}
+  .sup-pager button[disabled]{opacity:0.4; cursor:default;}
+  .sup-pager-note{margin:12px 0 0; font-size:12.5px; color:#7b7262;}
   .sup-item{display:grid; grid-template-columns:minmax(0,1fr) auto; gap:4px 18px; align-items:start;
        padding:11px 13px 11px 14px; border:1px solid #e9e1d6; border-radius:10px; background:#fff;
        cursor:pointer; position:relative; transition:border-color 0.12s ease, background 0.12s ease;}
@@ -1090,7 +1102,16 @@
             <option value="all">All</option>
           </select>
         </label>
-        <label>Search <input type="text" id="supQ" placeholder="Reference, subject, name or email" onkeydown="if(event.key==='Enter') loadSupport()"></label>
+        <!-- How the term is compared (owner, 15 Nov 2026). "Contains" is
+             the default, so typing and pressing Enter behaves as before.
+             A match on either side brings back the whole concern. -->
+        <label>Match <select id="supMatch" onchange="supOnMatchChange()" style="padding:8px; font:inherit;">
+          <option value="contains" selected>Contains</option>
+          <option value="equals">Equals</option>
+          <option value="not_equals">Does not equal</option>
+          <option value="blank">No booking attached</option>
+        </select></label>
+        <label>Search <input type="text" id="supQ" placeholder="Reference, subject, name, email, booking or property" onkeydown="if(event.key==='Enter') loadSupport()"></label>
         <button type="button" class="approve-btn" style="padding:9px 18px;" onclick="loadSupport()">Search</button>
       </div>
       <div id="supList"><p style="opacity:0.6;">Loading…</p></div>
@@ -3471,15 +3492,96 @@
     const status = document.getElementById('supStatus').value;
     const q = document.getElementById('supQ').value.trim();
     try{
-      const res = await fetch(API_BASE + '/api/get-pending-listings?supportTickets=1&status=' + encodeURIComponent(status) + '&q=' + encodeURIComponent(q), { headers: authHeaders() });
+      // Changing the filter or the search starts again at page 1 — staying
+      // on page 7 of a list that no longer has seven pages shows nothing.
+      const match = (document.getElementById('supMatch') || {}).value || 'contains';
+      if(supLastKey !== status + '\u0000' + q + '\u0000' + match){ supLastKey = status + '\u0000' + q + '\u0000' + match; supPage = 1; }
+      const res = await fetch(API_BASE + '/api/get-pending-listings?supportTickets=1&status=' + encodeURIComponent(status) + '&q=' + encodeURIComponent(q) + '&page=' + encodeURIComponent(supPage) + '&match=' + encodeURIComponent(match), { headers: authHeaders() });
       const d = await res.json();
       if(!res.ok){ list.innerHTML = '<p class="error">' + escAdmin(d.error || 'Could not load.') + '</p>'; return; }
       if(!d.ready){ list.innerHTML = '<p style="opacity:0.75;">Support requests are not switched on yet. Run <code>migration_support.sql</code> in Neon.</p>'; document.getElementById('supChips').innerHTML = ''; return; }
       const c = d.counts || {}, labels = supStatusLabels(d);
       supDrawChips(c, labels, status);
       if(!d.tickets.length){ list.innerHTML = '<p style="opacity:0.7;">No requests here.</p>'; return; }
+      // ---- One concern, one card ----
+      // Owner, 15 Nov 2026: "Both these are for 1 concern raised by the
+      // guest, can this be designed so, as a person working on it, i can
+      // get both under 1 common umbrella or something".
+      // A guest reporting a problem opens a request for the guest and one
+      // for the host. The server now returns them next to each other with
+      // a shared incident_key; here they are drawn inside one card so a
+      // representative picks up the concern, not half of it.
+      const groups = [];
+      d.tickets.forEach(t => {
+        const prev = groups[groups.length - 1];
+        if(t.incident_key && prev && prev.key === t.incident_key) prev.items.push(t);
+        else groups.push({ key: t.incident_key, items: [t] });
+      });
       list.innerHTML = '<div class="sup-head"><span>Request</span><span>Status · age</span></div><div class="sup-rows">'
-        + d.tickets.map(t => {
+        + groups.map(g => {
+            const rows = g.items.map(t => supItem(t, labels)).join('');
+            if(g.items.length < 2) {
+              // A lone side whose other half is filtered out of this view
+              // (resolved, say) still says so — otherwise it reads as a
+              // request with nothing attached to it.
+              const t = g.items[0];
+              if(!t.incident_key || !Number(t.incident_others)) return rows;
+              return `<div class="sup-incident">${supIncidentHead(t, g.items)}${rows}</div>`;
+            }
+            return `<div class="sup-incident">${supIncidentHead(g.items[0], g.items)}${rows}</div>`;
+          }).join('') + '</div>' + supPager(d, q);
+      return;
+    }catch(e){ list.innerHTML = '<p class="error">Could not load requests.</p>'; }
+  }
+
+  // Counted in concerns, not requests, because that is the unit of work
+  // and the unit the page is cut on (owner, 15 Nov 2026).
+  function supPager(d, q){
+    const pages = Number(d.pages) || 1, page = Number(d.page) || 1, total = Number(d.totalIncidents) || 0;
+    const what = total === 1 ? '1 concern' : total + ' concerns';
+    const found = q ? what + ' matching “' + escAdmin(q) + '”' : what;
+    if(pages < 2) return '<p class="sup-pager-note">' + found + '</p>';
+    const btn = (to, label, on) => on
+      ? '<button type="button" class="lk-btn" onclick="supGoPage(' + to + ')">' + label + '</button>'
+      : '<button type="button" class="lk-btn" disabled>' + label + '</button>';
+    return `<div class="sup-pager">
+      ${btn(page - 1, '‹ Previous', page > 1)}
+      <span>Page ${page} of ${pages} · ${found}</span>
+      ${btn(page + 1, 'Next ›', page < pages)}
+    </div>`;
+  }
+  function supGoPage(n){ supPage = Math.max(1, n); loadSupport(); }
+
+  // "No booking attached" asks a question about the request itself, not
+  // about a word, so the box is greyed out rather than silently ignored.
+  function supOnMatchChange(){
+    const box = document.getElementById('supQ'), mode = document.getElementById('supMatch').value;
+    if(box){
+      box.disabled = (mode === 'blank');
+      box.placeholder = mode === 'blank' ? 'Not used for this filter'
+        : 'Reference, subject, name, email, booking or property';
+    }
+    loadSupport();
+  }
+
+  // The band above the sides of one incident: what it is about, which
+  // booking, who holds it. The sides keep their own status and age.
+  function supIncidentHead(t, items){
+    const hidden = Math.max(0, Number(t.incident_others || 0) - (items.length - 1));
+    const sides = items.map(x => x.role === 'host' ? 'host' : 'guest');
+    const held = items.map(x => x.assigned_to_email).filter(Boolean)[0];
+    return `<div class="sup-incident-head">
+      <div>
+        <strong>${escAdmin(t.categoryLabel || 'One concern')}</strong>
+        ${t.incident_property ? ' · ' + escAdmin(t.incident_property) : ''}
+        ${t.incident_code ? ' · booking ' + escAdmin(t.incident_code) : ''}
+      </div>
+      <div class="sup-incident-sub">One concern, ${items.length === 1 ? 'the ' + sides[0] + ' side here' : sides.length + ' sides: ' + sides.join(' and ')}${hidden ? ' · ' + hidden + ' more not in this view' : ''}${held ? ' · held by <strong>' + escAdmin(held) + '</strong>' : ' · nobody has picked it up'}</div>
+    </div>`;
+  }
+
+  function supItem(t, labels){
+    {
             const live = t.status !== 'resolved' && t.status !== 'closed';
             const flags = [
               t.category === 'safety' ? '<span class="sup-flag sup-safety">Safety</span>' : '',
@@ -3511,8 +3613,7 @@
                 <span class="sup-state sup-state-${escAdmin(t.status)}">${escAdmin((labels[t.status]) || t.status)}</span>
                 <span class="sup-age" title="Raised ${escAdmin(supDate(t.created_at))} \u00b7 last activity ${escAdmin(supDate(t.updated_at))}">${escAdmin(supAgo(t.created_at))}<span class="tds-sub">active ${escAdmin(supAgo(t.updated_at))} ago</span></span>
               </div>
-            </div>`; }).join('') + '</div>';
-    }catch(e){ list.innerHTML = '<p class="error">Could not load requests.</p>'; }
+            </div>`; }
   }
   async function openSupport(id){
     const box = document.getElementById('supDetail');
@@ -3976,6 +4077,7 @@
   // open proposal are left exactly as they are. The list of requests is
   // refreshed every 15 seconds the same way.
   let supSig = '', supLastUserMsgId = null, supLiveTimer = null, supListTimer = null, supUnseen = 0;
+  let supPage = 1, supLastKey = null;   // which page of concerns is showing (owner, 15 Nov 2026)
   const supBaseTitle = document.title;
   function supLastUserId(d){
     const u = (d.messages || []).filter(m => m.sender === 'user' && !m.internal);

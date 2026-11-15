@@ -1373,7 +1373,7 @@ module.exports = async (req, res) => {
   // POST { supportReply: { ticketId, text?, status?, internal? } } — a reply (emailed to
   //   the person), an internal note (never shown to them), and/or a new status.
   if (req.method === 'GET' && req.query.supportTickets === '1') {
-    try { return res.status(200).json(await support.adminList(sql, { status: String(req.query.status || 'active'), q: req.query.q })); }
+    try { return res.status(200).json(await support.adminList(sql, { status: String(req.query.status || 'active'), q: req.query.q, page: req.query.page, match: req.query.match })); }
     catch (err) { console.error('supportTickets failed:', err); return res.status(500).json({ error: 'Could not load requests.' }); }
   }
   if (req.method === 'GET' && req.query.supportTicket) {
